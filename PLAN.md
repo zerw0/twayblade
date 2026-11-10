@@ -151,7 +151,8 @@ Linux and Windows CI passed on `36f850a`; macOS CI was switched to `macos-15`
 1. **M1 authentication** and **2. M2 encryption usability** are implemented
    (see Progress). Remaining: real-browser sign-in on a public server, and
    Element interoperability for verification and attachments.
-3. **M3 spaces, threads and image viewer.** Thread view and replies, space
+3. **M3 spaces, threads and image viewer.** Implemented locally; remaining
+   Element and physical acceptance covers thread view and replies, space
    join/leave, room directory, invites, room creation; full-size image
    viewer with zoom, pan and next/previous.
 4. **M4 settings and appearance.** Settings window with notifications, UI
@@ -259,6 +260,47 @@ System accent (2026-11-10):
   UISettings; Linux uses the desktop portal (fallback when unavailable).
 - Native macOS read, actual theme-update and contrast tests pass (50 tests total).
   Live preference changes and Windows/Linux execution remain platform checks.
+
+Layout fixes — Task 0 (2026-11-10):
+- Wrapped the unencrypted-room warning; removed Kit’s default 32px row padding
+  so message groups retain 6px spacing. Composer/account icons use 28px targets;
+  composer icons align centrally and typing/status text uses the 13px base size.
+- fmt/strict locked Clippy/55 unit/UI tests pass; three layout regressions,
+  including a measured 38px-before/6px-after gap; reviewed light/dark captures.
+- Five existing service checks pass on isolated Synapse 1.164.2; physical
+  trackpad, multiline composer and real-account layout acceptance remain pending.
+
+Threads — Task 1 (2026-11-10):
+- SDK thread timelines, send queue, pagination, unread summaries and scoped receipts;
+  replies hidden in the main timeline. Panel reuses grouping, retains per-thread
+  drafts and rejects stale updates; Escape closes it. Room badges keep SDK totals.
+- fmt/strict locked Clippy/57 unit/UI tests pass; light/dark thread samples reviewed.
+  Isolated Synapse 1.164.2 thread acceptance and all five service regressions pass;
+  initial pagination runs independently to prevent a suspended-stream lock stall.
+- Operator checks remain: Element unread/receipt interoperability, real-account
+  thread navigation, encrypted thread media and physical keyboard/trackpad use.
+
+Spaces — M3a Task 2 (2026-11-10):
+- SDK hierarchy with unjoined/suggested/restricted children and pagination;
+  space join, explicit room selections on leave, room/DM/space invites,
+  encrypted-by-default room creation and Matrix-ID DMs. Parent controls use SDK powers.
+- fmt/strict locked Clippy/60 unit/UI tests pass; directory/invite light/dark
+  samples reviewed. Fresh-account Synapse 1.164.2 acceptance includes real
+  multi-page hierarchy, inaccessible children, restricted joins and selective leave.
+- Home/cycle/multi-parent tests and five service/thread regressions pass.
+  Operator checks remain: Element joins/leaves/invites, real-account permissions,
+  native keyboard navigation and large hierarchies across servers.
+
+Image viewer — M3 Task 3 (2026-11-10):
+- Full-resolution SDK media overlay with keyboard/pinch/double-click zoom, pan,
+  animation, image navigation, clipboard and explicit Save/Open destinations.
+  Closing reveals and focuses the message; earlier images request SDK history.
+- fmt/strict locked Clippy/66 unit/UI tests pass; keyboard/focus/save/gesture
+  tests and reviewed light/dark samples. Isolated Synapse 1.164.2 verifies plain
+  and encrypted images, GIF/WebP, oversized/corrupt inputs and uncached decryption.
+- Decode limits: 8192px, 64MiB encoded, 96MiB decoded and 240 frames. Attachment
+  regression passes. Physical animation, native dialogs/default apps, trackpad,
+  Element media interoperability and Linux/Windows execution remain pending.
 
 Not yet verified:
 - Physical GUI checks of logout, pagination, IME and VoiceOver.

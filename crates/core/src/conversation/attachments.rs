@@ -205,7 +205,7 @@ impl Conversation {
             .map_err(|_| AttachmentError::Upload)?;
         Ok(())
     }
-    async fn media_source(&self, id: &str) -> Result<MediaSource, AttachmentError> {
+    pub(super) async fn media_source(&self, id: &str) -> Result<MediaSource, AttachmentError> {
         let items = self.timeline.items().await;
         let message = items
             .iter()
@@ -236,7 +236,7 @@ impl Conversation {
                         512u32.into(),
                     )),
                 },
-                true,
+                false,
             )
             .await
             .map_err(|_| AttachmentError::Download)?;
@@ -245,7 +245,6 @@ impl Conversation {
             .ok_or(AttachmentError::Download)
     }
     pub async fn download_attachment(&self, id: &str, path: &Path) -> Result<(), AttachmentError> {
-        use tokio::io::AsyncWriteExt;
         let source = self.media_source(id).await?;
         let bytes = self
             .timeline
@@ -261,24 +260,7 @@ impl Conversation {
             )
             .await
             .map_err(|_| AttachmentError::Download)?;
-        let temporary = path.with_file_name(format!(".matrix-download-{}", uuid::Uuid::new_v4()));
-        let result = async {
-            let mut file = tokio::fs::OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&temporary)
-                .await?;
-            file.write_all(&bytes).await?;
-            file.sync_all().await?;
-            drop(file);
-            tokio::fs::rename(&temporary, path).await
-        }
-        .await;
-        if result.is_err() {
-            let _ = tokio::fs::remove_file(&temporary).await;
-            return Err(AttachmentError::Download);
-        }
-        Ok(())
+        atomic_write(Arc::new(bytes), path.to_path_buf()).await
     }
     pub async fn cancel_attachment(&self, id: &str) -> Result<(), AttachmentError> {
         let handle = {
@@ -296,6 +278,34 @@ impl Conversation {
             Err(AttachmentError::Unavailable)
         }
     }
+}
+
+pub(super) async fn atomic_write(
+    bytes: Arc<Vec<u8>>,
+    path: PathBuf,
+) -> Result<(), AttachmentError> {
+    tokio::task::spawn_blocking(move || atomic_write_blocking(&bytes, &path))
+        .await
+        .map_err(|_| AttachmentError::Download)?
+}
+pub(super) fn atomic_write_blocking(bytes: &[u8], path: &Path) -> Result<(), AttachmentError> {
+    use std::io::Write;
+    let temporary = path.with_file_name(format!(".matrix-download-{}", uuid::Uuid::new_v4()));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temporary, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(AttachmentError::Download);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -601,5 +611,182 @@ mod integration {
             checked(tokio::fs::remove_file(output).await, "cleanup");
             checked(restored.logout().await, "logout");
         }
+    }
+    #[tokio::test]
+    #[ignore = "requires isolated Synapse fixture with generated user"]
+    async fn image_viewer_plain_encrypted_animation_limits_and_corrupt() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-data/local/integration");
+        let fixture: Fixture = checked(
+            serde_json::from_slice(&checked(
+                tokio::fs::read(root.join("fixture.json")).await,
+                "fixture",
+            )),
+            "fixture JSON",
+        );
+        assert_eq!(fixture.homeserver, "https://127.0.0.1:18448");
+        let certificate = checked(
+            Certificate::from_pem(&checked(tokio::fs::read(root.join("ca.crt")).await, "CA")),
+            "CA format",
+        );
+        for encrypted in [false, true] {
+            let path = root.join(format!("media-{}", uuid::Uuid::new_v4()));
+            let passphrase = uuid::Uuid::new_v4().to_string();
+            let client = checked(
+                Client::builder()
+                    .homeserver_url(&fixture.homeserver)
+                    .add_root_certificates(vec![certificate.clone()])
+                    .sqlite_store(&path, Some(&passphrase))
+                    .build()
+                    .await,
+                "client",
+            );
+            checked(
+                client
+                    .matrix_auth()
+                    .login_username(&fixture.security_username, &fixture.security_password)
+                    .await,
+                "login",
+            );
+            let mut request = create_room::v3::Request::new();
+            if encrypted {
+                request.initial_state.push(
+                    checked(
+                        Raw::new(&InitialStateEvent::new(
+                            Default::default(),
+                            RoomEncryptionEventContent::with_recommended_defaults(),
+                        )),
+                        "encryption",
+                    )
+                    .cast(),
+                );
+            }
+            let room = checked(client.create_room(request).await, "room");
+            checked(client.sync_once(SyncSettings::default()).await, "sync");
+            if encrypted {
+                assert!(room.encryption_state().is_encrypted());
+            }
+            let conversation = Conversation {
+                timeline: Arc::new(checked(room.timeline().await, "timeline")),
+            };
+
+            let mut png = Cursor::new(Vec::new());
+            image::DynamicImage::new_rgba8(2, 2)
+                .write_to(&mut png, image::ImageFormat::Png)
+                .unwrap();
+            let mut large = Cursor::new(Vec::new());
+            image::DynamicImage::new_rgba8(9000, 1)
+                .write_to(&mut large, image::ImageFormat::Png)
+                .unwrap();
+            for (name, bytes, frames, error) in [
+                ("full.png", png.into_inner(), 1, None),
+                (
+                    "animated.gif",
+                    super::super::viewer::animated_gif_fixture(),
+                    2,
+                    None,
+                ),
+                (
+                    "animated.webp",
+                    super::super::viewer::animated_webp_fixture(),
+                    2,
+                    None,
+                ),
+                (
+                    "large.png",
+                    large.into_inner(),
+                    0,
+                    Some(super::super::ImageError::Limit),
+                ),
+                (
+                    "corrupt.png",
+                    vec![1, 2, 3],
+                    0,
+                    Some(super::super::ImageError::Corrupt),
+                ),
+            ] {
+                let draft = checked(
+                    conversation.prepare_bytes(name.into(), bytes.clone()).await,
+                    "prepare viewer image",
+                );
+                checked(
+                    conversation.send_attachment(draft).await,
+                    "send viewer image",
+                );
+                let id = row(&conversation, name).await;
+                checked(
+                    tokio::time::timeout(Duration::from_secs(30), async {
+                        loop {
+                            if conversation
+                                .timeline
+                                .items()
+                                .await
+                                .iter()
+                                .find(|i| i.unique_id().0 == id)
+                                .and_then(|i| i.as_event())
+                                .is_some_and(|e| e.event_id().is_some())
+                            {
+                                break;
+                            }
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                    })
+                    .await,
+                    "remote viewer image",
+                );
+                let source = checked(conversation.media_source(&id).await, "viewer source");
+                assert!(
+                    matches!(&source, MediaSource::Encrypted(_)) == encrypted,
+                    "viewer source encryption mismatch"
+                );
+                let request = MediaRequestParameters {
+                    source,
+                    format: MediaFormat::File,
+                };
+                checked(
+                    client.media().remove_media_content(&request).await,
+                    "clear upload cache before viewer",
+                );
+                let (_cancel, cancel) = tokio::sync::watch::channel(false);
+                let result = conversation.viewer_image(&id, cancel).await;
+                if let Some(error) = error {
+                    assert!(
+                        matches!(result,Err(actual) if actual == error),
+                        "typed viewer failure"
+                    );
+                } else {
+                    let image = checked(result, "full-resolution image fetch and decode");
+                    assert!(
+                        image.width == 2 && image.height == 2 && image.frames.len() == frames,
+                        "viewer dimensions/animation frames"
+                    );
+                    let store = checked(client.media_store().lock().await, "media cache");
+                    assert!(
+                        checked(
+                            store.get_media_content(&request).await,
+                            "uncached viewer media"
+                        )
+                        .is_none(),
+                        "viewer must not persist decrypted media"
+                    );
+                    drop(store);
+                    let saved = path.join(format!("explicit-save-{name}"));
+                    assert!(!saved.exists(), "viewer must not save automatically");
+                    checked(image.save(&saved).await, "explicit viewer save");
+                    assert!(
+                        checked(tokio::fs::read(saved).await, "saved image") == bytes,
+                        "save must preserve original image bytes"
+                    );
+                }
+                let (_cancel, cancel) = tokio::sync::watch::channel(true);
+                assert!(matches!(
+                    conversation.viewer_image(&id, cancel).await,
+                    Err(super::super::ImageError::Cancelled)
+                ));
+            }
+            checked(client.matrix_auth().logout().await, "viewer fixture logout");
+        }
+        println!(
+            "PASS: plain/encrypted full images, GIF/WebP animation, uncached decrypted media, explicit save, >8k and corrupt failures"
+        );
     }
 }

@@ -818,3 +818,521 @@ fn system_accent_updates_primary_buttons_and_selection_in_both_appearances(
         }
     });
 }
+
+#[gpui_kit::test]
+fn consecutive_message_groups_keep_six_pixel_spacing_after_content_updates(
+    cx: &mut TestAppContext,
+) {
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            let mut snapshot = app.snapshot.clone();
+            snapshot.revision += 1;
+            snapshot.messages.truncate(3);
+            for (ix, message) in snapshot.messages.iter_mut().enumerate() {
+                message.sender = if ix == 1 {
+                    snapshot.user_id.clone()
+                } else {
+                    "@alex:preview.invalid".into()
+                };
+                message.kind = crate::backend::MessageKind::Text;
+                message.reactions.clear();
+                message.thread_replies = 0;
+                message.new_messages = false;
+                message.delivery = crate::backend::DeliveryState::Remote;
+            }
+            app.apply(snapshot, window, cx);
+        });
+        window.render_frame(cx);
+        for changed in [false, true] {
+            if changed {
+                app.update(cx, |app, cx| {
+                    let mut snapshot = app.snapshot.clone();
+                    snapshot.revision += 1;
+                    snapshot.messages[1].body = "A longer message. ".repeat(50);
+                    snapshot.messages[1].reply = None;
+                    app.apply(snapshot, window, cx);
+                });
+            }
+            window.render_frame(cx);
+            window.render_frame(cx);
+            for (previous, next) in [
+                ("group-sample-0", "group-sample-1"),
+                ("group-sample-1", "group-sample-2"),
+            ] {
+                let previous = window.find(previous).bounds();
+                let next = window.find(next).bounds();
+                // Group bounds include the next group's 6px top padding.
+                let gap = next.top() - previous.bottom() + px(6.);
+                assert!(
+                    (gap - px(6.)).abs() < px(0.5),
+                    "gap: {gap:?}, changed: {changed}"
+                );
+            }
+        }
+    })
+    .expect("consecutive group layout");
+}
+
+#[gpui_kit::test]
+fn unencrypted_warning_wraps_inside_details_panel(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            app.snapshot
+                .rooms
+                .iter_mut()
+                .find(|room| room.id == "general")
+                .unwrap()
+                .encrypted = false;
+            app.details_open = true;
+            cx.notify();
+        })
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let warning = window.find("encryption-warning").bounds();
+        let text = window.find("encryption-warning-text").bounds();
+        assert!(warning.size.width <= px(280.));
+        assert!(text.left() >= warning.left() && text.right() <= warning.right());
+        assert!(text.size.height > px(24.), "warning should wrap: {text:?}");
+    })
+    .expect("warning layout");
+}
+
+#[gpui_kit::test]
+fn composer_icons_have_balanced_targets_and_centres(cx: &mut TestAppContext) {
+    let (window, _) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.within("composer-panel").click("input-state", cx);
+        window.input("Sample draft", cx);
+        window.render_frame(cx);
+        let attach = window.find("attach-file").bounds();
+        for id in [
+            "attach-file",
+            "emoji-open",
+            "send",
+            "open-settings",
+            "logout",
+        ] {
+            let bounds = window.find(id).bounds();
+            assert_eq!(bounds.size, size(px(28.), px(28.)), "{id}");
+            if matches!(id, "emoji-open" | "send") {
+                assert!(
+                    (bounds.center().y - attach.center().y).abs() < px(0.5),
+                    "{id}"
+                );
+            }
+        }
+        assert!(window.find("typing-notice").bounds().size.height >= px(13.));
+    })
+    .expect("composer icon layout");
+}
+
+#[gpui_kit::test]
+fn thread_summary_opens_panel_preserves_draft_and_yields_to_details(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestEventExt;
+    let (window, app) = preview_window(cx);
+    cx.update(|cx| {
+        cx.bind_keys([gpui_kit::KeyBinding::new(
+            "escape",
+            crate::app::CloseProfile,
+            Some("MatrixClient"),
+        )])
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("thread-sample-0", cx);
+        assert!(window.find("close-thread").visible());
+        window
+            .within("thread-composer-panel")
+            .find_by_label("Reply in thread");
+        window
+            .within("thread-composer-panel")
+            .click("input-state", cx);
+        window.input("Thread draft 🦀", cx);
+        assert!(window.find("thread-send").disabled() == Some(true));
+        window.click("close-thread", cx);
+        window.click("thread-sample-0", cx);
+        assert_eq!(
+            window
+                .within("thread-composer-panel")
+                .find_by_label("Reply in thread")
+                .value(),
+            Some("Thread draft 🦀")
+        );
+        window.click("details", cx);
+        assert!(window.find("copy-room-id").visible());
+        window.click("thread-sample-0", cx);
+        window.key_down("escape", false, cx);
+    })
+    .expect("thread controls and draft");
+    cx.update(|cx| assert!(app.read(cx).thread.is_none()));
+}
+
+#[gpui_kit::test]
+fn thread_drafts_are_independent_and_stale_thread_updates_are_rejected(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| app.open_thread("sample-0".into(), window, cx));
+        window.render_frame(cx);
+        window
+            .within("thread-composer-panel")
+            .click("input-state", cx);
+        window.input("First draft", cx);
+        app.update(cx, |app, cx| app.open_thread("sample-3".into(), window, cx));
+        window.render_frame(cx);
+        window
+            .within("thread-composer-panel")
+            .click("input-state", cx);
+        window.input("Second draft", cx);
+        let stale = app.update(cx, |app, _| {
+            let t = app.thread.as_ref().unwrap();
+            crate::backend::ThreadSnapshot {
+                room: t.room.clone(),
+                root: t.root.event_id.clone().unwrap(),
+                request: t.request,
+                messages: Vec::new(),
+                status: matrix_client_core::conversation::TimelineStatus::Failed,
+                ready: false,
+                unread: 99,
+            }
+        });
+        app.update(cx, |app, cx| {
+            app.open_thread("sample-0".into(), window, cx);
+            app.update_thread(Some(&stale), cx);
+            let t = app.thread.as_ref().unwrap();
+            assert!(t.ready && t.unread == 0 && !t.messages.is_empty());
+        });
+        window.render_frame(cx);
+        assert_eq!(
+            window
+                .within("thread-composer-panel")
+                .find_by_label("Reply in thread")
+                .value(),
+            Some("First draft")
+        );
+    })
+    .expect("thread lifetime and independent drafts");
+}
+
+#[gpui_kit::test]
+fn space_context_menu_opens_directory_with_access_states(cx: &mut TestAppContext) {
+    use gpui_kit::test::{TestEventExt, TestQueryExt};
+    let (window, _) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let point = window.find("space-design").bounds().center();
+        window.pointer_move(point, None, cx);
+        window.pointer_down(point, gpui_kit::MouseButton::Right, cx);
+        window.pointer_up(point, gpui_kit::MouseButton::Right, cx);
+    })
+    .expect("open deferred context menu");
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let point = window.find_by_label("Browse rooms").bounds().center();
+        window.pointer_move(point, None, cx);
+        window.pointer_down(point, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(point, gpui_kit::MouseButton::Left, cx);
+        assert!(window.find("join-sample-research").disabled() == Some(true));
+        assert!(window.find("join-sample-restricted").disabled() == Some(true));
+        assert!(window.try_find("join-sample-private").is_none());
+        assert!(window.find("browse-sample-nested").visible());
+    })
+    .expect("space context menu and directory");
+}
+
+#[gpui_kit::test]
+fn space_leave_defaults_to_space_only_and_creation_respects_parent_power(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_management(
+                crate::spaces_ui::ManageKind::Leave("design".into()),
+                window,
+                cx,
+            )
+        });
+        window.render_frame(cx);
+        app.update(cx, |app, _| {
+            assert_eq!(
+                app.management.as_ref().unwrap().selected,
+                std::collections::HashSet::from(["design".into()])
+            )
+        });
+        window.click("leave-choice-general", cx);
+        app.update(cx, |app, _| {
+            assert!(
+                app.management
+                    .as_ref()
+                    .unwrap()
+                    .selected
+                    .contains("general")
+            )
+        });
+        window.click("close-management", cx);
+        app.update(cx, |app, _| app.snapshot.spaces[0].can_add_rooms = false);
+        window.click("new-room", cx);
+        assert!(window.try_find("parent-design").is_none());
+        assert!(window.find("room-encryption").checked() == Some(true));
+        assert!(window.find("create-room-submit").disabled() == Some(true));
+        window.click("room-encryption", cx);
+        assert!(window.find("room-encryption").checked() == Some(false));
+    })
+    .expect("leave choice and permission-aware creation");
+}
+
+#[gpui_kit::test]
+fn room_dm_and_space_invites_have_explicit_accept_and_decline(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            app.snapshot.invites = (0..3)
+                .map(|ix| matrix_client_core::space_actions::Invite {
+                    id: format!("invite-{ix}"),
+                    name: format!("Sample invitation {ix}"),
+                    direct: ix == 1,
+                    space: ix == 2,
+                })
+                .collect();
+            cx.notify();
+        })
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        for ix in 0..3 {
+            assert!(
+                window
+                    .find(gpui_kit::SharedString::from(format!("accept-invite-{ix}")))
+                    .disabled()
+                    == Some(true)
+            );
+            assert!(
+                window
+                    .find(gpui_kit::SharedString::from(format!("decline-invite-{ix}")))
+                    .disabled()
+                    == Some(true)
+            );
+        }
+    })
+    .expect("offline invite actions");
+}
+
+#[gpui_kit::test]
+fn viewer_keyboard_navigation_zoom_clipboard_and_focus_restore(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestEventExt;
+    let (window, app) = preview_window(cx);
+    cx.update(|cx| cx.bind_keys(crate::viewer::bindings()));
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.preview_viewer(window, cx);
+            app.close_viewer(window, cx);
+        });
+        window.render_frame(cx);
+        window.key_down("space", false, cx);
+        assert!(window.find("viewer-copy").visible());
+        let width = window.find("viewer-image").bounds().size.width;
+        window.key_down(
+            if cfg!(target_os = "macos") {
+                "cmd-="
+            } else {
+                "ctrl-="
+            },
+            false,
+            cx,
+        );
+        assert!(window.find("viewer-image").bounds().size.width > width);
+        window.key_down(
+            if cfg!(target_os = "macos") {
+                "cmd-0"
+            } else {
+                "ctrl-0"
+            },
+            false,
+            cx,
+        );
+        assert_eq!(window.find("viewer-image").bounds().size.width, width);
+        window.key_down("right", false, cx);
+        window.key_down("left", false, cx);
+        app.update(cx, |app, _| {
+            assert_eq!(app.viewer.as_ref().unwrap().index, 0)
+        });
+        window.key_down(
+            if cfg!(target_os = "macos") {
+                "cmd-c"
+            } else {
+                "ctrl-c"
+            },
+            false,
+            cx,
+        );
+        assert!(
+            cx.read_from_clipboard()
+                .unwrap()
+                .entries
+                .iter()
+                .any(|e| matches!(e, gpui_kit::ClipboardEntry::Image(_)))
+        );
+        let mut focused = Vec::new();
+        for _ in 0..18 {
+            window.key_down("tab", false, cx);
+            app.update(cx, |app, cx| {
+                assert!(
+                    app.viewer
+                        .as_ref()
+                        .unwrap()
+                        .focus
+                        .contains_focused(window, cx),
+                    "Tab escaped viewer"
+                )
+            });
+            if let Some(focus) = window.focused(cx)
+                && !focused.contains(&focus)
+            {
+                focused.push(focus);
+            }
+        }
+        assert!(
+            focused.len() >= 8,
+            "viewer actions must be reachable with Tab"
+        );
+        window.key_down("right", false, cx);
+        window.key_down("right", false, cx);
+        window.key_down(
+            if cfg!(target_os = "macos") {
+                "cmd-shift-l"
+            } else {
+                "ctrl-shift-l"
+            },
+            false,
+            cx,
+        );
+    })
+    .expect("viewer keyboard navigation");
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("image-sample-image-2").visible());
+        assert!(window.find("image-sample-image-2").focused() == Some(true));
+        window.key_down("space", false, cx);
+        window.key_down("escape", false, cx);
+        app.update(cx, |app, _| assert!(app.viewer.is_none()));
+    })
+    .expect("viewer returns focus to revealed image");
+}
+
+#[gpui_kit::test]
+fn viewer_save_and_open_shortcuts_require_a_destination(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestEventExt;
+    let (window, app) = preview_window(cx);
+    cx.update(|cx| cx.bind_keys(crate::viewer::bindings()));
+    let path = std::env::temp_dir().join(format!(
+        "matrix-viewer-ui-{}.png",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| app.preview_viewer(window, cx));
+        window.render_frame(cx);
+        window.key_down(
+            if cfg!(target_os = "macos") {
+                "cmd-s"
+            } else {
+                "ctrl-s"
+            },
+            false,
+            cx,
+        );
+    })
+    .expect("save shortcut");
+    assert!(cx.did_prompt_for_new_path() && !path.exists());
+    cx.simulate_new_path_selection(|_| Some(path.clone()));
+    cx.run_until_parked();
+    assert!(
+        path.exists(),
+        "explicit save should write chosen destination"
+    );
+    std::fs::remove_file(&path).unwrap();
+    cx.update_window(window, |_, window, cx| {
+        window.key_down(
+            if cfg!(target_os = "macos") {
+                "cmd-o"
+            } else {
+                "ctrl-o"
+            },
+            false,
+            cx,
+        )
+    })
+    .expect("open shortcut");
+    assert!(
+        cx.did_prompt_for_new_path(),
+        "opening another app must first ask to save"
+    );
+    cx.simulate_new_path_selection(|_| None);
+    cx.run_until_parked();
+    assert!(!path.exists(), "cancelling Open must not save anything");
+}
+
+#[gpui_kit::test]
+fn viewer_pinch_double_click_pan_outside_click_and_stale_loads(cx: &mut TestAppContext) {
+    use gpui_kit::test::{ClickOptions, TestEventExt};
+    use gpui_kit::{InputEvent, MouseButton, point};
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| app.preview_viewer(window, cx));
+        window.render_frame(cx);
+        let centre = window.find("viewer-image").bounds().center();
+        window.pointer_move(centre, None, cx);
+        window.dispatch_event(
+            gpui_kit::PinchEvent {
+                position: centre,
+                delta: 1.,
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+        app.update(cx, |app, _| assert!(app.viewer.as_ref().unwrap().zoom > 1.));
+        window.click_with_options("viewer-image", ClickOptions::new().with_count(2), cx);
+        app.update(cx, |app, _| {
+            assert_eq!(app.viewer.as_ref().unwrap().zoom, 1.)
+        });
+        app.update(cx, |app, cx| app.zoom_viewer(16., window, cx));
+        window.render_frame(cx);
+        let centre = window.find("viewer-canvas").bounds().center();
+        window.pointer_down(centre, MouseButton::Left, cx);
+        window.pointer_move(
+            centre + point(px(80.), px(20.)),
+            Some(MouseButton::Left),
+            cx,
+        );
+        window.pointer_up(centre + point(px(80.), px(20.)), MouseButton::Left, cx);
+        app.update(cx, |app, cx| {
+            assert!(app.viewer.as_ref().unwrap().pan.x > px(0.));
+            let old = app.viewer.as_ref().unwrap().request;
+            let cancel = app.viewer.as_ref().unwrap().cancel.clone();
+            app.step_image(1, window, cx);
+            assert!(*cancel.borrow());
+            app.finish_viewer(
+                old,
+                app.snapshot.account_instance,
+                Err(matrix_client_core::conversation::ImageError::Download),
+                cx,
+            );
+            assert!(matches!(
+                app.viewer.as_ref().unwrap().load,
+                crate::viewer::ImageLoad::Ready { .. }
+            ));
+        });
+        window.pointer_down(point(px(10.), px(80.)), MouseButton::Left, cx);
+        window.pointer_up(point(px(10.), px(80.)), MouseButton::Left, cx);
+        app.update(cx, |app, _| assert!(app.viewer.is_none()));
+    })
+    .expect("viewer gestures and request lifetime");
+}

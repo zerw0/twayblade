@@ -18,7 +18,15 @@ use crate::{
 
 gpui_kit::actions!(
     matrix_client,
-    [Quit, FindConversation, CloseProfile, ToggleDetails]
+    [
+        Quit,
+        FindConversation,
+        CloseProfile,
+        ToggleDetails,
+        NewRoom,
+        NewDirectMessage,
+        JoinSpace
+    ]
 );
 
 pub(super) struct ProfilePage {
@@ -75,6 +83,16 @@ pub(super) struct MatrixApp {
     receipt_pending: Option<(String, String)>,
     last_receipt: Option<(String, String)>,
     receipt_retry_after: std::time::Instant,
+    pub thread: Option<crate::threads::ThreadPanel>,
+    pub thread_drafts: HashMap<(String, String), (Entity<TextareaState>, Subscription)>,
+    pub thread_request: u64,
+    pub management: Option<crate::spaces_ui::Management>,
+    pub management_request: u64,
+    pub viewer: Option<crate::viewer::Viewer>,
+    pub viewer_request: u64,
+    pub reveal_image: Option<String>,
+    pub image_focus: std::cell::RefCell<HashMap<String, FocusHandle>>,
+    pub invite_pending: HashSet<String>,
     pub profile: Option<ProfilePage>,
     /// Room details panel; the profile view replaces it while open.
     pub details_open: bool,
@@ -216,6 +234,16 @@ impl MatrixApp {
             receipt_pending: None,
             last_receipt: None,
             receipt_retry_after: std::time::Instant::now(),
+            thread: None,
+            thread_drafts: HashMap::new(),
+            thread_request: 0,
+            management: None,
+            management_request: 0,
+            viewer: None,
+            viewer_request: 0,
+            reveal_image: None,
+            image_focus: std::cell::RefCell::new(HashMap::new()),
+            invite_pending: HashSet::new(),
             profile: None,
             details_open: false,
             preview,
@@ -334,6 +362,15 @@ impl MatrixApp {
             self.reset_pagination();
             self.navigation = Navigation::default();
             self.composers.clear();
+            self.thread = None;
+            self.thread_drafts.clear();
+            if let Some(viewer) = self.viewer.take() {
+                viewer.cancel.send_replace(true);
+            }
+            self.image_focus.borrow_mut().clear();
+            self.reveal_image = None;
+            self.management = None;
+            self.invite_pending.clear();
             self.sending.clear();
             self.pending_actions.clear();
             self.latest_visible = None;
@@ -401,8 +438,10 @@ impl MatrixApp {
                 state.remeasure(cx);
             }
         });
+        self.update_thread(snapshot.thread.as_ref(), cx);
         self.groups = groups;
         self.snapshot = snapshot;
+        self.refresh_viewer(window, cx);
         cx.notify();
     }
 
@@ -607,6 +646,7 @@ impl MatrixApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.management = None;
         self.navigation.selected_space = id;
         self.search
             .update(cx, |state, cx| state.set_value("", window, cx));
@@ -621,6 +661,8 @@ impl MatrixApp {
     }
 
     pub fn select_room(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.management = None;
+        cx.notify();
         if self.navigation.selected_room.as_ref() == Some(&id) {
             return;
         }
@@ -704,6 +746,8 @@ impl MatrixApp {
     }
 
     fn queue_selection(&mut self, room: Option<String>, window: &Window, cx: &Context<Self>) {
+        self.thread = None;
+        self.management = None;
         if self.preview {
             return;
         }
@@ -914,7 +958,7 @@ impl MatrixApp {
             window,
             cx,
             move |backend| backend.load_earlier(room, account),
-            move |this, result, _, _| {
+            move |this, result, window, cx| {
                 if this.pagination_request != request
                     || this.snapshot.account_instance != account
                     || this.navigation.selected_room.as_ref() != Some(&target)
@@ -922,6 +966,7 @@ impl MatrixApp {
                     return;
                 }
                 this.paginating = false;
+                let continue_images = matches!(&result, Ok(false));
                 match result {
                     Ok(true) => {
                         this.pagination_exhausted = true;
@@ -929,6 +974,14 @@ impl MatrixApp {
                     }
                     Ok(false) => {}
                     Err(error) => this.status = error.to_string(),
+                }
+                if this.viewer.as_ref().is_some_and(|v| v.previous_pending) {
+                    if continue_images {
+                        this.load_earlier(window, cx);
+                    } else if let Some(v) = &mut this.viewer {
+                        v.previous_pending = false;
+                        v.status = this.status.clone();
+                    }
                 }
             },
         );
@@ -942,6 +995,8 @@ impl MatrixApp {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
+        self.management = None;
+        self.close_thread(cx);
         self.profile_request = self.profile_request.wrapping_add(1);
         let request = self.profile_request;
         self.profile = Some(ProfilePage {
@@ -977,6 +1032,12 @@ impl MatrixApp {
     }
 
     pub fn toggle_details(&mut self, cx: &mut Context<Self>) {
+        if self.thread.is_some() {
+            self.close_thread(cx);
+            self.details_open = true;
+            cx.notify();
+            return;
+        }
         if self.profile.is_some() {
             self.close_profile(cx);
             self.details_open = true;
@@ -988,6 +1049,15 @@ impl MatrixApp {
 
     /// Escape: close the profile first, then the details panel.
     pub fn dismiss_panel(&mut self, cx: &mut Context<Self>) {
+        if self.management.is_some() {
+            self.management = None;
+            cx.notify();
+            return;
+        }
+        if self.thread.is_some() {
+            self.close_thread(cx);
+            return;
+        }
         if self.profile.is_some() {
             self.close_profile(cx);
         } else if self.details_open {

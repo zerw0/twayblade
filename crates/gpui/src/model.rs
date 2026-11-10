@@ -112,6 +112,7 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
             id: "design".into(),
             name: "Design team".into(),
             level: 0,
+            can_add_rooms: true,
             room_ids: ["general".into(), "research".into()].into_iter().collect(),
         }],
         rooms: vec![

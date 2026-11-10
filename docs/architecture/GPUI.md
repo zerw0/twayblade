@@ -101,3 +101,25 @@ Media preparation, queue cancellation, encryption and downloads stay in core.
 The frontend owns native dialogs and confirmation; four selection-scoped thumbnail
 workers keep timeline updates responsive. Decode and render caches are bounded.
 Emoji search, cursor ranges and recents are frontend state; reactions use core.
+
+Thread panels retain their own composer and scroller. SDK thread focus owns relation
+encoding, pagination and unread state; main timelines hide threaded events. Public
+receipts infer Main/thread scope from the SDK timeline; only the main timeline moves
+the fully-read marker. Room badges use SDK server totals without adding thread counts
+a second time. Initial pagination uses a selection-scoped JoinSet so it progresses
+even while a snapshot consumer awaits another page.
+
+Space directories and leave plans wrap SDK services; the UI receives typed room,
+access and owner records. Short-lived, reference-counted room subscriptions request
+the permission/routing state needed by operations without moving the conversation
+selection. Native sliding sync stays partial; readiness checks specific SDK records,
+not the legacy fully-synced flag. Creation distinguishes partial parent-link failure
+from creation failure so the UI cannot encourage duplicate rooms.
+
+Full-resolution viewer media uses SDK decryption with the media disk cache disabled
+(including thumbnails). A cancellable request and single decode worker bound active
+work; encoded input, dimensions, total decoded frames and frame count have limits.
+GPUI renders composited animation frames. Only an explicit save destination writes
+original bytes atomically; Open in Default App first asks for that destination.
+Navigation preserves loaded SDK timeline order, includes the active thread and
+requests older main-timeline pages when stepping beyond the first known image.

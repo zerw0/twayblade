@@ -7,12 +7,18 @@ mod backend;
 mod emoji;
 mod model;
 mod security;
+mod spaces_ui;
 #[cfg(all(test, feature = "capture"))]
 mod tests;
 mod theme;
+mod threads;
+mod viewer;
 mod workspace;
 
-use app::{CloseProfile, FindConversation, MatrixApp, Quit, ToggleDetails};
+use app::{
+    CloseProfile, FindConversation, JoinSpace, MatrixApp, NewDirectMessage, NewRoom, Quit,
+    ToggleDetails,
+};
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
 
@@ -64,6 +70,8 @@ fn main() {
                     Some("MatrixClient"),
                 ),
                 KeyBinding::new("escape", CloseProfile, Some("MatrixClient")),
+                KeyBinding::new(if cfg!(target_os = "macos") { "cmd-n" } else { "ctrl-n" }, NewDirectMessage, Some("MatrixClient")),
+                KeyBinding::new(if cfg!(target_os = "macos") { "cmd-shift-n" } else { "ctrl-shift-n" }, NewRoom, Some("MatrixClient")),
                 KeyBinding::new(
                     if cfg!(target_os = "macos") {
                         "cmd-i"
@@ -74,6 +82,7 @@ fn main() {
                     Some("MatrixClient"),
                 ),
             ]);
+            cx.bind_keys(viewer::bindings());
             cx.on_action(|_: &Quit, cx| cx.quit());
             use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
             cx.set_menus([
@@ -82,6 +91,7 @@ fn main() {
                     items: vec![MenuItem::action("Quit Matrix Client", Quit)],
                     disabled: false,
                 },
+                Menu { name: "File".into(), items: vec![MenuItem::action("New Direct Message…", NewDirectMessage),MenuItem::action("Create Room…", NewRoom),MenuItem::action("Join Space…", JoinSpace)], disabled: false },
                 Menu {
                     name: "Edit".into(),
                     items: vec![
@@ -97,9 +107,10 @@ fn main() {
                     ],
                     disabled: false,
                 },
+                Menu { name: "Image".into(), items: vec![MenuItem::action("Previous Image",viewer::PreviousImage),MenuItem::action("Next Image",viewer::NextImage),MenuItem::Separator,MenuItem::action("Zoom In",viewer::ZoomIn),MenuItem::action("Zoom Out",viewer::ZoomOut),MenuItem::action("Fit to Window",viewer::FitImage),MenuItem::Separator,MenuItem::action("Save Image…",viewer::SaveImage),MenuItem::action("Copy Image",viewer::CopyImage),MenuItem::action("Open in Default App…",viewer::OpenImage),MenuItem::action("Show in Timeline",viewer::RevealImage),MenuItem::action("Close Image",viewer::CloseViewer)], disabled: false },
                 Menu {
                     name: "View".into(),
-                    items: vec![MenuItem::action("Room Details", ToggleDetails)],
+                    items: vec![MenuItem::action("Room Details", ToggleDetails), MenuItem::action("Close Panel", CloseProfile)],
                     disabled: false,
                 },
             ]);
@@ -180,8 +191,13 @@ fn main() {
                             message.upload_percent = Some(42);
                         }
                     }
+                    if args.iter().any(|arg| arg == "--preview-viewer") { view.preview_viewer(window,cx); }
+                    if args.iter().any(|arg| arg == "--preview-directory") { view.open_management(spaces_ui::ManageKind::Directory("design".into()),window,cx); }
+                    if args.iter().any(|arg| arg == "--preview-invites") { view.status = "Sample data · Invitations preview".into(); view.snapshot.invites = vec![matrix_client_core::space_actions::Invite { id: "sample-room".into(), name: "Planning".into(), ..Default::default() },matrix_client_core::space_actions::Invite { id: "sample-dm".into(), name: "Sam".into(), direct: true, ..Default::default() },matrix_client_core::space_actions::Invite { id: "sample-space".into(), name: "Product team".into(), space: true, ..Default::default() }]; }
+                    if args.iter().any(|arg| arg == "--preview-thread") { view.open_thread("sample-0".into(), window, cx); }
                     if args.iter().any(|arg| arg == "--preview-details") {
                         view.details_open = true;
+                        if let Some(room) = view.snapshot.rooms.iter_mut().find(|room| room.id == view.snapshot.selected_room) { room.encrypted = false; }
                     }
                     if profile {
                         view.open_profile(

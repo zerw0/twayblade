@@ -5,6 +5,7 @@
 use chrono::{Local, TimeZone};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
+use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::{
     bubble::{Bubble, BubbleContent, BubbleVariant},
     button::{Button, ButtonVariants},
@@ -18,7 +19,10 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 use crate::{
-    app::{CloseProfile, FindConversation, MatrixApp, ToggleDetails},
+    app::{
+        CloseProfile, FindConversation, JoinSpace, MatrixApp, NewDirectMessage, NewRoom,
+        ToggleDetails,
+    },
     backend::{
         DeliveryState, Member, MemberRole, MembersState, MessageKind, ReplyTarget, Room,
         TimelineAction,
@@ -438,7 +442,7 @@ impl MatrixApp {
 
     /// A toolbar row. On macOS it is also the window's title bar: dragging moves
     /// the window and double-clicking zooms it, as in native apps.
-    fn toolbar(&self, id: &'static str, cx: &mut Context<Self>) -> Stateful<Div> {
+    pub(super) fn toolbar(&self, id: &'static str, cx: &mut Context<Self>) -> Stateful<Div> {
         h_flex()
             .id(id)
             .h(px(TOOLBAR_HEIGHT))
@@ -597,7 +601,10 @@ impl MatrixApp {
             } else {
                 space.name.clone()
             };
-            rail = rail.child(self.rail_tile(
+            let weak = cx.weak_entity();
+            let browse_id = space.id.clone();
+            let leave_id = space.id.clone();
+            let tile = self.rail_tile(
                 RailTile {
                     fill: Some(theme::avatar_color(&space.id)),
                     selected: selected.as_ref() == Some(&space.id),
@@ -607,8 +614,54 @@ impl MatrixApp {
                     unread,
                 },
                 cx,
-            ));
+            );
+            rail = rail.child(
+                div()
+                    .id(SharedString::from(format!("space-context-{}", space.id)))
+                    .child(tile)
+                    .context_menu(move |menu, _, _| {
+                        let browse = browse_id.clone();
+                        let leave = leave_id.clone();
+                        let view = weak.clone();
+                        let leave_view = weak.clone();
+                        menu.item(PopupMenuItem::new("Browse rooms").on_click(
+                            move |_, window, cx| {
+                                let _ = view.update(cx, |this, cx| {
+                                    this.open_management(
+                                        crate::spaces_ui::ManageKind::Directory(browse.clone()),
+                                        window,
+                                        cx,
+                                    )
+                                });
+                            },
+                        ))
+                        .item(
+                            PopupMenuItem::new("Leave space…").on_click(move |_, window, cx| {
+                                let _ = leave_view.update(cx, |this, cx| {
+                                    this.open_management(
+                                        crate::spaces_ui::ManageKind::Leave(leave.clone()),
+                                        window,
+                                        cx,
+                                    )
+                                });
+                            }),
+                        )
+                    }),
+            );
         }
+        rail = rail.child(
+            Button::new("join-space")
+                .ghost()
+                .size(px(24.))
+                .w(px(28.))
+                .h(px(28.))
+                .icon(IconName::Plus)
+                .accessibility_label("Join a space")
+                .tooltip("Join a Space…")
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.open_management(crate::spaces_ui::ManageKind::JoinSpace, window, cx)
+                })),
+        );
         rail.into_any_element()
     }
 
@@ -707,6 +760,9 @@ impl MatrixApp {
             .pb(px(8.))
             .gap(px(12.))
             .overflow_y_scroll();
+        if !self.snapshot.invites.is_empty() {
+            list = list.child(self.invite_section(cx));
+        }
         for (heading, direct) in [("Rooms", false), ("Direct messages", true)] {
             let rooms: Vec<_> = visible
                 .iter()
@@ -805,7 +861,11 @@ impl MatrixApp {
             .child(
                 Button::new("open-settings")
                     .ghost()
-                    .xsmall()
+                    .size(px(24.))
+                    .w(px(28.))
+                    .h(px(28.))
+                    .flex_none()
+                    .p_0()
                     .icon(IconName::Settings)
                     .accessibility_label("Settings")
                     .tooltip("Settings")
@@ -817,7 +877,11 @@ impl MatrixApp {
             .child(
                 Button::new("logout")
                     .ghost()
-                    .xsmall()
+                    .size(px(24.))
+                    .w(px(28.))
+                    .h(px(28.))
+                    .flex_none()
+                    .p_0()
                     .icon(IconName::LogOut)
                     .accessibility_label("Sign out")
                     .tooltip("Sign out")
@@ -874,6 +938,36 @@ impl MatrixApp {
                             .text_size(px(13.))
                             .font_weight(FontWeight::BOLD)
                             .child(title),
+                    )
+                    .child(
+                        Button::new("new-dm")
+                            .ghost()
+                            .size(px(24.))
+                            .w(px(28.))
+                            .h(px(28.))
+                            .icon(IconName::SquarePen)
+                            .accessibility_label("Start a direct message")
+                            .tooltip("New Direct Message  ⌘N")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_management(crate::spaces_ui::ManageKind::Dm, window, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("new-room")
+                            .ghost()
+                            .size(px(24.))
+                            .w(px(28.))
+                            .h(px(28.))
+                            .icon(IconName::Plus)
+                            .accessibility_label("Create a room")
+                            .tooltip("Create Room  ⇧⌘N")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_management(
+                                    crate::spaces_ui::ManageKind::Create,
+                                    window,
+                                    cx,
+                                )
+                            })),
                     ),
             )
             .child(
@@ -887,10 +981,11 @@ impl MatrixApp {
             .into_any_element()
     }
 
-    fn message_body(
+    pub(super) fn message_body(
         &self,
         message: &crate::backend::Message,
         outgoing: bool,
+        in_thread: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = theme::palette(cx);
@@ -955,17 +1050,72 @@ impl MatrixApp {
                         ),
                     );
                     if let Some(attachment) = &message.attachment {
-                        if let Some(image) = attachment
+                        let thumbnail = attachment
                             .preview_png
                             .as_ref()
-                            .and_then(|bytes| crate::attachments::render_png(bytes, cx))
-                        {
-                            content = content.child(
-                                img(image)
+                            .and_then(|bytes| crate::attachments::render_png(bytes, cx));
+                        if message.kind == MessageKind::Image {
+                            let id = message.id.clone();
+                            let keyboard_id = id.clone();
+                            let focus = self.image_focus(&id, cx);
+                            let mut button = Button::new(SharedString::from(format!("image-{id}")))
+                                .ghost()
+                                .p_0()
+                                .track_focus(&focus)
+                                .accessibility_label(format!("Open image {}", attachment.filename))
+                                .tooltip("Open Image · Space")
+                                .disabled(message.event_id.is_none())
+                                .capture_key_down(cx.listener(
+                                    move |this, event: &KeyDownEvent, window, cx| {
+                                        if event.keystroke.key == "space"
+                                            && !event.keystroke.modifiers.modified()
+                                        {
+                                            this.open_viewer(
+                                                keyboard_id.clone(),
+                                                in_thread,
+                                                window,
+                                                cx,
+                                            );
+                                            cx.stop_propagation();
+                                        }
+                                    },
+                                ))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.open_viewer(id.clone(), in_thread, window, cx)
+                                }));
+                            if let Some(image) = thumbnail {
+                                button = button
                                     .w(px(280.))
                                     .h(px(180.))
-                                    .object_fit(ObjectFit::Contain),
-                            );
+                                    .child(img(image).size_full().object_fit(ObjectFit::Contain));
+                            } else {
+                                button = button.small().label("Open Image");
+                            }
+                            if self.reveal_image.as_ref() == Some(&message.id) {
+                                let target = message.id.clone();
+                                let weak = cx.weak_entity();
+                                button = button.relative().child(
+                                    canvas(
+                                        move |bounds, window, cx| {
+                                            window.request_autoscroll(bounds);
+                                            window.defer(cx, move |_, cx| {
+                                                let _ = weak.update(cx, |this, cx| {
+                                                    if this.reveal_image.as_ref() == Some(&target) {
+                                                        this.reveal_image = None;
+                                                        cx.notify();
+                                                    }
+                                                });
+                                            });
+                                        },
+                                        |_, _, _, _| {},
+                                    )
+                                    .absolute()
+                                    .top_0()
+                                    .left_0()
+                                    .size_full(),
+                                );
+                            }
+                            content = content.child(button);
                         }
                         let on_bubble = if outgoing {
                             cx.theme().primary_foreground
@@ -1007,7 +1157,10 @@ impl MatrixApp {
                                     .child(
                                         Button::new(SharedString::from(format!("save-{id}")))
                                             .ghost()
-                                            .xsmall()
+                                            .size(px(24.))
+                                            .w(px(28.))
+                                            .h(px(28.))
+                                            .p_0()
                                             .text_color(on_bubble)
                                             .icon(IconName::Download)
                                             .accessibility_label("Save attachment")
@@ -1026,7 +1179,10 @@ impl MatrixApp {
                                     .child(
                                         Button::new(SharedString::from(format!("open-{open_id}")))
                                             .ghost()
-                                            .xsmall()
+                                            .size(px(24.))
+                                            .w(px(28.))
+                                            .h(px(28.))
+                                            .p_0()
                                             .text_color(on_bubble)
                                             .icon(IconName::ExternalLink)
                                             .accessibility_label("Open attachment")
@@ -1112,6 +1268,25 @@ impl MatrixApp {
                     ),
             );
         }
+        if !in_thread && message.event_id.is_some() {
+            let id = message.id.clone();
+            line = line.child(
+                div()
+                    .opacity(0.)
+                    .group_hover("message", |style| style.opacity(1.))
+                    .child(
+                        Button::new(SharedString::from(format!("reply-thread-{id}")))
+                            .ghost()
+                            .small()
+                            .icon(IconName::MessagesSquare)
+                            .accessibility_label("Reply in Thread")
+                            .tooltip("Reply in Thread")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_thread(id.clone(), window, cx)
+                            })),
+                    ),
+            );
+        }
         row = row.child(line);
         if !message.reactions.is_empty() {
             let mut chips = h_flex().gap(px(4.)).flex_wrap();
@@ -1150,22 +1325,27 @@ impl MatrixApp {
             }
             row = row.child(chips);
         }
-        if message.thread_replies > 0 {
+        if !in_thread && message.thread_replies > 0 {
+            let id = message.id.clone();
             row = row.child(
-                div()
-                    .id(SharedString::from(format!("thread-{}", message.id)))
-                    .text_size(px(11.))
-                    .text_color(cx.theme().muted_foreground)
-                    .child(format!(
-                        "{} {}",
+                Button::new(SharedString::from(format!("thread-{}", message.id)))
+                    .text()
+                    .xsmall()
+                    .text_color(cx.theme().link)
+                    .label(format!(
+                        "{} replies{}",
                         message.thread_replies,
-                        if message.thread_replies == 1 {
-                            "reply"
+                        if message.thread_unread > 0 {
+                            format!(" · {} unread", message.thread_unread)
                         } else {
-                            "replies"
+                            String::new()
                         }
                     ))
-                    .test_support(),
+                    .accessibility_label("Open thread")
+                    .tooltip("Open thread")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_thread(id.clone(), window, cx)
+                    })),
             );
         }
         if message.delivery == DeliveryState::Failed {
@@ -1199,7 +1379,7 @@ impl MatrixApp {
                                         message: id.clone(),
                                     }
                                 };
-                                this.timeline_action(id.clone(), action, window, cx);
+                                this.message_action(in_thread, id.clone(), action, window, cx);
                             },
                         )),
                     );
@@ -1207,14 +1387,20 @@ impl MatrixApp {
             }
             row = row.child(failure);
         }
+        let messages = if in_thread {
+            self.thread
+                .as_ref()
+                .map(|t| t.messages.as_slice())
+                .unwrap_or(&[])
+        } else {
+            &self.snapshot.messages
+        };
         if message.event_id.is_some()
-            && self
-                .snapshot
-                .messages
+            && messages
                 .iter()
                 .rev()
-                .find(|item| item.event_id.is_some())
-                .map(|item| &item.id)
+                .find(|m| m.event_id.is_some())
+                .map(|m| &m.id)
                 == Some(&message.id)
             && let (Some(event_id), Some(room)) = (
                 message.event_id.clone(),
@@ -1223,6 +1409,7 @@ impl MatrixApp {
         {
             let weak = cx.weak_entity();
             let account = self.snapshot.account_instance;
+            let request = self.thread.as_ref().map(|t| t.request);
             row = row.relative().child(
                 canvas(
                     move |bounds, window, cx| {
@@ -1230,9 +1417,15 @@ impl MatrixApp {
                         let visible = visible.size.width > px(1.) && visible.size.height > px(1.);
                         window.defer(cx, move |window, cx| {
                             let _ = weak.update(cx, |this, cx| {
-                                this.report_latest_visibility(
-                                    room, event_id, account, visible, window, cx,
-                                )
+                                if in_thread {
+                                    this.thread_visibility(
+                                        request, event_id, account, visible, window, cx,
+                                    );
+                                } else {
+                                    this.report_latest_visibility(
+                                        room, event_id, account, visible, window, cx,
+                                    );
+                                }
                             });
                         });
                     },
@@ -1248,17 +1441,28 @@ impl MatrixApp {
     }
 
     fn message_group(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
-        let Some(range) = self.groups.get(ix).cloned() else {
+        self.message_group_from(ix, &self.snapshot.messages, &self.groups, false, cx)
+    }
+
+    pub(super) fn message_group_from(
+        &self,
+        ix: usize,
+        messages: &[crate::backend::Message],
+        groups: &[std::ops::Range<usize>],
+        in_thread: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(range) = groups.get(ix).cloned() else {
             return div().into_any_element();
         };
         let palette = theme::palette(cx);
         let muted = cx.theme().muted_foreground;
-        let first = self.snapshot.messages[range.start].clone();
+        let first = messages[range.start].clone();
         let outgoing = first.sender == self.snapshot.user_id;
         let previous = ix
             .checked_sub(1)
-            .and_then(|previous| self.groups.get(previous))
-            .map(|previous| &self.snapshot.messages[previous.end - 1]);
+            .and_then(|previous| groups.get(previous))
+            .map(|previous| &messages[previous.end - 1]);
         let new_day = previous
             .is_none_or(|previous| day_of(previous.timestamp_ms) != day_of(first.timestamp_ms));
         // Messages-style time markers: one centred label for a new day or after a
@@ -1307,11 +1511,9 @@ impl MatrixApp {
                     .test_support(),
             );
         }
-        let messages = &self.snapshot.messages[range];
+        let messages = &messages[range];
         // Delivery state like Messages: shown once, under your latest message.
-        let latest_own = self
-            .snapshot
-            .messages
+        let latest_own = messages
             .iter()
             .rev()
             .find(|message| message.sender == self.snapshot.user_id)
@@ -1325,9 +1527,14 @@ impl MatrixApp {
                 .items_end()
                 .gap(px(2.));
             for message in messages {
-                column = column.child(self.message_body(message, true, cx));
+                column = column.child(self.message_body(message, true, in_thread, cx));
                 let label = match message.delivery {
                     DeliveryState::Queued => "Sending…",
+                    _ if latest_own.as_ref() == Some(&message.id)
+                        && !message.read_by.is_empty() =>
+                    {
+                        "Read"
+                    }
                     DeliveryState::Sent if latest_own.as_ref() == Some(&message.id) => "Sent",
                     _ => "",
                 };
@@ -1398,7 +1605,7 @@ impl MatrixApp {
                     ),
             );
         for message in messages {
-            column = column.child(self.message_body(message, false, cx));
+            column = column.child(self.message_body(message, false, in_thread, cx));
         }
         group
             .child(
@@ -1451,7 +1658,7 @@ impl MatrixApp {
         let ready = self.snapshot.timeline_ready && !self.preview && !self.busy;
         let editable = !self.busy && (self.preview || self.snapshot.timeline_ready);
         let empty = self.composer.read(cx).value().trim().is_empty();
-        let details_shown = self.details_open || self.profile.is_some();
+        let details_shown = self.details_open || self.profile.is_some() || self.thread.is_some();
 
         let mut title = h_flex().gap(px(5.)).child(
             div()
@@ -1527,6 +1734,8 @@ impl MatrixApp {
             .flex_1()
             .min_h_0()
             .with_jump_button_label("Jump to latest")
+            // Kit defaults to 32px between rows; groups own their 6px spacing.
+            .with_row_style(StyleRefinement::default().px_0().pb_0())
             .into_any_element()
         };
 
@@ -1540,7 +1749,7 @@ impl MatrixApp {
         let note = |text: String| {
             div()
                 .pl(px(12.))
-                .text_size(px(11.))
+                .text_size(px(13.))
                 .text_color(muted)
                 .child(text)
         };
@@ -1567,9 +1776,9 @@ impl MatrixApp {
             // and a send button that appears only once there is something to send.
             .child(
                 h_flex()
-                    .items_end()
-                    .gap(px(2.))
-                    .min_h(px(32.))
+                    .items_center()
+                    .gap(px(4.))
+                    .min_h(px(36.))
                     .p(px(3.))
                     .rounded(px(16.))
                     .border_1()
@@ -1578,7 +1787,11 @@ impl MatrixApp {
                     .child(
                         Button::new("attach-file")
                             .ghost()
-                            .xsmall()
+                            .size(px(24.))
+                            .w(px(28.))
+                            .h(px(28.))
+                            .flex_none()
+                            .p_0()
                             .rounded(px(12.))
                             .icon(IconName::Paperclip)
                             .accessibility_label("Attach file")
@@ -1613,7 +1826,11 @@ impl MatrixApp {
                     .child(
                         Button::new("emoji-open")
                             .ghost()
-                            .xsmall()
+                            .size(px(24.))
+                            .w(px(28.))
+                            .h(px(28.))
+                            .flex_none()
+                            .p_0()
                             .rounded(px(12.))
                             .icon(IconName::FaceSlightlySmiling)
                             .accessibility_label("Choose emoji")
@@ -1629,7 +1846,11 @@ impl MatrixApp {
                         field.child(
                             Button::new("send")
                                 .primary()
-                                .xsmall()
+                                .size(px(24.))
+                                .w(px(28.))
+                                .h(px(28.))
+                                .flex_none()
+                                .p_0()
                                 .rounded(px(12.))
                                 .icon(IconName::ArrowUp)
                                 .accessibility_label("Send message")
@@ -1675,7 +1896,7 @@ impl MatrixApp {
             .overflow_y_scroll()
     }
 
-    fn panel_header(
+    pub(super) fn panel_header(
         &self,
         title: &'static str,
         close: &'static str,
@@ -1790,8 +2011,11 @@ impl MatrixApp {
                         .text_color(muted)
                         .child("Messages and files"),
                 )
+                .into_any_element()
         } else {
             h_flex()
+                .id("encryption-warning")
+                .items_start()
                 .gap(px(8.))
                 .px(px(8.))
                 .py(px(6.))
@@ -1799,8 +2023,18 @@ impl MatrixApp {
                 .bg(palette.warning_background)
                 .text_color(palette.warning)
                 .text_size(px(12.))
-                .child(Icon::new(IconName::TriangleAlert).xsmall())
-                .child("Not encrypted. Your server can read these messages.")
+                .child(Icon::new(IconName::TriangleAlert).xsmall().flex_none())
+                .child(
+                    div()
+                        .id("encryption-warning-text")
+                        .flex_1()
+                        .min_w_0()
+                        .whitespace_normal()
+                        .child("Not encrypted. Your server can read these messages.")
+                        .test_support(),
+                )
+                .test_support()
+                .into_any_element()
         };
         let id = room.id.clone();
         let members = self.snapshot.members.len();
@@ -1985,7 +2219,10 @@ impl MatrixApp {
 }
 
 impl Render for MatrixApp {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(viewer) = &mut self.viewer {
+            viewer.clamp_pan(window);
+        }
         let content = if self.security_open
             && !self.snapshot.user_id.is_empty()
             && self.snapshot.session_state == matrix_client_core::auth::SessionState::Active
@@ -1996,7 +2233,11 @@ impl Render for MatrixApp {
         } else if self.snapshot.user_id.is_empty() {
             self.sign_in_view(cx)
         } else {
-            let panel = if self.profile.is_some() {
+            let panel = if self.management.is_some() {
+                None
+            } else if self.thread.is_some() {
+                Some(self.thread_view(cx))
+            } else if self.profile.is_some() {
                 Some(self.profile_view(cx))
             } else if self.details_open && self.navigation.selected_room.is_some() {
                 Some(self.details_view(cx))
@@ -2007,10 +2248,15 @@ impl Render for MatrixApp {
                 .size_full()
                 .items_stretch()
                 .child(self.navigation_column(cx))
-                .child(self.conversation_view(cx))
+                .child(if self.management.is_some() {
+                    self.management_view(cx)
+                } else {
+                    self.conversation_view(cx)
+                })
                 .children(panel)
                 .into_any_element()
         };
+        let overlay = self.viewer.as_ref().map(|_| self.viewer_view(window, cx));
         let workspace = !self.security_open
             && !self.snapshot.user_id.is_empty()
             && self.snapshot.session_state == matrix_client_core::auth::SessionState::Active;
@@ -2022,18 +2268,48 @@ impl Render for MatrixApp {
             .track_focus(&self.focus)
             .key_context("MatrixClient")
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                this.emoji_key(event, window, cx)
+                if this.viewer.is_none() {
+                    this.emoji_key(event, window, cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &FindConversation, window, cx| {
                 this.search.update(cx, |state, cx| state.focus(window, cx))
             }))
-            .on_action(cx.listener(|this, _: &CloseProfile, _, cx| this.dismiss_panel(cx)))
+            .on_action(cx.listener(|this, _: &CloseProfile, window, cx| {
+                if this.viewer.is_some() {
+                    this.close_viewer(window, cx);
+                } else {
+                    this.dismiss_panel(cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &ToggleDetails, _, cx| this.toggle_details(cx)))
+            .on_action(cx.listener(|this, _: &NewRoom, window, cx| {
+                if !this.snapshot.user_id.is_empty() {
+                    this.open_management(crate::spaces_ui::ManageKind::Create, window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &NewDirectMessage, window, cx| {
+                if !this.snapshot.user_id.is_empty() {
+                    this.open_management(crate::spaces_ui::ManageKind::Dm, window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &JoinSpace, window, cx| {
+                if !this.snapshot.user_id.is_empty() {
+                    this.open_management(crate::spaces_ui::ManageKind::JoinSpace, window, cx);
+                }
+            }))
             // Full-screen flows (sign-in, settings, recovery) still need a title-bar
             // row on macOS: it clears the traffic lights and moves the window.
             .when(!workspace && cfg!(target_os = "macos"), |view| {
                 view.child(self.toolbar("window-toolbar", cx))
             })
-            .child(div().flex_1().min_h_0().child(content))
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .child(content)
+                    .children(overlay),
+            )
     }
 }

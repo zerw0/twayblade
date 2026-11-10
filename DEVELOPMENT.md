@@ -120,6 +120,10 @@ cargo run --locked -p matrix-client-gpui -- --preview-home
 cargo run --locked -p matrix-client-gpui -- --preview-profile
 cargo run --locked -p matrix-client-gpui -- --preview-details
 cargo run --locked -p matrix-client-gpui -- --preview-signin
+cargo run --locked -p matrix-client-gpui -- --preview-thread
+cargo run --locked -p matrix-client-gpui -- --preview-directory
+cargo run --locked -p matrix-client-gpui -- --preview-invites
+cargo run --locked -p matrix-client-gpui -- --preview-viewer
 cargo run --locked -p matrix-client-gpui -- --preview-large
 ```
 

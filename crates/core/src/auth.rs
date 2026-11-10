@@ -73,6 +73,9 @@ impl SavedSession {
 pub struct Account {
     pub(crate) client: Client,
     pub(crate) selected_room: tokio::sync::watch::Sender<Option<matrix_sdk::ruma::OwnedRoomId>>,
+    pub(crate) sync_requests:
+        Arc<Mutex<std::collections::HashMap<matrix_sdk::ruma::OwnedRoomId, usize>>>,
+    pub(crate) sync_request_updates: tokio::sync::watch::Sender<Vec<matrix_sdk::ruma::OwnedRoomId>>,
     instance_id: Uuid,
     remotely_revoked: Arc<AtomicBool>,
     store_path: PathBuf,
@@ -104,6 +107,8 @@ impl Account {
         Self {
             client,
             selected_room: tokio::sync::watch::channel(None).0,
+            sync_requests: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            sync_request_updates: tokio::sync::watch::channel(Vec::new()).0,
             instance_id: Uuid::new_v4(),
             remotely_revoked: Arc::new(AtomicBool::new(false)),
             store_path,
@@ -243,6 +248,9 @@ async fn client(
         .await
         .map_err(|_| AuthError::Storage)?;
     let mut builder = Client::builder()
+        .with_threading_support(matrix_sdk::ThreadingSupport::Enabled {
+            with_subscriptions: false,
+        })
         .homeserver_url(&record.homeserver)
         .handle_refresh_tokens()
         .sqlite_store(&path, Some(&record.passphrase));

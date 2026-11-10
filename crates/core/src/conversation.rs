@@ -10,13 +10,15 @@ use matrix_sdk::ruma::{
     events::room::message::{MessageType, RoomMessageEventContent},
 };
 use matrix_sdk_ui::timeline::{
-    EventSendState, MsgLikeContent, Profile, RoomExt, Timeline, TimelineDetails, TimelineItem,
-    TimelineItemContent, TimelineReadReceiptTracking, VirtualTimelineItem,
+    EventSendState, MsgLikeContent, Profile, RoomExt, Timeline, TimelineDetails, TimelineFocus,
+    TimelineItem, TimelineItemContent, TimelineReadReceiptTracking, VirtualTimelineItem,
 };
 use std::sync::Arc;
 
 mod attachments;
+mod viewer;
 pub use attachments::{AttachmentDraft, AttachmentError, sanitize_filename};
+pub use viewer::{ImageError, ViewerImage, decode_viewer_image};
 
 /// What a timeline row represents. The frontend owns the wording.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -44,6 +46,8 @@ pub struct MessageRow {
     pub reply: Option<ReplyTarget>,
     pub reactions: Vec<Reaction>,
     pub thread_replies: u32,
+    pub thread_unread: u64,
+    pub read_by: Vec<String>,
     pub attachment: Option<Attachment>,
     pub upload_percent: Option<u8>,
     pub can_retry: bool,
@@ -118,6 +122,8 @@ pub struct Conversation {
 
 #[derive(Clone)]
 pub struct ConversationSnapshot {
+    pub thread_root: Option<String>,
+    pub unread: u64,
     pub generation: u64,
     pub account_instance: u128,
     pub room_id: String,
@@ -151,14 +157,40 @@ impl Conversation {
     pub async fn mark_read(&self, event_id: &str) -> Result<(), ConversationError> {
         let event_id = matrix_sdk::ruma::EventId::parse(event_id)
             .map_err(|_| ConversationError::Unavailable)?;
+        if !self.timeline.is_threaded() {
+            self.timeline
+                .send_multiple_receipts(
+                    matrix_sdk::room::Receipts::new().fully_read_marker(event_id.clone()),
+                )
+                .await
+                .map_err(|_| ConversationError::Receipt)?;
+        }
+        // The SDK infers Main or the thread ID from this timeline's focus.
+        // An unthreaded/fully-read marker here would clear closed-thread unread.
         self.timeline
-            .send_multiple_receipts(
-                matrix_sdk::room::Receipts::new()
-                    .fully_read_marker(event_id.clone())
-                    .public_read_receipt(event_id),
+            .send_single_receipt(
+                matrix_sdk::ruma::api::client::receipt::create_receipt::v3::ReceiptType::Read,
+                event_id,
             )
             .await
+            .map(|_| ())
             .map_err(|_| ConversationError::Receipt)
+    }
+
+    pub async fn unread(&self, root: &str) -> Result<u64, ConversationError> {
+        let root =
+            matrix_sdk::ruma::EventId::parse(root).map_err(|_| ConversationError::Unavailable)?;
+        let room = self.timeline.room();
+        let (cache, _guard) = room
+            .client()
+            .event_cache()
+            .thread(room.room_id(), &root)
+            .await
+            .map_err(|_| ConversationError::Unavailable)?;
+        cache
+            .num_unread_messages()
+            .await
+            .map_err(|_| ConversationError::Unavailable)
     }
 
     pub async fn toggle_reaction(&self, id: &str, key: &str) -> Result<(), ConversationError> {
@@ -381,6 +413,13 @@ fn rows<'a>(
                     .map(|content| reactions(content, own_user))
                     .unwrap_or_default(),
                 thread_replies: msglike.map_or(0, thread_reply_count),
+                thread_unread: 0,
+                read_by: event
+                    .read_receipts()
+                    .keys()
+                    .filter(|user| user.as_str() != own_user.as_str())
+                    .map(ToString::to_string)
+                    .collect(),
                 upload_percent: match event.send_state() {
                     Some(EventSendState::NotSentYet {
                         progress: Some(progress),
@@ -432,6 +471,25 @@ fn fetch_reply_details<'a>(
     }
 }
 
+async fn projected_rows(
+    timeline: &Arc<Timeline>,
+    items: impl Iterator<Item = &Arc<TimelineItem>>,
+    own_user: &UserId,
+) -> Vec<MessageRow> {
+    let mut messages = rows(items, own_user);
+    let conversation = Conversation {
+        timeline: timeline.clone(),
+    };
+    for message in &mut messages {
+        if message.thread_replies > 0
+            && let Some(id) = &message.event_id
+        {
+            message.thread_unread = conversation.unread(id).await.unwrap_or(0);
+        }
+    }
+    messages
+}
+
 impl Account {
     pub fn select_room(&self, room: Option<&str>) {
         let id = room.and_then(|id| RoomId::parse(id).ok());
@@ -443,9 +501,28 @@ impl Account {
         room_id: String,
         generation: u64,
     ) -> impl Stream<Item = ConversationSnapshot> + Send + 'static + use<> {
+        self.focused_updates(room_id, generation, None)
+    }
+
+    pub fn thread_updates(
+        &self,
+        room_id: String,
+        root: String,
+        generation: u64,
+    ) -> impl Stream<Item = ConversationSnapshot> + Send + 'static + use<> {
+        self.focused_updates(room_id, generation, Some(root))
+    }
+
+    fn focused_updates(
+        &self,
+        room_id: String,
+        generation: u64,
+        root: Option<String>,
+    ) -> impl Stream<Item = ConversationSnapshot> + Send + 'static + use<> {
         let account = self.clone();
         async_stream::stream! {
             let mut snapshot = ConversationSnapshot {
+                thread_root: root.clone(), unread: 0,
                 generation,
                 account_instance: account.instance_id(), room_id: room_id.clone(),
                 conversation: None, messages: Vec::new(), status: TimelineStatus::Loading,
@@ -456,7 +533,14 @@ impl Account {
                 snapshot.status = TimelineStatus::Unavailable;
                 yield snapshot; return;
             };
-            let timeline = match room.timeline_builder().track_read_marker_and_receipts(TimelineReadReceiptTracking::MessageLikeEvents).build().await {
+            let focus = match root.as_deref() {
+                Some(root) => match matrix_sdk::ruma::EventId::parse(root) {
+                    Ok(root_event_id) => TimelineFocus::Thread { root_event_id },
+                    Err(_) => { snapshot.status = TimelineStatus::Unavailable; yield snapshot; return; }
+                },
+                None => TimelineFocus::Live { hide_threaded_events: true },
+            };
+            let timeline = match room.timeline_builder().with_focus(focus).track_read_marker_and_receipts(TimelineReadReceiptTracking::MessageLikeEvents).build().await {
                 Ok(timeline) => Arc::new(timeline),
                 Err(_) => {
                     snapshot.status = TimelineStatus::Failed;
@@ -466,16 +550,22 @@ impl Account {
             let conversation = Conversation { timeline: timeline.clone() };
             let (mut items, updates) = timeline.subscribe().await;
             snapshot.conversation = Some(conversation);
-            snapshot.messages = rows(items.iter(), account.client.user_id().expect("authenticated account"));
+            snapshot.messages = projected_rows(&timeline, items.iter(), account.client.user_id().expect("authenticated account")).await;
+            if let Some(root) = &root { snapshot.unread = snapshot.conversation.as_ref().expect("timeline").unread(root).await.unwrap_or(0); }
             snapshot.status = TimelineStatus::Ready;
             yield snapshot.clone();
             let mut updates = Box::pin(updates);
             // Fetch an initial page without blocking consumption of timeline updates.
-            let initial_page = timeline.paginate_backwards(30);
-            tokio::pin!(initial_page);
+            // Pagination must keep running while the consumer is between snapshots.
+            // Otherwise a concurrent `older()` can await its lock while this stream
+            // is suspended at a yield. JoinSet also aborts it on selection/account drop.
+            let mut initial_page = tokio::task::JoinSet::new();
+            let initial_timeline = timeline.clone();
+            initial_page.spawn(async move { initial_timeline.paginate_backwards(30).await });
             let mut initial_pending = true;
             let (_typing_guard, mut typing) = room.subscribe_to_typing_notifications();
             let mut room_updates = room.subscribe_to_updates();
+            let mut cache_updates = account.client.event_cache().subscribe_to_room_generic_updates();
             let mut member_load = Box::pin(room_members(room.clone()));
             let mut member_pending = true;
             let mut attempted = std::collections::HashSet::new();
@@ -483,9 +573,15 @@ impl Account {
             loop {
                 fetch_reply_details(&timeline, items.iter(), &mut attempted, &mut detail_tasks);
                 tokio::select! {
-                    result = &mut initial_page, if initial_pending => {
+                    change = cache_updates.recv() => {
+                        if matches!(change, Err(tokio::sync::broadcast::error::RecvError::Closed)) { break; }
+                        snapshot.messages = projected_rows(&timeline, items.iter(), account.client.user_id().expect("authenticated account")).await;
+                        if let Some(root) = &root { snapshot.unread = snapshot.conversation.as_ref().expect("timeline").unread(root).await.unwrap_or(0); }
+                        yield snapshot.clone();
+                    }
+                    result = initial_page.join_next(), if initial_pending => {
                         initial_pending = false;
-                        snapshot.status = if result.is_err() { TimelineStatus::HistoryFailed } else { TimelineStatus::Ready };
+                        snapshot.status = if matches!(result, Some(Ok(Ok(_)))) { TimelineStatus::Ready } else { TimelineStatus::HistoryFailed };
                         yield snapshot.clone();
                     }
                     result = &mut member_load, if member_pending => {
@@ -512,7 +608,8 @@ impl Account {
                     next = updates.next() => {
                         let Some(diffs) = next else { break; };
                         for diff in diffs { diff.apply(&mut items); }
-                        snapshot.messages = rows(items.iter(), account.client.user_id().expect("authenticated account"));
+                        snapshot.messages = projected_rows(&timeline, items.iter(), account.client.user_id().expect("authenticated account")).await;
+            if let Some(root) = &root { snapshot.unread = snapshot.conversation.as_ref().expect("timeline").unread(root).await.unwrap_or(0); }
                         yield snapshot.clone();
                     }
                 }

@@ -6,7 +6,7 @@ listed separately. Earlier Iced/SwiftUI evidence was removed with those frontend
 
 | Check | macOS arm64 | Linux | Windows |
 | --- | --- | --- | --- |
-| fmt / Clippy (`-D warnings`) / unit tests | Pass locally (Rust 1.99; locked/all features; 50 tests) | Not run | Not run |
+| fmt / Clippy (`-D warnings`) / unit tests | Pass locally (Rust 1.99; locked/all features; 66 tests) | Not run | Not run |
 | CI (`.github/workflows/check.yml`) | Never observed passing | Never observed passing | Never observed passing |
 | GPUI build and launch | Pass; ad-hoc `.app` launches | Not run | Not run |
 | Offline previews and Kit interaction tests | Pass; light/dark workspace, Home, profile, sign-in, details and 10k captures; Kit interaction/layout tests | Not run | Not run |
@@ -33,6 +33,18 @@ listed separately. Earlier Iced/SwiftUI evidence was removed with those frontend
 | Emoji offline UI (Task 6) | Unicode cursor/Return/shortcode/tone/reaction control tests pass; reviewed `captures/emoji-{light,dark}.png` samples | Not run | Not run |
 | Emoji physical checks (Task 6) | Pending: IME, VoiceOver, native keyboard and per-platform emoji fonts; Synapse SDK reaction regression passes | Not run | Not run |
 | System accent | Native AppKit read, actual light/dark theme updates and contrast tests pass; light/dark sample captures reviewed; live system-setting change pending | Desktop portal implementation; not run | UISettings implementation; not run |
+| Layout fixes (Task 0) | Locked/all-feature fmt, strict Clippy and 55 unit/UI tests pass; measured group gap 38px before / 6px after, reply/content-update and warning-wrap regressions pass | Not run | Not run |
+| Layout offline UI (Task 0) | 28px composer/account targets and composer alignment pass; reviewed `captures/layout-fixes-{light,dark}.png` sample warnings and spacing | Not run | Not run |
+| Layout physical checks (Task 0) | Pending: real-account spacing, trackpad scrolling, multiline composer and toolbar alignment on macOS | Not run | Not run |
+| Threads (M3 Task 1) | SDK thread focus/send/pagination, unread summaries, main reply filtering and scoped receipts implemented; room badges retain SDK server totals | Not run | Not run |
+| Thread offline UI (M3 Task 1) | 57 workspace unit/UI tests pass; draft isolation, stale updates, panel switching and real Escape binding; reviewed `captures/thread-{light,dark}.png` samples | Not run | Not run |
+| Thread physical/Element checks (M3 Task 1) | Pending: real-account unread/receipt comparison with Element, encrypted thread media, keyboard and trackpad use | Not run | Not run |
+| Spaces (M3a Task 2) | SDK directory/pagination, restricted join handling, explicit selective leave, room/DM/space invites, encrypted room creation and Matrix-ID DMs implemented; optional parent choices follow SDK permissions | Not run | Not run |
+| Space offline UI (M3a Task 2) | 60 workspace unit/UI tests pass; real context menu, directory access states, leave selection, encryption default and parent permissions; reviewed `captures/{directory,invites}-{light,dark}.png` samples | Not run | Not run |
+| Space physical/Element checks (M3a Task 2) | Pending: real-account joins/leaves/invites against Element, keyboard navigation, changing power levels and large cross-server hierarchies | Not run | Not run |
+| Image viewer (M3 Task 3) | SDK full-resolution fetch/decryption without media disk caching; bounded GIF/WebP decode, zoom/pan, history navigation, copy and explicit Save/Open; 8192px / 64MiB encoded / 96MiB decoded / 240 frames | Not run | Not run |
+| Viewer offline UI (M3 Task 3) | 66 workspace unit/UI tests pass; actual Space/arrows/zoom/Tab/Save/Open/Show-in-Timeline/Escape bindings, focus trap/return, pinch/pan and stale-load cancellation; reviewed `captures/viewer-{light,dark}.png` samples | Not run | Not run |
+| Viewer physical/Element checks (M3 Task 3) | Pending: actual trackpad, animation playback, native Save/overwrite/default app, clipboard into another app, VoiceOver and Element images; navigation covers loaded room/current-thread images and requests earlier main history | Not run | Not run |
 | Element interoperability (E2EE) | Pending | Pending | Pending |
 | IME, VoiceOver/screen reader, keyboard focus | Pending | Pending | Pending |
 | Element Call | Not implemented | — | — |
@@ -77,6 +89,13 @@ against Synapse v1.164.2 with generated accounts only:
 | `revoked_device_and_soft_logout_recovery` (Task 3) | Synapse 1.164.2 (normal and five-second-token fixture): second-client revocation, hard/soft status, clean sync stop, local data retained, invalid-password retry, same-device/store reauth and explicit hard cleanup; pass |
 | `secure_backup_fresh_store_recovery_and_sas` (Task 4) | Synapse 1.164.2, fresh generated account: cross-signing/backup, missing-key timeline, wrong key, fresh-store backup recovery with live re-decryption, SAS between SDK clients, cancelled verification, other-device revocation, reset rejects old key and accepts new key; pass |
 | `attachment_plain_encrypted_cancel_restart_round_trip` (Task 5) | Synapse 1.164.2: files and image thumbnails in plain/encrypted rooms, encrypted media source checked, server downloads bypass cache, oversize sparse file rejected, queued cancellation and store-reopen upload/download pass |
+| `encrypted_delivery_profile_and_same_device_store_restore`, `timeline_metadata_and_send_queue_actions`, `members_typing_and_read_receipts`, `pagination_preserves_message_identity`, `room_list_service_tracks_recency_and_details` (Task 0 regression) | Synapse 1.164.2, `matrixclient.test`: all five existing service checks pass; generated accounts only |
+| `threads_send_paginate_receipts_and_closed_unread` (M3 Task 1) | Synapse 1.164.2, `matrixclient.test`: SDK-created thread, two-way sending, 68 replies, pagination/unique IDs, typed/scoped receipts, root unread summary, hidden inline replies and unread preservation after reading main; pass |
+| Existing five service checks (M3 Task 1 regression) | Synapse 1.164.2, `matrixclient.test`: all pass with threading enabled and independent initial pagination; fixture runs serialized |
+| `spaces_hierarchy_invites_creation_restricted_join_and_selective_leave` (M3a Task 2) | Synapse 1.164.2, `matrixclient.test`, fresh generated pair: nested/private spaces, 55 accessible children across actual hierarchy pages, inaccessible child, suggested restricted join, room/space accepts and DM decline, encrypted creation, denied parent permissions, multi-parent navigation and selected-space-only leave; pass |
+| Existing five service checks and thread acceptance (M3a Task 2 regression) | Synapse 1.164.2, `matrixclient.test`: pass; member fixture waits for requested SDK permission state before updating powers |
+| `image_viewer_plain_encrypted_animation_limits_and_corrupt` (M3 Task 3) | Synapse 1.164.2, `matrixclient.test`: plain/encrypted PNG, animated GIF/WebP, >8k image and corrupt file; SDK decryption, no cached decrypted media, explicit original-byte save and cancellation; pass |
+| `attachment_plain_encrypted_cancel_restart_round_trip` (M3 Task 3 regression) | Synapse 1.164.2, `matrixclient.test`: attachment round trips, cancellation and persisted queue restart after shared atomic-save/cache changes; pass |
 | `timeline_metadata_and_send_queue_actions` (Task 6 regression) | Synapse 1.164.2: existing SDK Unicode reaction add/remove and stable timeline identity pass after shared picker integration |
 
 ## Operator reports (not independently reproduced)

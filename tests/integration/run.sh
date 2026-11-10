@@ -44,15 +44,26 @@ case "${1:-test}" in
             cargo test --locked -p matrix-client-core --all-features oauth_keychain_lifecycle_across_processes -- --ignored --nocapture
         fi
         ;;
-    up|test|keychain|services|security|media)
+    up|test|keychain|services|security|media|threads|spaces|viewer)
         mkdir -p test-data/local/integration
         "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py generate
+        if [[ "${1:-test}" == spaces ]]; then
+            "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py spaces-config
+        fi
         "${compose[@]}" up -d --force-recreate --wait --wait-timeout 90
         "${compose[@]}" exec -T synapse python /bootstrap.py register
         if [[ "${1:-test}" != up ]]; then
             # Keep encrypted fixture data for inspection; stop only our test service.
             trap '"${compose[@]}" stop' EXIT
-            if [[ "${1:-test}" == media ]]; then
+            if [[ "${1:-test}" == viewer ]]; then
+                "${compose[@]}" exec -T synapse python /bootstrap.py register-security
+                cargo test --locked -p matrix-client-core --all-features image_viewer_plain_encrypted_animation_limits_and_corrupt -- --ignored --nocapture
+            elif [[ "${1:-test}" == spaces ]]; then
+                "${compose[@]}" exec -T synapse python /bootstrap.py register-pair
+                cargo test --locked -p matrix-client-core --all-features spaces_hierarchy_invites_creation_restricted_join_and_selective_leave -- --ignored --nocapture
+            elif [[ "${1:-test}" == threads ]]; then
+                cargo test --locked -p matrix-client-core --all-features threads_send_paginate_receipts_and_closed_unread -- --ignored --nocapture
+            elif [[ "${1:-test}" == media ]]; then
                 "${compose[@]}" exec -T synapse python /bootstrap.py register-security
                 cargo test --locked -p matrix-client-core --all-features attachment_plain_encrypted_cancel_restart_round_trip -- --ignored --nocapture
             elif [[ "${1:-test}" == security ]]; then
@@ -71,5 +82,5 @@ case "${1:-test}" in
         ;;
     down) "${compose[@]}" down ;;
     status) "${compose[@]}" ps ;;
-    *) printf 'Usage: bash tests/integration/run.sh [up|test|keychain|services|oauth|sso|recovery|security|media|down|status]\n' >&2; exit 1 ;;
+    *) printf 'Usage: bash tests/integration/run.sh [up|test|keychain|services|oauth|sso|recovery|security|media|threads|spaces|viewer|down|status]\n' >&2; exit 1 ;;
 esac
