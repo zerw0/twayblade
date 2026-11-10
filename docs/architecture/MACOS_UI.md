@@ -112,3 +112,44 @@ Inspect both Home and selected-space populated previews before reporting QA.
 QA: both redesigned offline Home and selected-space captures were inspected.
 The loaded macOS font uses semibold emphasis to avoid a renderer fallback seen
 with the bold weight. This pass does not claim AppKit controls or native vibrancy.
+
+## Additional reference: Apple Messages
+
+The user's 2026-11-10 Messages screenshot is a second design reference alongside
+Cinny. Use its circular avatars, conversation previews and timestamps, floating
+toolbar controls, rounded composer and incoming/outgoing bubbles as direction.
+Do not copy private conversation content, contact identities or media into
+fixtures or repository assets.
+
+Consider Messages-style bubbles for DMs. Group rooms still need sender identity,
+threads, reactions and dense history. Preserve space navigation and Home's
+exclusion of space-owned rooms. Keep conversation content readable, with glass
+used for navigation and controls where appropriate.
+
+### Proposed frontend direction — not implemented
+
+For a macOS-first product requiring actual Liquid Glass, prefer a SwiftUI macOS
+frontend with focused AppKit integration over continued imitation in Iced.
+Retain the Rust core for Matrix authentication, stores, E2EE, sync, timelines,
+spaces and account lifecycle. Retain Iced for Linux/Windows.
+
+Evaluate UniFFI for a narrow Swift boundary exposing commands, observable state
+and cancellation, not raw SDK clients or account tokens. Prove same-device
+session restoration, task ownership and one real timeline through the bridge
+before committing to a full frontend migration.
+
+This means Rust application logic with a Swift Mac UI, rather than an exclusively
+Rust codebase. It introduces two UI implementations and separate platform QA.
+Rust-to-AppKit bindings are another option if an all-Rust frontend is required,
+with more custom platform work. This is a proposal, not a completed migration.
+
+Check glass API availability against deployment targets and provide standard
+material fallbacks on older supported macOS versions. Native chat chrome does
+not establish Element Call media support, which remains a separate spike.
+
+Primary references:
+
+- https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass
+- https://developer.apple.com/documentation/swiftui/applying-liquid-glass-to-custom-views
+- https://developer.apple.com/documentation/appkit/nsglasseffectview
+- https://mozilla.github.io/uniffi-rs/latest/
