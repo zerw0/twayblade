@@ -1,0 +1,21 @@
+[package]
+name = "matrix-client-gpui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+capture = ["gpui-kit/test-support"]
+
+[dependencies]
+gpui-kit = "=0.9.1"
+matrix-client-core = { path = "../core" }
+tokio.workspace = true
+futures-util.workspace = true
+chrono.workspace = true
+zeroize.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,112 @@
+# Local Matrix integration checks
+
+This opt-in fixture uses pinned Synapse v1.164.2 (image digest recorded in
+`compose.yaml`), SQLite and two generated test accounts. It binds only
+`127.0.0.1:18448`, with a local CA and a signed server certificate. No system
+trust roots are changed. Registration and federation are disabled; the bootstrap
+registers the test accounts through Synapse's shared-secret registration API.
+
+Requirements: a running **local** Docker engine with Compose, and the project's
+Rust toolchain. No accounts/passwords from the normal app are used. Generated
+configuration, TLS keys, account passwords and SDK stores stay under the ignored
+`test-data/local/integration/` directory. Never share that directory or enable
+HTTP/SDK debug logs for these tests.
+
+```sh
+bash tests/integration/run.sh
+```
+
+The default command starts the fixture, runs the opt-in Rust integration test,
+and stops its container afterward. `up` leaves the service running; `down` removes
+only this Compose project's containers/network and retains local data. The test
+is ignored during ordinary `cargo test` runs and hard-rejects a non-loopback URL.
+Certificates are renewed automatically when nearing expiry.
+
+On macOS with Colima, use a dedicated VM without changing the default context:
+
+```sh
+colima start --profile matrixclient-test --cpu 2 --memory 3 --disk 10 --activate=false
+MATRIX_TEST_DOCKER_CONTEXT=colima-matrixclient-test bash tests/integration/run.sh
+colima stop --profile matrixclient-test
+```
+
+Docker Desktop or a native Linux Docker daemon can use its current local context.
+Remote Docker endpoints are rejected. Windows users can use a Bash environment
+with access to the same local Docker engine and Cargo; this harness has not been
+accepted on Windows.
+
+## What the test exercises
+
+- HTTPS certificate validation using only the fixture's CA.
+- Two generated password sessions and the application's unified SDK sync service.
+- A real SDK-backed profile fetch.
+- An encrypted room, the application's timeline/send queue and recipient decryption.
+- Encrypted wire event inspection with a check that the unique test text is absent.
+- Reopening the recipient's encrypted SQLite store with its original SDK session
+  and device identity, then decrypting the earlier message again.
+- Revoking the generated test sessions on successful completion.
+
+This is **SDK/application-service integration**, not Element interoperability or
+UI interaction acceptance. Restoration here retains the SDK session in test
+memory: it does not test OS Keychain persistence, a separate process restart,
+crash recovery or the normal `auth::restore()` path. It does not exercise browser
+SSO, verification/cross-signing, backup recovery, attachments, or calls. Failed
+runs can leave generated sessions on the isolated server; they never touch the
+app's normal credential entry.
+
+## Optional Nix invocation
+
+```sh
+MATRIX_TEST_DOCKER_CONTEXT=colima-matrixclient-test \
+  nix develop --command bash tests/integration/run.sh
+```
+
+Docker is provided by your host; the project shell supplies Rust tooling.
+
+References: [Synapse Docker instructions](https://github.com/element-hq/synapse/blob/develop/docker/README.md),
+[Synapse shared-secret registration](https://element-hq.github.io/synapse/latest/admin_api/register_api.html).
+
+## OS Keychain lifecycle acceptance (macOS)
+
+With an unlocked login Keychain, run in the project shell:
+
+```sh
+MATRIX_TEST_DOCKER_CONTEXT=colima-matrixclient-test bash tests/integration/run.sh keychain
+```
+
+This invokes the normal authentication implementation with a unique test
+credential slot and local data root. The fixture CA is scoped to the test client;
+no host trust settings or application credentials are changed. Separate child
+processes log in, sync a room, send, restore the original device and cached
+history from Keychain, then invoke normal logout. Assertions check that failed
+sign-in and successful logout delete the scoped Keychain entry and that logout
+removes the SDK store. Only device/room IDs and paths are written as evidence;
+credentials stay in OS secret storage. This is automated application-service
+acceptance, combined with separately recorded operator GPUI checks; it is not
+physical UI automation or Element interoperability. The test is ignored in the
+ordinary suite. Release builds now use a credential service separate from debug
+builds; release signing and migration acceptance remain unverified.
+
+## Functional workspace service checks
+
+```sh
+MATRIX_TEST_DOCKER_CONTEXT=colima-matrixclient-test bash tests/integration/run.sh services
+```
+
+Starts the isolated fixture, runs the following checks sequentially, then stops
+only its container. Normal workspace tests skip these opt-in checks.
+
+- `encrypted_delivery_profile_and_same_device_store_restore`: SDK-to-SDK E2EE.
+- `timeline_metadata_and_send_queue_actions`: replies, reaction toggle, message
+  kinds, thread count, permission-induced failed echo, SDK retry/cancel.
+- `members_typing_and_read_receipts`: names/roles, typing start/stop, fully-read
+  separator and receipt propagation to another SDK client.
+- `pagination_preserves_message_identity`: 90 pre-sync historical messages,
+  pagination to history start, stable identities and no duplicates.
+- `room_list_service_tracks_recency_and_details`: SDK list order after activity,
+  name/topic refresh, membership removal and unique room identities.
+
+Run `keychain` separately for the macOS cross-process lifecycle. All service
+checks hard-reject a non-loopback fixture URL and revoke their generated sessions
+on success. Metadata/action checks use unencrypted rooms; media transfer and
+Element interoperability are outside these tests.
