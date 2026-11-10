@@ -15,6 +15,8 @@ use matrix_client_core::conversation::{ConversationError, TimelineStatus};
 pub(super) use matrix_client_core::room_state::{Member, MemberRole, MembersState};
 use tokio::{runtime::Runtime, sync::watch, task::JoinHandle};
 use zeroize::Zeroizing;
+mod media;
+pub(super) use media::MediaState;
 mod notifications;
 pub(super) use notifications::NotificationConfig;
 
@@ -43,6 +45,7 @@ pub(super) struct Snapshot {
     pub(super) spaces_loaded: bool,
     pub(super) selected_room: String,
     pub(super) messages: Vec<Message>,
+    pub(super) media: MediaState,
     pub(super) thread: Option<ThreadSnapshot>,
     pub(super) timeline_ready: bool,
     pub(super) members: Vec<Member>,
@@ -98,6 +101,8 @@ struct State {
     selection: u64,
     tasks: Vec<JoinHandle<()>>,
     timeline_task: Option<JoinHandle<()>>,
+    media_task: Option<JoinHandle<()>>,
+    media_request: u64,
     thread_task: Option<JoinHandle<()>>,
     thread_conversation: Option<Conversation>,
     thread_request: u64,
@@ -110,6 +115,7 @@ struct State {
 
 impl State {
     fn stop(&mut self) {
+        self.cancel_media();
         self.security = None;
         self.directory = None;
         self.leave_plan = None;
@@ -611,6 +617,7 @@ impl Backend {
         if let Some(task) = state.thread_task.take() {
             task.abort();
         }
+        state.cancel_media();
         state.thread_conversation = None;
         state.conversation = None;
         if let Some(typing) = &state.typing_intent {
@@ -621,6 +628,7 @@ impl Backend {
         let epoch = state.epoch;
         account.select_room(Some(&room_id));
         publish(&self.updates, |snapshot| {
+            snapshot.media = MediaState::default();
             snapshot.selected_room = room_id.clone();
             snapshot.messages.clear();
             snapshot.thread = None;
@@ -1047,6 +1055,7 @@ impl Backend {
         if let Some(task) = state.thread_task.take() {
             task.abort();
         }
+        state.cancel_media();
         state.thread_conversation = None;
         state.conversation = None;
         if let Some(typing) = &state.typing_intent {
@@ -1056,6 +1065,7 @@ impl Backend {
             account.select_room(None);
         }
         publish(&self.updates, |snapshot| {
+            snapshot.media = MediaState::default();
             snapshot.selected_room.clear();
             snapshot.messages.clear();
             snapshot.thread = None;
@@ -1132,6 +1142,28 @@ impl Backend {
         matrix_client_core::conversation::ImageError,
     > {
         use matrix_client_core::conversation::ImageError;
+        let gallery = {
+            let state = self.state.lock().map_err(|_| ImageError::Unavailable)?;
+            let view = self.updates.borrow();
+            if state.account.as_ref().map(Account::instance_id) != Some(account)
+                || view.selected_room != room
+            {
+                return Err(ImageError::Unavailable);
+            }
+            view.media
+                .items
+                .iter()
+                .find(|i| i.event_id == message)
+                .cloned()
+                .zip(state.account.clone())
+        };
+        if let Some((item, account)) = gallery {
+            let mut image = self
+                .runtime
+                .block_on(account.gallery_image(&item, cancel))?;
+            let render = render_viewer_image(&mut image);
+            return Ok((Arc::new(image), render));
+        }
         let conversation = {
             let state = self.state.lock().map_err(|_| ImageError::Unavailable)?;
             let view = self.updates.borrow();

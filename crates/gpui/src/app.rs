@@ -1571,3 +1571,135 @@ impl MatrixApp {
         );
     }
 }
+
+impl MatrixApp {
+    #[allow(dead_code, reason = "Gallery UI entry point")]
+    pub fn load_media(
+        &mut self,
+        kind: matrix_client_core::media::MediaKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.job(window, cx, move |b| b.load_media(kind), |_, _, _, _| {});
+    }
+    #[allow(dead_code, reason = "Gallery UI entry point")]
+    pub fn load_more_media(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.job(window, cx, |b| b.load_more_media(), |_, _, _, _| {});
+    }
+    fn gallery_entries(&self) -> Vec<crate::viewer::ImageEntry> {
+        self.snapshot
+            .media
+            .items
+            .iter()
+            .map(|item| crate::viewer::ImageEntry {
+                message: crate::backend::Message {
+                    id: item.event_id.clone(),
+                    event_id: Some(item.event_id.clone()),
+                    sender: item.sender.clone(),
+                    display_name: item.sender_name.clone(),
+                    timestamp_ms: item.timestamp_ms,
+                    kind: crate::backend::MessageKind::Image,
+                    attachment: Some(crate::backend::Attachment {
+                        filename: item.filename.clone(),
+                        size: item.size,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                in_thread: false,
+            })
+            .collect()
+    }
+    #[allow(dead_code, reason = "Gallery UI entry point")]
+    pub fn open_media_image(&mut self, event: &str, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::viewer::{ImageLoad, Viewer};
+        if self.snapshot.media.room != self.snapshot.selected_room
+            || self.snapshot.media.kind != matrix_client_core::media::MediaKind::Images
+        {
+            return;
+        }
+        let entries = self.gallery_entries();
+        let Some(index) = entries
+            .iter()
+            .position(|e| e.message.event_id.as_deref() == Some(event))
+        else {
+            return;
+        };
+        if let Some(old) = self.viewer.take() {
+            old.cancel.send_replace(true);
+        }
+        let focus = cx.focus_handle();
+        focus.focus(window, cx);
+        self.viewer_request = self.viewer_request.wrapping_add(1);
+        self.viewer = Some(Viewer {
+            room: self.snapshot.selected_room.clone(),
+            entries,
+            index,
+            request: self.viewer_request,
+            load: ImageLoad::Loading,
+            zoom: 1.,
+            pan: point(gpui_kit::px(0.), gpui_kit::px(0.)),
+            drag: None,
+            focus,
+            cancel: tokio::sync::watch::channel(false).0,
+            status: String::new(),
+            previous_pending: false,
+        });
+        self.load_viewer(window, cx);
+    }
+    pub(super) fn image_entries(&self) -> Vec<crate::viewer::ImageEntry> {
+        if self.snapshot.media.room == self.snapshot.selected_room
+            && self.snapshot.media.kind == matrix_client_core::media::MediaKind::Images
+            && self.viewer.as_ref().is_some_and(|v| {
+                self.snapshot.media.items.iter().any(|i| {
+                    Some(&i.event_id)
+                        == v.entries
+                            .get(v.index)
+                            .and_then(|e| e.message.event_id.as_ref())
+                })
+            })
+        {
+            return self.gallery_entries();
+        }
+        let mut entries: Vec<_> = self
+            .snapshot
+            .messages
+            .iter()
+            .filter(|m| m.kind == crate::backend::MessageKind::Image && m.event_id.is_some())
+            .cloned()
+            .map(|message| crate::viewer::ImageEntry {
+                message,
+                in_thread: false,
+            })
+            .collect();
+        if let Some(thread) = &self.thread {
+            let mut after = 0;
+            for message in std::iter::once(&thread.root)
+                .chain(&thread.messages)
+                .filter(|m| m.kind == crate::backend::MessageKind::Image && m.event_id.is_some())
+            {
+                if let Some(ix) = entries
+                    .iter()
+                    .position(|e| e.message.event_id == message.event_id)
+                {
+                    after = ix + 1;
+                    continue;
+                }
+                let ix = (after..entries.len())
+                    .find(|&ix| entries[ix].message.timestamp_ms > message.timestamp_ms)
+                    .unwrap_or(entries.len());
+                entries.insert(
+                    ix,
+                    crate::viewer::ImageEntry {
+                        message: message.clone(),
+                        in_thread: true,
+                    },
+                );
+                after = ix + 1;
+            }
+        }
+        let mut seen = std::collections::HashSet::new();
+        entries.retain(|e| seen.insert(e.message.event_id.clone()));
+        entries
+    }
+}

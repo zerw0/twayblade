@@ -414,6 +414,13 @@ Notifications review and Claude Design redesign (2026-11-11):
 - Impeccable quieter pass: sentence-case section labels, no kicker labels, semibold (not bold) headings, lighter selection tint, line icons instead of emoji glyphs in chrome.
 - Locked fmt, strict all-feature Clippy and the workspace tests pass (68 GPUI tests, including new member-action and tone-popover tests). Offline preview captures reviewed. Not verified against a live server: favourites round-trip, member moderation, user verification with Element, DM creation from a profile.
 
+M4b core — Task 1, room media gallery (2026-11-11):
+- `Account::room_media` uses SDK `/messages` back-pagination and in-memory SDK decryption, with a message/URL filter for unencrypted rooms and unfiltered encrypted envelopes; failed filtered requests retry without filters. Page limits are 1–100, with at most four requests per page; empty sparse pages retain a continuation. Cursors bind room and kind. Opaque sources are not serializable or Debug; media fetches disable the SDK disk cache.
+- UI contract: `Snapshot.media.{room,kind,items,loading,exhausted,error}`; `MatrixApp::load_media(kind)`, `load_more_media()` and `open_media_image(event_id)` (Window/Context arguments as usual). Items and viewer navigation retain newest-first pagination order. The backend retains at most 2,000 items, deduplicates IDs, cancels selection/account work and checks account instance, selection and request before publishing. No new views or controls; UI integration entry points are explicitly marked as pending consumers.
+- Compilation: strict locked workspace/all-target/all-feature Clippy passed. Unit/offline checks: locked all-feature workspace tests passed, including page bounds, encrypted-source projection and cancelled/stale gallery requests; rustfmt check passed after formatting.
+- Live integration: isolated Synapse 1.164.2 viewer/gallery check passed for plain/encrypted images, two-item pages through exhaustion, stable IDs/order, SDK in-memory decryption, absent decrypted media cache, animation and corrupt/oversize failures. No Element interoperability or physical platform acceptance claimed.
+- Remaining: gallery views, physical viewer/gallery navigation, Element attachments, Linux/Windows builds/runtime. The 2,000-item session cap currently reports exhausted; UI may restart the gallery to reset it.
+
 Not yet verified:
 - Physical GUI checks of logout, pagination, IME and VoiceOver.
 - CI on any host; Linux and Windows builds and runs.
