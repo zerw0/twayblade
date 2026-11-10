@@ -126,11 +126,17 @@ cargo run --locked -p matrix-client-gpui -- --preview-profile
 cargo run --locked -p matrix-client-gpui -- --preview-details
 cargo run --locked -p matrix-client-gpui -- --preview-signin
 cargo run --locked -p matrix-client-gpui -- --preview-thread
+cargo run --locked -p matrix-client-gpui -- --preview-settings notifications
+cargo run --locked -p matrix-client-gpui -- --preview-notification
 cargo run --locked -p matrix-client-gpui -- --preview-directory
 cargo run --locked -p matrix-client-gpui -- --preview-invites
 cargo run --locked -p matrix-client-gpui -- --preview-viewer
 cargo run --locked -p matrix-client-gpui -- --preview-large
 ```
+
+`--preview-notification --preview-no-message-preview` shows the private “New message”
+sample. These modes send no native notification and request no permission. Native
+macOS delivery requires the release `.app`; use `bash macos/build.sh --release --run`.
 
 `--preview-large` supplies 10,000 sample messages to Kit's virtual message
 scroller. It is a smoke fixture, not a measured performance guarantee.

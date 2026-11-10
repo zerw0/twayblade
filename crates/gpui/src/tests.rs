@@ -1676,3 +1676,146 @@ fn returning_to_the_system_scheme_follows_the_os_again(cx: &mut TestAppContext) 
         assert_eq!(cx.theme().is_dark(), os_dark);
     });
 }
+
+#[gpui_kit::test]
+fn notification_rules_controls_keywords_room_modes_and_context_menu(cx: &mut TestAppContext) {
+    use gpui_kit::test::{TestEventExt, TestQueryExt};
+    use matrix_client_core::notifications::{DefaultLevel, RoomClass, RoomMode};
+    let (main_window, app) = preview_window(cx);
+    cx.update_window(main_window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_settings(crate::settings::Section::Notifications, cx)
+        });
+        window.render_frame(cx);
+    })
+    .unwrap();
+    let settings = cx.update(|cx| app.read(cx).settings.as_ref().unwrap().0);
+    cx.update_window(settings, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("notify-encrypted-dm-mentions", cx);
+        assert!(
+            !window
+                .find_all("notify-default-off")
+                .iter()
+                .any(|node| node.visible())
+        );
+        window
+            .within("notification-keyword-entry")
+            .click("input-state", cx);
+        window.input("native", cx);
+        window.click("add-notification-keyword", cx);
+        window.render_frame(cx);
+        window.click("remove-keyword-2", cx);
+    })
+    .unwrap();
+    cx.update(|cx| {
+        let app = app.read(cx);
+        assert_eq!(
+            app.snapshot.notifications.defaults[RoomClass {
+                encrypted: true,
+                direct: true
+            }
+            .index()],
+            DefaultLevel::Mentions
+        );
+        assert!(
+            !app.snapshot
+                .notifications
+                .keywords
+                .iter()
+                .any(|word| word == "native")
+        );
+    });
+    cx.update_window(main_window, |_, window, cx| {
+        window.click("details", cx);
+        window.render_frame(cx);
+        window.click("room-notifications-mute", cx);
+        window.render_frame(cx);
+        app.update(cx, |app, _| {
+            assert_eq!(
+                app.snapshot.notifications.room_mode("general"),
+                RoomMode::Mute
+            );
+            let room = app
+                .snapshot
+                .rooms
+                .iter()
+                .find(|room| room.id == "general")
+                .unwrap();
+            assert!(room.muted && room.unread == 0);
+        });
+        window.right_click("room-general", cx);
+        window.render_frame(cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(main_window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find_by_label("Mentions and keywords").visible());
+        let point = window.find_by_label("All messages").bounds().center();
+        window.pointer_move(point, None, cx);
+        window.pointer_down(point, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(point, gpui_kit::MouseButton::Left, cx);
+    })
+    .unwrap();
+    cx.update(|cx| {
+        assert_eq!(
+            app.read(cx).snapshot.notifications.room_mode("general"),
+            RoomMode::All
+        )
+    });
+}
+
+#[gpui_kit::test]
+fn notification_preview_click_opens_thread_and_device_controls_stay_local(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.notification_sample = true;
+            cx.notify();
+        });
+        window.render_frame(cx);
+        window.click("sample-notification-open", cx);
+        app.update(cx, |app, cx| {
+            assert!(!app.notification_sample);
+            assert_eq!(
+                app.thread.as_ref().unwrap().root.event_id.as_deref(),
+                Some("$sample-0:preview.invalid")
+            );
+            app.activate_notification(
+                matrix_client_platform::notifications::Activation {
+                    account: u128::MAX,
+                    room: "research".into(),
+                    thread: None,
+                },
+                window,
+                cx,
+            );
+            assert_eq!(app.navigation.selected_room.as_deref(), Some("general"));
+            app.open_settings(crate::settings::Section::Notifications, cx);
+        });
+    })
+    .unwrap();
+    let settings = cx.update(|cx| app.read(cx).settings.as_ref().unwrap().0);
+    cx.update_window(settings, |_, window, cx| {
+        window.render_frame(cx);
+        window.scroll(
+            "settings-body",
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-600.))),
+            cx,
+        );
+        window.click("device-notifications", cx);
+        window.click("notification-sound", cx);
+        window.click("notification-preview", cx);
+        window.click("notification-badge", cx);
+    })
+    .unwrap();
+    cx.update(|cx| {
+        let app = app.read(cx);
+        let preferences = &app.preferences.notifications;
+        assert!(
+            preferences.enabled && !preferences.sound && !preferences.preview && !preferences.badge
+        );
+        assert!(app.backend.is_none());
+    });
+}

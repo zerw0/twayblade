@@ -15,6 +15,8 @@ use matrix_client_core::conversation::{ConversationError, TimelineStatus};
 pub(super) use matrix_client_core::room_state::{Member, MemberRole, MembersState};
 use tokio::{runtime::Runtime, sync::watch, task::JoinHandle};
 use zeroize::Zeroizing;
+mod notifications;
+pub(super) use notifications::NotificationConfig;
 
 use matrix_client_core::{
     DiscoveryError, auth::AuthError, profile::ProfileError, rooms::SyncStatus,
@@ -29,8 +31,13 @@ pub(super) struct Snapshot {
     pub(super) account_instance: u128,
     pub(super) session_state: SessionState,
     pub(super) security: matrix_client_core::security::SecuritySnapshot,
+    pub(super) notifications: matrix_client_core::notifications::RulesSnapshot,
+    pub(super) notification_permission: matrix_client_platform::notifications::Permission,
+    pub(super) notification_failed: bool,
+    pub(super) notification_click: Option<(u64, matrix_client_platform::notifications::Activation)>,
     pub(super) user_id: String,
     pub(super) rooms: Vec<Room>,
+    pub(super) unread_total: u64,
     pub(super) spaces: Vec<Space>,
     pub(super) invites: Vec<matrix_client_core::space_actions::Invite>,
     pub(super) spaces_loaded: bool,
@@ -147,6 +154,7 @@ pub(super) struct Backend {
     runtime: Runtime,
     state: Arc<Mutex<State>>,
     updates: watch::Sender<Snapshot>,
+    notification_config: watch::Sender<NotificationConfig>,
     // Serialize lifecycle changes. GPUI invokes operations only on background workers.
     lifecycle: Mutex<()>,
     oauth: Mutex<Option<BrowserLogin>>,
@@ -349,6 +357,7 @@ impl Backend {
             _instance: instance,
             runtime,
             updates,
+            notification_config: watch::channel(NotificationConfig::default()).0,
             state: Arc::new(Mutex::new(State::default())),
             lifecycle: Mutex::new(()),
             oauth: Mutex::new(None),
@@ -1280,6 +1289,28 @@ impl Backend {
 }
 
 impl Backend {
+    pub(super) fn notification_rule(
+        &self,
+        change: matrix_client_core::notifications::RuleChange,
+    ) -> Result<(), ServiceError> {
+        let account = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?
+            .account
+            .clone()
+            .ok_or_else(|| failure("Sign in to change notifications."))?;
+        self.runtime.block_on(async {
+            let rules = account
+                .notification_rules()
+                .await
+                .map_err(|_| failure("Notification settings could not be loaded. Try again."))?;
+            rules
+                .change(change)
+                .await
+                .map_err(|_| failure("Notification settings could not be saved. Try again."))
+        })
+    }
     fn connect(&self, account: Account) -> Result<(), ServiceError> {
         let _runtime = self.runtime.enter();
         let security = matrix_client_core::security::Security::new(&account);
@@ -1302,6 +1333,13 @@ impl Backend {
                 ..Default::default()
             };
         });
+        state.tasks.push(self.runtime.spawn(notifications::run(
+            account.clone(),
+            epoch,
+            self.state.clone(),
+            self.updates.clone(),
+            self.notification_config.subscribe(),
+        )));
         let shared = self.state.clone();
         let updates = self.updates.clone();
         state.tasks.push(self.runtime.spawn(async move {
@@ -1375,7 +1413,12 @@ impl Backend {
                 }
                 publish(&updates, |view| {
                     view.sync_status = sync_status_text(snapshot.status).into();
+                    view.unread_total = snapshot
+                        .rooms
+                        .iter()
+                        .fold(0u64, |sum, room| sum.saturating_add(room.unread));
                     view.rooms = snapshot.rooms;
+                    view.notifications = snapshot.notifications;
                     view.invites = snapshot.invites;
                 });
             }

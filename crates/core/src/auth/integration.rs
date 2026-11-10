@@ -1615,7 +1615,7 @@ async fn threads_send_paginate_receipts_and_closed_unread() {
     let mut reopened = Box::pin(bob.thread_updates(id.to_string(), root_event.to_string(), 4));
     let latest_state = wait_snapshot(
         &mut reopened,
-        |s| s.messages.iter().any(|m| m.body == "pagination sample 64"),
+        |s| s.unread > 0 && s.messages.iter().any(|m| m.body == "pagination sample 64"),
         "closed thread receive",
     )
     .await;
@@ -2094,4 +2094,422 @@ async fn spaces_hierarchy_invites_creation_restricted_join_and_selective_leave()
     println!(
         "PASS: SDK nested/private hierarchy, restricted join, invites, encrypted creation, multi-parent navigation and selective leave"
     );
+}
+
+#[tokio::test]
+#[ignore = "requires isolated Synapse fixture"]
+async fn notification_rules_round_trip_and_second_client_changes() {
+    use crate::notifications::{DefaultLevel, RoomClass, RoomMode, RuleChange};
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-data/local/integration");
+    let fixture: Fixture = checked(
+        serde_json::from_slice(&checked(
+            tokio::fs::read(root.join("fixture.json")).await,
+            "fixture",
+        )),
+        "parse fixture",
+    );
+    assert!(fixture.homeserver == "https://127.0.0.1:18448");
+    let cert = checked(
+        Certificate::from_pem(&checked(
+            tokio::fs::read(root.join("ca.crt")).await,
+            "test CA",
+        )),
+        "parse CA",
+    );
+    let run = root.join(format!("notifications-{}", Uuid::new_v4()));
+    let mut accounts = Vec::new();
+    for store in ["first", "second"] {
+        let client = test_client(&run, store, &Uuid::new_v4().to_string(), &cert).await;
+        checked(
+            client
+                .matrix_auth()
+                .login_username("alice", &fixture.alice)
+                .await,
+            "isolated login",
+        );
+        accounts.push(Account::new(
+            client,
+            run.join(store),
+            secrets::SessionStore::new("matrix-client.integration.unused"),
+            Arc::new(Mutex::new(())),
+        ));
+    }
+    let first = &accounts[0];
+    let second = &accounts[1];
+    let (room_updates_tx, mut room_updates_rx) = tokio::sync::watch::channel(None);
+    let stream_account = first.clone();
+    let first_sync = tokio::spawn(async move {
+        let stream = stream_account.room_updates();
+        tokio::pin!(stream);
+        while let Some(snapshot) = stream.next().await {
+            room_updates_tx.send_replace(Some(snapshot));
+        }
+    });
+    let second_sync = sync(second);
+    let room = checked(
+        first
+            .client
+            .create_room(create_room::v3::Request::new())
+            .await,
+        "room",
+    );
+    wait_for_room(second, room.room_id()).await;
+    let rules = checked(first.notification_rules().await, "first settings");
+    let original = rules.snapshot().await;
+    let second_rules = checked(second.notification_rules().await, "second settings");
+    let mut second_changes = second_rules.subscribe();
+    for class in RoomClass::ALL {
+        for level in [DefaultLevel::All, DefaultLevel::Mentions] {
+            checked(
+                rules.change(RuleChange::Default(class, level)).await,
+                "set default",
+            );
+            assert_eq!(rules.snapshot().await.defaults[class.index()], level);
+            checked(
+                tokio::time::timeout(Duration::from_secs(30), async {
+                    loop {
+                        if second_rules.snapshot().await.defaults[class.index()] == level {
+                            break;
+                        }
+                        checked(second_changes.recv().await, "round trip settings event");
+                    }
+                })
+                .await,
+                "default round trip through second client",
+            );
+        }
+    }
+    let word = format!("fixture-{}", Uuid::new_v4());
+    checked(
+        rules.change(RuleChange::AddKeyword(word.clone())).await,
+        "add keyword",
+    );
+    assert!(rules.snapshot().await.keywords.contains(&word));
+    checked(
+        rules.change(RuleChange::RemoveKeyword(word.clone())).await,
+        "remove keyword",
+    );
+    assert!(!rules.snapshot().await.keywords.contains(&word));
+    for mode in [
+        RoomMode::All,
+        RoomMode::Mentions,
+        RoomMode::Mute,
+        RoomMode::Default,
+    ] {
+        checked(
+            rules
+                .change(RuleChange::Room(room.room_id().to_string(), mode))
+                .await,
+            "set room override",
+        );
+        assert_eq!(
+            rules.snapshot().await.room_mode(room.room_id().as_str()),
+            mode
+        );
+    }
+    let mut changes = rules.subscribe();
+    checked(
+        second_rules
+            .change(RuleChange::AddKeyword(word.clone()))
+            .await,
+        "second client keyword",
+    );
+    checked(
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if rules.snapshot().await.keywords.contains(&word) {
+                    break;
+                }
+                checked(changes.recv().await, "settings change subscription");
+            }
+        })
+        .await,
+        "observe second client change",
+    );
+    let bob_client = test_client(&run, "bob", &Uuid::new_v4().to_string(), &cert).await;
+    checked(
+        bob_client
+            .matrix_auth()
+            .login_username("bob", &fixture.bob)
+            .await,
+        "Bob login",
+    );
+    let bob = Account::new(
+        bob_client,
+        run.join("bob"),
+        secrets::SessionStore::new("matrix-client.integration.unused"),
+        Arc::new(Mutex::new(())),
+    );
+    let bob_sync = sync(&bob);
+    checked(
+        room.invite_user_by_id(bob.client.user_id().expect("Bob"))
+            .await,
+        "invite unread sender",
+    );
+    checked(
+        bob.client.join_room_by_id(room.room_id()).await,
+        "join unread room",
+    );
+    wait_for_room(&bob, room.room_id()).await;
+    let _recipient_state = checked(
+        first.sync_rooms(vec![room.room_id().to_owned()]).await,
+        "unread recipient state",
+    );
+    let _sender_state = checked(
+        bob.sync_rooms(vec![room.room_id().to_owned()]).await,
+        "unread sender state",
+    );
+    checked(
+        rules
+            .change(RuleChange::Room(room.room_id().to_string(), RoomMode::All))
+            .await,
+        "enable unread room",
+    );
+    let bob_room = bob.client.get_room(room.room_id()).expect("Bob room");
+    checked(
+        bob_room
+            .send(
+                matrix_sdk::ruma::events::room::message::RoomMessageEventContent::text_plain(
+                    "isolated unread notification sample",
+                ),
+            )
+            .await,
+        "send unread event",
+    );
+    let unread = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if room_updates_rx
+                .borrow_and_update()
+                .as_ref()
+                .is_some_and(|snapshot| {
+                    snapshot
+                        .rooms
+                        .iter()
+                        .any(|r| r.id == room.room_id().as_str() && !r.muted && r.unread > 0)
+                })
+            {
+                break;
+            }
+            checked(room_updates_rx.changed().await, "unread projection update");
+        }
+    })
+    .await;
+    if unread.is_err() {
+        let projected = room_updates_rx.borrow().as_ref().and_then(|snapshot| {
+            snapshot
+                .rooms
+                .iter()
+                .find(|r| r.id == room.room_id().as_str())
+                .map(|r| (r.unread, r.muted))
+        });
+        eprintln!(
+            "Unread fixture counts: SDK notifications={}, SDK messages={}, SDK local notifications={}, projected={projected:?}",
+            room.unread_notification_counts().notification_count,
+            room.num_unread_messages(),
+            room.num_unread_notifications()
+        );
+    }
+    checked(unread, "real unread before mute");
+    checked(
+        rules
+            .change(RuleChange::Room(room.room_id().to_string(), RoomMode::Mute))
+            .await,
+        "mute room",
+    );
+    checked(
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if room_updates_rx
+                    .borrow_and_update()
+                    .as_ref()
+                    .is_some_and(|snapshot| {
+                        snapshot
+                            .rooms
+                            .iter()
+                            .any(|r| r.id == room.room_id().as_str() && r.muted && r.unread == 0)
+                    })
+                {
+                    break;
+                }
+                checked(room_updates_rx.changed().await, "room projection update");
+            }
+        })
+        .await,
+        "muted room projection",
+    );
+    checked(
+        rules
+            .change(RuleChange::Room(
+                room.room_id().to_string(),
+                RoomMode::Default,
+            ))
+            .await,
+        "reset room override",
+    );
+    checked(
+        rules.change(RuleChange::RemoveKeyword(word)).await,
+        "cleanup keyword",
+    );
+    for class in RoomClass::ALL {
+        checked(
+            rules
+                .change(RuleChange::Default(class, original.defaults[class.index()]))
+                .await,
+            "restore fixture default",
+        );
+    }
+    first_sync.abort();
+    second_sync.abort();
+    bob_sync.abort();
+    eprintln!(
+        "PASS: notification defaults, keywords, room overrides, muted badges and other-client observation"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires isolated Synapse fixture"]
+async fn encrypted_notification_delivery_and_private_preview() {
+    use crate::notifications::{NotificationContext, RoomMode, RuleChange};
+    use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-data/local/integration");
+    let fixture: Fixture = checked(
+        serde_json::from_slice(&checked(
+            tokio::fs::read(root.join("fixture.json")).await,
+            "fixture",
+        )),
+        "parse fixture",
+    );
+    assert!(fixture.homeserver == "https://127.0.0.1:18448");
+    let cert = checked(
+        Certificate::from_pem(&checked(
+            tokio::fs::read(root.join("ca.crt")).await,
+            "test CA",
+        )),
+        "parse CA",
+    );
+    let run = root.join(format!("notification-delivery-{}", Uuid::new_v4()));
+    let mut accounts = Vec::new();
+    for (name, password) in [("alice", &fixture.alice), ("bob", &fixture.bob)] {
+        let client = test_client(&run, name, &Uuid::new_v4().to_string(), &cert).await;
+        checked(
+            client.matrix_auth().login_username(name, password).await,
+            "isolated login",
+        );
+        accounts.push(Account::new(
+            client,
+            run.join(name),
+            secrets::SessionStore::new("matrix-client.integration.unused"),
+            Arc::new(Mutex::new(())),
+        ));
+    }
+    let alice = &accounts[0];
+    let bob = &accounts[1];
+    checked(
+        alice
+            .client
+            .account()
+            .set_display_name(Some("Sample sender"))
+            .await,
+        "sender profile",
+    );
+    let alice_sync = sync(alice);
+    let bob_sync = sync(bob);
+    let (context, receiver) = tokio::sync::watch::channel(NotificationContext {
+        enabled: true,
+        ..Default::default()
+    });
+    let (items, mut received) = tokio::sync::mpsc::channel(8);
+    let bob_notifications = bob.clone();
+    let notifications = tokio::spawn(async move {
+        let stream = bob_notifications.notification_updates(receiver);
+        tokio::pin!(stream);
+        while let Some(item) = stream.next().await {
+            if items.send(item).await.is_err() {
+                break;
+            }
+        }
+    });
+    let encryption = InitialStateEvent::new(
+        Default::default(),
+        RoomEncryptionEventContent::with_recommended_defaults(),
+    );
+    let mut request = create_room::v3::Request::new();
+    request.name = Some("Isolated notification room".into());
+    request.invite = vec![bob.client.user_id().expect("test user").to_owned()];
+    request.initial_state = vec![checked(Raw::new(&encryption), "encryption state").cast()];
+    let room = checked(alice.client.create_room(request).await, "encrypted room");
+    checked(
+        bob.client.join_room_by_id(room.room_id()).await,
+        "join encrypted room",
+    );
+    wait_for_room(alice, room.room_id()).await;
+    wait_for_room(bob, room.room_id()).await;
+    alice.select_room(Some(room.room_id().as_str()));
+    bob.select_room(Some(room.room_id().as_str()));
+    let rules = checked(bob.notification_rules().await, "notification rules");
+    checked(
+        rules
+            .change(RuleChange::Room(room.room_id().to_string(), RoomMode::All))
+            .await,
+        "enable room notifications",
+    );
+    let body = format!("isolated encrypted notification {}", Uuid::new_v4());
+    let event = checked(
+        room.send(RoomMessageEventContent::text_plain(&body)).await,
+        "encrypted send",
+    )
+    .response
+    .event_id;
+    let item = checked(
+        tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                let item = received.recv().await.expect("notification stream");
+                if item.event == event.as_str() {
+                    break item;
+                }
+            }
+        })
+        .await,
+        "decrypted typed notification",
+    );
+    assert!(
+        item.body == body && item.sender == alice.user_id() && item.room == room.room_id().as_str()
+    );
+    assert!(item.sender_name == "Sample sender");
+    let private = item.preview(false);
+    assert!(private.sender.is_none() && private.body.is_none() && private.avatar.is_none());
+    // The server stored ciphertext; the item above came through the SDK resolver.
+    let stored = checked(
+        alice
+            .client
+            .send(
+                matrix_sdk::ruma::api::client::room::get_room_event::v3::Request::new(
+                    room.room_id().to_owned(),
+                    event.clone(),
+                ),
+            )
+            .await,
+        "server encrypted event",
+    );
+    assert!(
+        checked(stored.event.get_field::<String>("type"), "event type").as_deref()
+            == Some("m.room.encrypted")
+    );
+    context.send_replace(NotificationContext {
+        enabled: false,
+        ..Default::default()
+    });
+    checked(
+        rules
+            .change(RuleChange::Room(
+                room.room_id().to_string(),
+                RoomMode::Default,
+            ))
+            .await,
+        "reset room override",
+    );
+    notifications.abort();
+    alice_sync.abort();
+    bob_sync.abort();
+    eprintln!("PASS: encrypted SDK notification resolution, typed sender/body and private preview");
 }
