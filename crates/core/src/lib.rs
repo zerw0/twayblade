@@ -6,6 +6,7 @@ pub mod avatars;
 pub mod conversation;
 pub mod media;
 pub mod notifications;
+pub mod presence;
 pub mod profile;
 pub mod room_state;
 pub mod rooms;

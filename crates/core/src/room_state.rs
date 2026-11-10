@@ -19,6 +19,7 @@ pub struct Member {
     pub display_name: String,
     pub role: MemberRole,
     pub avatar: Option<String>,
+    pub presence: Option<crate::presence::Presence>,
     /// What you may do to this member here, from the room's power levels.
     pub can_kick: bool,
     pub can_ban: bool,
@@ -78,6 +79,7 @@ pub(crate) async fn room_members(room: Room) -> Result<Vec<Member>, RoomStateErr
         .map_err(|_| RoomStateError::Members)?
         .into_iter()
         .map(|member| Member {
+            presence: None,
             user_id: member.user_id().to_string(),
             display_name: member
                 .display_name()

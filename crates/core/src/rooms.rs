@@ -20,6 +20,8 @@ pub struct RoomSummary {
     /// Only `true` once the SDK has confirmed `m.room.encryption`.
     pub encrypted: bool,
     pub direct: bool,
+    pub partner: Option<String>,
+    pub presence: Option<crate::presence::Presence>,
     /// `mxc://` avatar, if the room has one.
     pub avatar: Option<String>,
     /// Highlight (mention/keyword) count, shown as an accent badge.
@@ -74,6 +76,11 @@ fn summary(room: Room) -> RoomSummary {
         topic: room.topic().filter(|topic| !topic.trim().is_empty()),
         encrypted: room.encryption_state().is_encrypted(),
         direct: room.direct_targets_length() > 0,
+        partner: {
+            let targets = room.direct_targets();
+            (targets.len() == 1).then(|| targets.into_iter().next().unwrap().to_string())
+        },
+        presence: None,
         avatar: room.avatar_url().map(|url| url.to_string()),
         mentions: room.unread_notification_counts().highlight_count,
         public: room.is_public().unwrap_or(false),

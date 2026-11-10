@@ -15,6 +15,22 @@ case "$matrix_endpoint" in
 esac
 compose=(docker --context "$matrix_context" compose -f tests/integration/compose.yaml)
 case "${1:-test}" in
+    presence)
+        mkdir -p test-data/local/integration
+        "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py generate
+        trap '"${compose[@]}" stop synapse' EXIT
+        for mode in enabled disabled; do
+            setting=presence-on
+            if [[ "$mode" == disabled ]]; then setting=presence-off; fi
+            "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py "$setting"
+            "${compose[@]}" up -d --force-recreate --wait --wait-timeout 90 synapse
+            "${compose[@]}" exec -T synapse python /bootstrap.py register-pair
+            MATRIX_TEST_PRESENCE="$mode" cargo test --locked -p matrix-client-core --all-features presence_enabled_and_disabled_server_evidence -- --ignored --nocapture
+            "${compose[@]}" stop synapse
+        done
+        # Leave the shared local fixture's normal default restored while stopped.
+        "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py presence-on
+        ;;
     recovery)
         mkdir -p test-data/local/integration test-data/local/recovery
         "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py generate
@@ -89,5 +105,5 @@ case "${1:-test}" in
         ;;
     down) "${compose[@]}" down ;;
     status) "${compose[@]}" ps ;;
-    *) printf 'Usage: bash tests/integration/run.sh [up|test|keychain|services|oauth|sso|recovery|security|media|threads|spaces|viewer|search|notifications|notification-delivery|down|status]\n' >&2; exit 1 ;;
+    *) printf 'Usage: bash tests/integration/run.sh [up|test|keychain|services|presence|oauth|sso|recovery|security|media|threads|spaces|viewer|search|notifications|notification-delivery|down|status]\n' >&2; exit 1 ;;
 esac

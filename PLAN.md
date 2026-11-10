@@ -429,6 +429,14 @@ M4b core — Task 2, message search (2026-11-11):
 - Live integration: isolated Synapse 1.164.2 search test passed: 55 unencrypted results over server pages, cached encrypted results with limitation flag, global mixed-source search and SDK context opening an older event in both kinds of room. No query/body output is emitted by application search code or fixture errors.
 - Remaining: search views and physical scrolling/focus, Element interoperability and Linux/Windows execution. Cached-history coverage is intentionally limited; server ranking/tokenization may differ from local substring matching.
 
+M4b core — Task 3, presence data (2026-11-11):
+- Core `presence`, `presence_updates` and `set_presence` use SDK/ruma endpoints. Bare offline responses are ambiguous (including Synapse with presence disabled), so they produce unknown/absent data; only positive server evidence enables presence. This is conservative capability detection, not an advertised Matrix capability or a fabricated offline state. Failed observations clear stale data.
+- UI contract: `Snapshot.presence_enabled`, `own_presence: Option<Presence>` and `presence: HashMap<UserId,Presence>`; `Member.presence`, `RoomSummary.partner` (only an unambiguous single DM target) and `RoomSummary.presence`. `Presence` contains Online/Unavailable/Offline, optional absolute `last_active_ms`, and optional `status_msg`. `MatrixApp::set_presence(state,status)` and `observe_presence(visible_user_ids)` are the UI action contracts. Status messages are excluded from Debug output.
+- The UI must pass its visible DM/member set (at most 64; server enforces sharing permissions). There is no whole-account member scan. Native sliding sync has no presence extension; one cancellable observer polls own/visible presence every 30 seconds with four concurrent user requests and a 20-second iteration timeout. Room/account changes abort it and reject completions by instance/request ID; new selections initially observe only self until the UI supplies visible IDs.
+- Compilation: locked strict workspace/all-target/all-feature Clippy and rustfmt check passed. Unit/offline tests: workspace all-feature suite passed (106 tests; opt-in integration skipped), including ambiguous offline handling and status Debug privacy.
+- Live integration: isolated Synapse 1.164.2 runs with presence enabled and disabled both passed. Checks cover own online, visible shared-room partner away/status, offline setting, empty visible set and the 64-user bound. Normal isolated fixture configuration was restored while stopped.
+- Remaining: visible-set UI wiring, real-server behavior outside Synapse, physical status controls and Linux/Windows execution. An enabled server returning only bare offline remains unknown until positive evidence appears; no status is synthesized.
+
 Not yet verified:
 - Physical GUI checks of logout, pagination, IME and VoiceOver.
 - CI on any host; Linux and Windows builds and runs.

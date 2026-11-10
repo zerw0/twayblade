@@ -20,6 +20,7 @@ pub(super) use media::MediaState;
 mod search;
 pub(super) use search::SearchState;
 mod notifications;
+mod presence;
 pub(super) use notifications::NotificationConfig;
 
 use matrix_client_core::{
@@ -50,6 +51,9 @@ pub(super) struct Snapshot {
     pub(super) media: MediaState,
     pub(super) search: SearchState,
     pub(super) focused_event: Option<String>,
+    pub(super) presence_enabled: bool,
+    pub(super) own_presence: Option<matrix_client_core::presence::Presence>,
+    pub(super) presence: std::collections::HashMap<String, matrix_client_core::presence::Presence>,
     pub(super) thread: Option<ThreadSnapshot>,
     pub(super) timeline_ready: bool,
     pub(super) members: Vec<Member>,
@@ -109,6 +113,9 @@ struct State {
     media_request: u64,
     search_task: Option<JoinHandle<()>>,
     search_request: u64,
+    presence_task: Option<JoinHandle<()>>,
+    presence_request: u64,
+    presence_visible: Vec<String>,
     thread_task: Option<JoinHandle<()>>,
     thread_conversation: Option<Conversation>,
     thread_request: u64,
@@ -123,6 +130,7 @@ impl State {
     fn stop(&mut self) {
         self.cancel_media();
         self.cancel_search();
+        self.cancel_presence();
         self.security = None;
         self.directory = None;
         self.leave_plan = None;
@@ -635,6 +643,7 @@ impl Backend {
             task.abort();
         }
         state.cancel_media();
+        state.cancel_presence();
         state.thread_conversation = None;
         state.conversation = None;
         if let Some(typing) = &state.typing_intent {
@@ -696,6 +705,7 @@ impl Backend {
                             view.focused_event = target.as_ref().filter(|id| snapshot.messages.iter().any(|m| m.event_id.as_ref() == Some(id))).cloned();
                             view.messages = snapshot.messages;
                             view.members = snapshot.members;
+                            for member in &mut view.members { member.presence = view.presence.get(&member.user_id).cloned(); }
                             view.members_state = snapshot.members_state;
                             view.typing = snapshot.typing;
                         });
@@ -712,7 +722,8 @@ impl Backend {
                 }
             }
         }));
-        Ok(())
+        drop(state);
+        self.observe_presence(Vec::new())
     }
 
     pub(super) fn select_thread(
@@ -1078,6 +1089,7 @@ impl Backend {
             task.abort();
         }
         state.cancel_media();
+        state.cancel_presence();
         state.thread_conversation = None;
         state.conversation = None;
         if let Some(typing) = &state.typing_intent {
@@ -1098,7 +1110,8 @@ impl Backend {
             snapshot.typing.clear();
             snapshot.timeline_status.clear();
         });
-        Ok(())
+        drop(state);
+        self.observe_presence(Vec::new())
     }
 
     pub(super) fn media_conversation(
@@ -1506,6 +1519,13 @@ impl Backend {
                         .iter()
                         .fold(0u64, |sum, room| sum.saturating_add(room.unread));
                     view.rooms = snapshot.rooms;
+                    for room in &mut view.rooms {
+                        room.presence = room
+                            .partner
+                            .as_ref()
+                            .and_then(|id| view.presence.get(id))
+                            .cloned();
+                    }
                     view.notifications = snapshot.notifications;
                     view.invites = snapshot.invites;
                 });
@@ -1529,7 +1549,8 @@ impl Backend {
                 });
             }
         }));
-        Ok(())
+        drop(state);
+        self.observe_presence(Vec::new())
     }
 }
 

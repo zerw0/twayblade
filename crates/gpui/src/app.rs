@@ -1754,3 +1754,26 @@ impl MatrixApp {
         self.select_room_target(room, Some(event), window, cx);
     }
 }
+
+#[allow(dead_code, reason = "Presence UI action contracts")]
+impl MatrixApp {
+    pub fn observe_presence(&self, users: Vec<String>) {
+        if let Some(backend) = &self.backend {
+            let _ = backend.observe_presence(users);
+        }
+    }
+    pub fn set_presence(
+        &mut self,
+        state: matrix_client_core::presence::State,
+        status: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.job(
+            window,
+            cx,
+            move |b| b.set_presence(state, status),
+            |_, _, _, _| {},
+        );
+    }
+}
