@@ -3,6 +3,7 @@
 
 pub mod auth;
 pub mod conversation;
+pub mod profile;
 pub mod rooms;
 pub mod spaces;
 

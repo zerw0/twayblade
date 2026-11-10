@@ -1,8 +1,13 @@
 # macOS-first desktop interface
 
-Decision: 2026-11-10, requested by the user. macOS is the primary UX platform;
-Linux and Windows remain supported targets. Retain Iced provisionally and keep
-protocol/account state separate from platform presentation.
+Superseded frontend decision: the user subsequently approved one GPUI + GPUI Kit
+frontend for macOS/Linux/Windows. See [the current architecture](GPUI.md). The
+SwiftUI/Iced details below are retained as design and implementation history.
+
+Decision: 2026-11-10, approved by the user. Use SwiftUI/AppKit on macOS and
+Iced on Linux/Windows, sharing the Rust core through a narrow UniFFI boundary.
+macOS is the primary UX platform. The Iced implementation notes below describe
+the earlier prototype; the approved frontend section records the migration.
 
 ## Reference and target composition
 
@@ -39,7 +44,7 @@ Retina rendering, long room/display names, populated timelines and attachments,
 and verify keyboard/VoiceOver order. Screenshots with synthetic data must be
 marked as offline previews. Preserve Linux/Windows native operation.
 
-## Implemented in source
+## Earlier Iced implementation
 
 - Standard decorated, centered 640 × 700 login window; minimum 480 × 560.
 - Narrow 360-pixel form, scrollable for smaller windows.
@@ -76,10 +81,8 @@ coverage. Check native input behavior and appearance on real hardware.
 5. Add native preferences, notification activation, browser callback handling,
    camera/microphone entitlements and signed application identity.
 
-If the Iced feasibility gate cannot meet required text/accessibility/platform
-integration quality, compare Slint and a thin SwiftUI macOS frontend sharing the
-Rust core before expanding the UI. A SwiftUI frontend would require a separate
-portable frontend strategy and is not the current implementation.
+The user subsequently approved the SwiftUI macOS frontend described below.
+Iced remains the portable frontend and a useful reference implementation.
 
 ## Joined-space navigation
 
@@ -126,26 +129,36 @@ threads, reactions and dense history. Preserve space navigation and Home's
 exclusion of space-owned rooms. Keep conversation content readable, with glass
 used for navigation and controls where appropriate.
 
-### Proposed frontend direction — not implemented
+### Approved frontend split — first implementation
 
-For a macOS-first product requiring actual Liquid Glass, prefer a SwiftUI macOS
-frontend with focused AppKit integration over continued imitation in Iced.
-Retain the Rust core for Matrix authentication, stores, E2EE, sync, timelines,
-spaces and account lifecycle. Retain Iced for Linux/Windows.
+The user approved **SwiftUI/AppKit for macOS and Iced for Linux/Windows**.
+This supersedes the provisional Iced-only decision above. The goal is consistent
+information architecture, density and behavior across both UIs, with platform
+controls/materials. Liquid Glass is an Apple rendering feature, not a promise
+of identical rendering in Iced.
 
-Evaluate UniFFI for a narrow Swift boundary exposing commands, observable state
-and cancellation, not raw SDK clients or account tokens. Prove same-device
-session restoration, task ownership and one real timeline through the bridge
-before committing to a full frontend migration.
+`macos/` contains SwiftUI views and an AppKit window/menu host. `crates/bridge/`
+uses pinned UniFFI 0.32.2 to generate the Swift boundary. Rust owns Matrix clients,
+credentials, stores, sync, spaces and timelines. Swift owns only presentation
+state, selection, drafts and safe snapshots. Blocking commands execute off the
+main actor. A coalescing watch channel bounds updates; epoch/selection guards
+reject stale account/timeline results and stopping aborts account tasks.
 
-This means Rust application logic with a Swift Mac UI, rather than an exclusively
-Rust codebase. It introduces two UI implementations and separate platform QA.
-Rust-to-AppKit bindings are another option if an all-Rust frontend is required,
-with more custom platform work. This is a proposal, not a completed migration.
+Wired behavior: password discovery/login, secure restoration/logout, joined
+spaces/Home, room selection, timelines, plain sending and history pagination.
+Native AppKit menus provide standard edit/quit/hide/window commands and search.
+The interface uses semantic system colors, SF Symbols, native sidebar controls,
+rounded message bubbles, selectable text and a glass composer on macOS 26+;
+older macOS uses regular material. Home excludes all known space descendants.
 
-Check glass API availability against deployment targets and provide standard
-material fallbacks on older supported macOS versions. Native chat chrome does
-not establish Element Call media support, which remains a separate spike.
+The app builds and offline Swift/ABI checks pass. Window creation and preview
+capture are exercised independently of saved sessions. Live SwiftUI restoration,
+sending, pagination anchoring, VoiceOver, IME, reduced transparency and accent
+changes still need acceptance. XCTest could not run with this CLT installation.
+The bridge is an initial implementation, not completed M0 acceptance.
+
+See DEVELOPMENT.md for build/preview commands and the Apple SDK workaround.
+Element Call remains a separate restricted runtime spike.
 
 Primary references:
 

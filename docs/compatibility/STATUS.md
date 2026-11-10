@@ -7,7 +7,7 @@ Updated 2026-11-10. macOS is the primary acceptance platform.
 | Workspace check/build | Passed locally | Not run | Not run |
 | Rustfmt | Passed | Shared source | Shared source |
 | Clippy with warnings denied | Passed, all targets | Not run | Not run |
-| Unit tests | 16 passed | Not run | Not run |
+| Unit tests | 24 Rust tests passed with all features; opt-in integration passed separately | Not run | Not run |
 | Native window | Launched; own-window capture inspected | Not run | Not run |
 | Anonymous discovery | User screenshot: voltized.de | Not run | Not run |
 | Password sign-in | User screenshot: signed-in screen | Not run | Not run |
@@ -15,11 +15,92 @@ Updated 2026-11-10. macOS is the primary acceptance platform.
 | Room synchronization | User screenshot confirms live room list | Not run | Not run |
 | OAuth / legacy SSO | Not implemented | Not implemented | Not implemented |
 | Timeline/history/send queue | History confirmed by user screenshot; live sending pending | Not run | Not run |
-| E2EE interoperability | Pending | Pending | Pending |
+| E2EE interoperability | Local SDK-to-SDK encrypted delivery/restoration passed; Element pending | Pending | Pending |
 | Element Call | Not implemented | Not implemented | Not implemented |
 
 User screenshots verify discovery and password sign-in UI on voltized.de, not the
 entire session persistence or encryption lifecycle. OAuth metadata was unconfirmed.
+
+## Primary GPUI frontend
+
+GPUI + GPUI Kit 0.9.1 is the approved shared frontend. The macOS build/run and
+ad-hoc development bundle launch pass locally. Direct Rust services replace the
+need for Swift/UniFFI in the primary UI; earlier frontends remain references.
+
+Own-content offline captures were inspected for grouped conversation, Home,
+profile inspector, sign-in and the 10,000-message fixture. Stable SDK IDs key
+message/group state. Room-owned composers retain drafts, cursor and undo state;
+a control-driven test caught and fixed delayed events writing into another room.
+Two Kit UI-interaction tests exercise actual buttons and Unicode text input.
+Total workspace count with all features: 24 passing tests, one opt-in integration
+test ignored by default (passed separately). Formatting and all-feature Clippy pass.
+
+Light/dark product palette tokens have measured outgoing-text contrast of
+5.59:1 / 4.79:1; these pair checks do not establish complete accessibility.
+GPUI controls are custom-rendered, with system font selection and window/menu
+integration. Native AppKit widgets, Liquid Glass and native accent matching are
+not claimed. Physical IME/VoiceOver, complete keyboard behavior, appearance changes,
+live GPUI account restoration/sending, Linux/Windows execution and call media
+remain pending. The large fixture is a smoke check, not a performance benchmark.
+
+The user-requested UI/UX Pro Max skill is installed locally and ignored alongside
+other AI folders. Its revision/use is documented in AGENTS.md. CI now targets the
+GPUI executable; its remote results have not been verified. Native builds on a
+single Mac do not establish the other platform release gates.
+
+The following earlier sections describe Iced/SwiftUI increments and the separate
+shared-core integration evidence; they are not live GPUI acceptance.
+
+## Grouping, profiles and isolated encrypted messaging
+
+- SwiftUI groups consecutive same-user messages with one sender header; sender
+  changes, five-minute gaps, reversed timestamps and date changes start a new
+  group. Iced grouping now also respects date boundaries. The Swift self-checks
+  cover sender-ID identity rather than display names and the timing boundaries.
+- Both frontends expose read-only profiles from sender names and Account/My
+  Profile. Rust fetches global profiles through the SDK, with available cached
+  room-specific information as fallback. Retry/copy ID are implemented; account
+  and request guards reject stale results. Profile photos/editing/verification
+  actions are not implemented. Native grouped timeline and profile-sheet offline
+  captures were inspected. Linux/Windows execution is still unverified.
+- Local Synapse v1.164.2 image pinned by digest, listening only on loopback TLS,
+  uses generated Alice/Bob accounts, a dedicated CA and ignored fixture state.
+  No production accounts, OS credential entries or system trust roots are used.
+- The opt-in integration test passed: unified sync, real profile fetch, SDK-backed
+  application timeline/send queue, encrypted wire events with no plaintext test
+  marker, recipient decryption, reopening the original encrypted SQLite store
+  with the same SDK session/device, and decryption of prior history. Test
+  sessions were revoked on completion.
+- This is SDK-to-SDK application-service integration. It does not prove Element
+  interoperability, a separate-process restart, Keychain persistence, normal
+  auth restoration, SwiftUI interaction, verification/recovery or media E2EE.
+  See `tests/integration/README.md` for reproduction and precise limits.
+
+## SwiftUI frontend increment
+
+The approved frontend split is SwiftUI/AppKit on macOS, Iced on Linux/Windows.
+Earlier screenshots and live-account evidence below refer to Iced.
+
+- Rust bridge builds with pinned UniFFI 0.32.2; all-feature Clippy passes and 17
+  Rust tests pass. Generated Swift bindings compile and link against the bridge.
+- SwiftUI development bundle builds using Apple's macOS 26.5 SDK. This machine's
+  CLT macOS 27.2 SDK has a missing SwiftUI macro plugin; XCTest is also absent.
+  XCTest sources exist but the suite has not passed here.
+- The executable's offline self-checks pass Home exclusion/loading, draft
+  retention and actual Rust ABI construction/invalid-input rejection. No
+  Keychain access, account restoration or networking occurs in these checks.
+- SwiftUI offline selected-space and Home windows launched; their own WindowServer
+  captures were inspected, confirming native selection, colors, header, bubbles,
+  composer and exclusion of space-owned rooms from Home.
+  Earlier NSView bitmap caching produced SwiftUI compositor artifacts and is not
+  used for visual acceptance.
+- AppKit window lifecycle, menus and SwiftUI views are implemented. Native
+  materials/colors and a macOS 26+ Liquid Glass composer replace the Iced
+  approximation. Physical accessibility/input/appearance acceptance is pending.
+- Normal SwiftUI launch restores the same development account/store as Iced;
+  this connected path has not been tested. Close the other frontend first.
+- Development bundle is ad-hoc signed and still uses transitive Nix libraries.
+  Clean-machine packaging and release signing are not established.
 
 ## Verification performed
 

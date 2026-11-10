@@ -1,190 +1,234 @@
-# Development on macOS and Linux
+# Development
 
-macOS is the primary UX and acceptance platform. Linux is a supported build
-target, but has not yet passed native runtime acceptance. See
-[compatibility evidence](docs/compatibility/STATUS.md) for verified coverage and
-[PLAN.md](PLAN.md) for outstanding work.
+The primary frontend is **GPUI + GPUI Kit**, shared across macOS, Linux and
+Windows, with Matrix services in Rust. macOS remains the primary UX platform.
+The earlier SwiftUI/Iced clients are retained reference implementations.
+See [PLAN.md](PLAN.md) and [acceptance evidence](docs/compatibility/STATUS.md).
 
-## Shared tooling
+## Get the source
 
-Install Nix with flakes enabled and Git. Use this repository's pinned development
-shell rather than installing Rust tools globally:
+Install Git and Rust using [rustup](https://rustup.rs/). The declared minimum is
+Rust 1.96; local verification uses 1.99. Minimum-version acceptance is pending.
 
 ```sh
-git clone git@github.com:zerw0/matrixclient.git
+rustup component add rustfmt clippy
+git clone https://github.com/zerw0/matrixclient.git
 cd matrixclient
-nix develop
-rustc --version
-cargo --version
+git switch -c feature/my-feature
 ```
 
-The shell provides Cargo, rustc, rustfmt, Clippy, pkg-config and CMake, plus Linux
-display libraries and DBus build inputs. `flake.lock` pins Nix inputs and
-`Cargo.lock` pins Rust dependencies. The declared minimum Rust version is 1.96;
-the current local Nix environment provides 1.99. Minimum-version acceptance is
-still pending.
-
-The first shell/build requires network access and may download and compile many
-dependencies. Keep both lockfiles committed. For ordinary builds, use `--locked`
-so an unexpected dependency change fails visibly.
-
-Optional direnv integration: install direnv/nix-direnv through your existing
-system configuration, enable its shell hook, inspect `.envrc`, then run
-`direnv allow`. `.envrc` contains only `use flake`; do not put credentials in it.
+The repository is private. Follow [AGENTS.md](AGENTS.md): use one branch per
+feature and a separate worktree for concurrent work. Keep Cargo.lock committed;
+use `--locked`. The first GPUI build downloads and compiles many dependencies.
+GPUI Kit is pinned to 0.9.1 with its matching GPUI snapshot. Cargo.lock also pins
+the compatible Taffy/unicode-properties versions needed by Kit's test features.
+Nix is optional and has a separate section below.
 
 ## macOS
 
-Use a normal logged-in macOS desktop session. Ensure the Xcode Command Line Tools
-are available; `xcode-select -p` should show the active developer directory.
-If absent, install them with `xcode-select --install` before building.
+Requirements: Rust/Cargo, Git, pkg-config, CMake and Apple developer tools. Existing
+Homebrew users can install the auxiliary tools with `brew install pkg-config cmake`.
+Check `xcode-select -p`; if tools are absent, use `xcode-select --install` or
+install/select full Xcode. The current Kit runtime-shader configuration built and
+ran with the installed Command Line Tools; other configurations may need Xcode.
+The primary GPUI frontend does not compile SwiftUI or generate Swift bindings.
 
-From the Nix shell:
-
-```sh
-cargo run --locked -p matrix-client-desktop
-```
-
-Or run directly through the shell without entering it interactively:
+Run from a logged-in graphical session:
 
 ```sh
-nix develop --command cargo run --locked -p matrix-client-desktop
+cargo run --locked -p matrix-client-gpui
 ```
 
-The application uses macOS Keychain for the saved session and database passphrase.
-The first access may prompt for permission. Unlock the login keychain if needed.
-A denied/locked Keychain is an error; there is no plaintext fallback. Passwords
-are not saved. Do not share Keychain exports, session records or recovery keys.
+Or build and launch an ad-hoc signed development app:
 
-San Francisco is loaded from the installed macOS font at startup and is not
-bundled for redistribution. Controls are rendered by Iced. Native menu-bar,
-vibrancy, system accent colors, VoiceOver and media-permission acceptance remain
-separate work; an unsigned development executable is not a signed release app.
+```sh
+bash macos/build.sh --run
+```
 
-Check light/dark appearance, Retina rendering, keyboard focus, Command-F search,
-Command-Q, window resizing and the Account menu on physical hardware.
+Output: `target/debug/bundle/Matrix Client.app`. The script uses Cargo from the
+current shell and resolves Apple signing tools in a clean environment, including
+when invoked inside Nix/direnv. The bundle is for local development. Transitive
+Nix library dependencies, clean-machine packaging, signing/notarization and
+minimum macOS-version acceptance remain release work.
+
+A normal launch restores the shared development Keychain session. Close the other
+frontends first: concurrent-instance protection is pending. Use a dedicated test
+account for connected development. An unavailable keychain is an error; there is
+no plaintext credential fallback.
 
 ## Linux
 
-Run from your graphical desktop session with working graphics drivers. The Nix
-shell supplies Wayland, X11, libxkbcommon, OpenGL/Vulkan loader libraries and DBus
-development inputs; the desktop/display server and a Secret Service provider
-must be provided by your host system.
-
-Requirements for authenticated runs:
-
-- A Wayland or X11 session. Preserve `WAYLAND_DISPLAY` or `DISPLAY` and
-  `XDG_RUNTIME_DIR` from that session.
-- The desktop session's DBus user bus, normally exposed through
-  `DBUS_SESSION_BUS_ADDRESS`.
-- An unlocked Secret Service provider, such as the one configured by your
-  desktop environment. No mock or plaintext credential backend is used.
-- Installed fonts and usable host graphics drivers. Nix userspace libraries do
-  not install or configure the host GPU driver.
-
-Use the same commands as macOS:
+Install Rust and native compiler/display dependencies. The Ubuntu/Debian CI
+baseline for the workspace is:
 
 ```sh
-nix develop
-cargo run --locked -p matrix-client-desktop
+sudo apt-get update
+sudo apt-get install -y build-essential pkg-config cmake libdbus-1-dev \
+  libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-dev \
+  libxcursor-dev libxi-dev libxrandr-dev libgl1-mesa-dev libvulkan-dev \
+  libfontconfig1-dev libfreetype6-dev libssl-dev libxcb1-dev libxkbfile-dev
+cargo run --locked -p matrix-client-gpui
 ```
 
-On NixOS, configure the required graphical session, drivers and desktop keyring
-in your system configuration. On other Linux distributions, a mismatch between
-Nix graphics libraries and host drivers may require host-specific integration;
-record the distribution, session type and renderer when reporting a failure.
-Linux X11 and Wayland runtime behavior are not yet verified in this project.
+Run from Wayland or X11 with usable graphics drivers and fonts. GPUI uses its
+Linux graphics backend; this setup has not yet passed Linux native acceptance.
+Preserve `WAYLAND_DISPLAY` or `DISPLAY`, `XDG_RUNTIME_DIR` and your desktop's
+`DBUS_SESSION_BUS_ADDRESS`. Login requires an unlocked Secret Service provider;
+a private/headless DBus bus alone does not provide one. Do not run the app with sudo.
 
-Do not launch through sudo: it changes the user session and credential-store
-context. A new private DBus bus alone does not provide an unlocked Secret Service
-keyring. Headless CI builds can pass without a desktop or keyring; that does not
-establish that interactive authentication works.
+Use equivalent packages on other distributions. On NixOS, configure the host
+session, graphics drivers and keyring in the system configuration. Build success
+does not establish rendering, keyring or media acceptance on X11/Wayland.
 
-## Credential-free UI previews
+## Windows
 
-These modes skip Keychain/Secret Service access, login and synchronization:
+Install Git for Windows, Rust via rustup with the MSVC target matching your
+machine, and Visual Studio 2022 Build Tools with **Desktop development with C++**,
+the Windows SDK and CMake tools. Use a current graphics driver compatible with
+GPUI's Windows backend.
+
+From PowerShell in the checkout:
+
+```powershell
+rustup component add rustfmt clippy
+cargo run --locked -p matrix-client-gpui
+```
+
+Windows uses the configured Credential Manager backend, with no plaintext
+fallback. Windows native execution, input, notifications, media and packaging
+acceptance remain pending. All three platforms now use the same GPUI source.
+
+## Offline previews
+
+These modes skip the credential store, login and synchronization. Samples are
+labeled offline; sending and account operations are disabled. You can type local
+drafts, switch rooms and open sample profiles.
 
 ```sh
-cargo run --locked -p matrix-client-desktop -- --preview
-cargo run --locked -p matrix-client-desktop -- --preview-workspace
-cargo run --locked -p matrix-client-desktop -- --preview-conversation
-cargo run --locked -p matrix-client-desktop -- --preview-home
+cargo run --locked -p matrix-client-gpui -- --preview
+cargo run --locked -p matrix-client-gpui -- --preview-home
+cargo run --locked -p matrix-client-gpui -- --preview-profile
+cargo run --locked -p matrix-client-gpui -- --preview-signin
+cargo run --locked -p matrix-client-gpui -- --preview-large
 ```
 
-The populated previews use explicitly labeled sample data and disable sending.
-Home shows only the standalone sample room; space-owned rooms are excluded.
-Previews need a graphical session even though they do not need a keyring.
+`--preview-large` supplies 10,000 sample messages to Kit's virtual message
+scroller. It is a smoke fixture, not a measured performance guarantee.
 
-For visual QA, add `--capture /tmp/matrix-preview.pam` to a preview command.
-It writes only the application's own content window as RGBA PAM and exits.
-The capture flag has no effect during normal account sessions. Keep captures out
-of commits, especially if another tool captures real account data.
+To capture only the app's rendered content and exit:
+
+```sh
+cargo run --locked -p matrix-client-gpui --features capture -- \
+  --preview --capture /tmp/matrix-gpui.png
+```
+
+The `capture` feature enables Kit's test/render support; it requires additional
+build dependencies. Captures require an offline preview and are rejected for
+normal sessions. Keep captures outside commits. On macOS, the build helper enables
+capture support automatically when passed `--capture`:
+
+```sh
+bash macos/build.sh --run --preview --capture /tmp/matrix-gpui.png
+```
 
 ## Checks
 
-Run inside `nix develop`:
-
 ```sh
 cargo fmt --all -- --check
-cargo clippy --locked --workspace --all-targets -- -D warnings
-cargo test --locked --workspace
-cargo build --locked -p matrix-client-desktop
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace --all-features
+cargo build --locked -p matrix-client-gpui
 ```
 
-Use `--offline` only after the dependency cache is populated. It cannot replace
-the first fetch. The workflow in `.github/workflows/check.yml` runs native OS
-checks; review its actual results before claiming CI or platform acceptance.
+GPUI interaction tests run through Kit's headless test windows: actual buttons,
+text input, emoji/accent text, room switching, draft restoration and profile
+open/close. They do not establish VoiceOver/IME or physical platform acceptance.
+CI is defined in `.github/workflows/check.yml`; inspect its actual results before
+claiming it passed. Use `--offline` only after dependencies are cached.
 
-Unit tests cover selected filtering, draft/session UI boundaries and message
-grouping. Test real login, restart with the same device, live sending, encrypted
-interoperability, space membership changes and media separately with dedicated
-test accounts. Do not use production accounts or send test messages to unrelated
-rooms as part of automated checks.
+## Isolated Matrix integration tests
 
-## Local state and credentials
-
-The current credential entry uses service `matrix-client.development` and account
-`active-session-v1`. The SDK data directory is resolved by `directories::ProjectDirs`
-with `("", "MatrixClient", "MatrixClient")`; its `sessions/<UUID>` child contains
-SDK stores. The exact base path follows the platform and XDG configuration.
-Session secrets and the SDK store passphrase are stored in the OS credential
-store, not in repository configuration. Logout revokes the server session and
-removes that secret record; encrypted store files remain. Recovery after failed
-logout or interrupted login is still under development.
-
-`.gitignore` excludes environment secrets, credential/key files, local session
-exports, SDK databases, logs, build outputs and captures. It allows example env
-templates. Never use real secrets in examples: ignore rules are only one layer
-of protection and do not remove files already committed.
-
-Before publishing changes:
+With a **local** Docker engine and Compose running:
 
 ```sh
-git status --short
-git diff --cached --stat
-git diff --cached --check
+bash tests/integration/run.sh
 ```
 
-Inspect staged files locally and run a secret scanner when available. Do not post
-secret-bearing diagnostics in an issue. Preserve redacted error categories and
-describe whether the evidence is a build, preview, live interoperability check,
-or physical platform test.
+See the [integration guide](tests/integration/README.md) for generated accounts,
+loopback TLS, reproduction and exact limits. This test never accesses the normal
+application credential entry. It checks core services and SDK store reopening;
+it does not prove live GPUI login/restoration or Element interoperability.
 
-## Troubleshooting
+## Optional Nix environment — macOS and Linux
 
-- **Nix daemon/cache permission denied:** retry from a normal terminal with access
-  to your Nix installation. A sandbox denial is not a Rust compile failure.
-- **crates.io DNS/fetch failure:** restore network access, then retry. Offline
-  builds work only when every locked dependency is cached.
-- **Waiting for Cargo's build lock:** another build/run process owns the target
-  directory. Let it finish; do not delete lockfiles or kill unrelated processes.
-- **Keychain/Secret Service unavailable:** unlock the correct desktop credential
-  store and run as the same logged-in user. Preview mode can validate layout
-  independently.
-- **Empty Home:** Home deliberately hides rooms belonging to known spaces. Select
-  a space in the rail. Initial membership loading also keeps Home empty briefly.
-- **No rooms/history or sync failure:** this increment requires native sliding
-  sync support. Record the server's supported capabilities and SDK version;
-  legacy-sync fallback is not implemented.
-- **Unable to decrypt:** verification/recovery/key-backup UI is incomplete.
-  Re-login or deleting local stores is not a substitute for preserving device
-  keys. Keep the current session/state until a recovery path is established.
+The pinned shell supplies Rust, rustfmt, Clippy, pkg-config, CMake and Python,
+plus Linux display, font and DBus inputs. Keep flake.lock committed.
+
+```sh
+nix develop
+cargo run --locked -p matrix-client-gpui
+# macOS development bundle, in the same shell:
+bash macos/build.sh --run
+```
+
+Without an interactive shell:
+
+```sh
+nix develop --command cargo test --locked --workspace --all-features
+nix develop --command cargo run --locked -p matrix-client-gpui -- --preview
+```
+
+Optional direnv: inspect `.envrc`, enable your existing direnv/nix-direnv setup,
+then run `direnv allow`. It contains only `use flake`. Nix packages do not configure
+the host GPU, desktop, user DBus session or keyring; non-NixOS graphics integration
+may need host-specific setup. Apple signing tools are isolated from Nix SDK settings.
+
+## Reference frontends
+
+Retained for comparison during migration:
+
+```sh
+cargo run --locked -p matrix-client-desktop -- --preview-conversation
+# macOS only, with a compatible Apple Swift/SDK installation:
+bash macos/build-swiftui-reference.sh --run --preview
+```
+
+SwiftUI reference output remains `macos/build/Matrix Client.app`; it uses generated
+UniFFI bindings. Its local SDK workaround and XCTest limitations are recorded in
+`docs/compatibility/STATUS.md`. The GPUI app does not depend on that bridge.
+
+## AI design tooling
+
+UI work uses the user-requested [UI/UX Pro Max skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill)
+and GPUI Kit's component/coding/design guides. The selected skill revision is
+recorded in AGENTS.md. Install it repo-locally with your agent's skill installer at
+`.agents/skills/ui-ux-pro-max`; its canonical upstream path is
+`.claude/skills/ui-ux-pro-max`. The local copy and AI tool state are ignored.
+Python 3 is needed only for its local design searches, not to run the application.
+There is no GPUI stack preset: use relevant UX/style domains and verify actual
+GPUI Kit APIs. Do not apply web landing-page output to the desktop app.
+
+## Local state and troubleshooting
+
+All frontends currently use credential service `matrix-client.development`,
+account `active-session-v1`. SDK directories come from ProjectDirs with
+`("", "MatrixClient", "MatrixClient")`, under `sessions/<UUID>`. The session and
+store passphrase stay in the OS credential store; passwords are not saved.
+Logout revokes the remote session and removes the credential record; encrypted
+stores remain. Interrupted/revoked-session recovery remains incomplete.
+
+`.gitignore` excludes local credentials, SDK databases, test state, build outputs,
+AI folders and installed skills. AGENTS.md, PLAN.md and product docs remain tracked.
+Before publication, inspect staged changes and run a secret scanner.
+
+- **Cargo build lock:** let the other build finish; do not remove lockfiles or
+  kill unrelated processes.
+- **Dependency fetch failure:** restore network access and retry; offline mode
+  cannot replace the initial fetch.
+- **Keychain/Secret Service unavailable:** unlock the correct desktop keyring and
+  run as the same user. Offline previews are independent of credentials.
+- **Empty Home:** rooms belonging to spaces appear only in those spaces. Initial
+  membership loading also holds Home empty.
+- **Missing history:** native sliding sync is required; no legacy fallback exists.
+- **Unable to decrypt:** verification/recovery UI is pending. Preserve device
+  keys and state; re-login or store deletion is not a recovery procedure.

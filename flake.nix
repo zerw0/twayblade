@@ -9,16 +9,16 @@
         let pkgs = import nixpkgs { inherit system; };
         in {
           default = pkgs.mkShell {
-            buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.dbus ];
-            packages = with pkgs; [ cargo rustc rustfmt clippy pkg-config cmake ]
+            buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.dbus pkgs.fontconfig pkgs.freetype pkgs.openssl ];
+            packages = with pkgs; [ cargo rustc rustfmt clippy pkg-config cmake python3 ]
               ++ lib.optionals stdenv.hostPlatform.isLinux [
-                wayland libxkbcommon libGL vulkan-loader
-                xorg.libX11 xorg.libXcursor xorg.libXi xorg.libXrandr
+                wayland libxkbcommon libGL vulkan-loader fontconfig freetype openssl
+                xorg.libX11 xorg.libXcursor xorg.libXi xorg.libXrandr xorg.libxcb xorg.libxkbfile
               ];
             LD_LIBRARY_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux
               (pkgs.lib.makeLibraryPath (with pkgs; [
-                wayland libxkbcommon libGL vulkan-loader
-                xorg.libX11 xorg.libXcursor xorg.libXi xorg.libXrandr
+                wayland libxkbcommon libGL vulkan-loader fontconfig freetype openssl
+                xorg.libX11 xorg.libXcursor xorg.libXi xorg.libXrandr xorg.libxcb xorg.libxkbfile
               ]));
           };
         });

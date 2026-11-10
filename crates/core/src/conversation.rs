@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct MessageRow {
+    pub id: String,
     pub sender: String,
     pub display_name: Option<String>,
     pub timestamp_ms: i64,
@@ -75,6 +76,7 @@ fn rows<'a>(items: impl Iterator<Item = &'a Arc<TimelineItem>>) -> Vec<MessageRo
                 None => "",
             };
             Some(MessageRow {
+                id: item.unique_id().0.clone(),
                 sender: event.sender().to_string(),
                 display_name: match event.sender_profile() {
                     TimelineDetails::Ready(profile) => profile.display_name.as_ref().map(|name| {

@@ -6,13 +6,13 @@ Date: 2026-11-10. Status: M0 in progress.
 
 A simple native desktop Matrix client for macOS, Linux, and Windows, with E2EE, spaces, threads, OAuth/OIDC, legacy SSO, and direct/group calling through Element Call.
 
-macOS is the primary product platform, per the user's 2026-11-10 direction. Design and validate interactions on macOS first while maintaining portable core/UI and Linux/Windows release gates.
+macOS is the primary product platform, per the user's 2026-11-10 direction. Design and validate interactions on macOS first while maintaining a portable core and Linux/Windows frontend and Linux/Windows release gates.
 
 ## Architecture decisions
 
 | Area | Initial choice | Gate |
 | --- | --- | --- |
-| UI | Iced, native Rust rendering | Text selection, IME, accessibility, timeline performance |
+| UI | GPUI + GPUI Kit, one Rust frontend on macOS/Linux/Windows | Input, accessibility, large timelines, native execution and call-window acceptance on each OS |
 | Protocol | matrix-sdk and matrix-sdk-ui | Pin compatible releases; verify server capabilities |
 | Async | Tokio | Never block UI; cancel account tasks on logout |
 | State | SDK SQLite state/crypto stores | Store encryption and migration tests |
@@ -21,13 +21,14 @@ macOS is the primary product platform, per the user's 2026-11-10 direction. Desi
 | Call runtime | Evaluate Wry in a separate call window | WebKit/WebKitGTK/WebView2 compatibility; assess Chromium helper if needed |
 | Tooling | Project Nix shell, Cargo workspace | Native OS build/test matrix |
 
-Chat and application logic are native Rust. Element Call includes web assets and a browser runtime. Fully web-free calling would be a separate implementation. Evaluate matrix-rust-rtc during M0 as a future alternative, without replacing the requested Element Call integration silently.
+Matrix application logic and the new shared GPUI frontend are Rust. The earlier SwiftUI/Iced frontends remain reference implementations during migration. Element Call includes web assets and a browser runtime. Fully web-free calling would be a separate implementation. Evaluate matrix-rust-rtc during M0 as a future alternative, without replacing the requested Element Call integration silently.
 
 ## First release scope
 
 - One active account, persistent login, refresh and logout.
 - OAuth/OIDC, legacy Matrix SSO with identity-provider selection, password login where advertised.
 - DMs and rooms: history, pagination, send queue, attachments, edits, reactions, replies, redactions, typing, receipts.
+- Member/account profile pages with real Matrix identities, display names and room context; build avatar/edit/verification actions as separate working increments.
 - E2EE: cross-signing, device verification, encrypted key backup, recovery and visible missing-key handling.
 - Spaces: nested/private spaces, membership, discovery, join/leave, permission-aware management.
 - Attachments: images, files, audio and video; file picker, drag/drop and clipboard image paste; encrypted upload/download in encrypted rooms, previews, save/open and visible transfer progress/failures.
@@ -36,6 +37,7 @@ Chat and application logic are native Rust. Element Call includes web assets and
 - Threads: history, reply, pagination, unread state, receipts and notifications; no duplicate root/reply rendering.
 - Audio/video direct and group calls using modern MatrixRTC and Element Call, incoming ringing, device selection, mute, screen sharing and reconnect.
 - Desktop notifications, unread counts, shortcuts, light/dark mode and installable packages.
+- Appearance preferences: selectable Element-like, IRC, minimal and chat-bubble styles; selectable color schemes independent of layout.
 
 Deferred: multi-account, arbitrary widgets, bots, advanced moderation/server administration. Legacy `m.call.*` calling is a separate compatibility feature; modern direct calls do not prove it works.
 
@@ -43,11 +45,51 @@ Deferred: multi-account, arbitrary widgets, bots, advanced moderation/server adm
 
 Use a macOS-first visual language: compact type and controls, restrained blue actions, system light/dark appearance, standard window decorations, comfortable desktop density and progressive disclosure. The sign-in window starts at 640 × 700 logical pixels with a 360-pixel content column, staged server/account entry, human-readable errors and no protocol-flow dump.
 
-The conversation UI should follow Mac sidebar/split-view conventions. Native menu bar integration, Command shortcuts, preferences, window lifecycle, accessibility and any vibrancy must be implemented/tested separately. Styling Iced does not create AppKit controls. See `docs/architecture/MACOS_UI.md`.
+The shared GPUI conversation UI follows Mac sidebar/split-view conventions. GPUI Kit supplies custom-rendered controls, semantic themes and interaction behavior; menus, shortcuts, window lifecycle and accessibility require platform acceptance. Actual AppKit widgets or Liquid Glass need explicit platform integration. See `docs/architecture/MACOS_UI.md`.
 
-Use the user's Cinny screenshot as the information-layout reference: space rail, compact rooms, room header, grouped timeline, rounded composer and optional members/details inspector. Adapt with macOS typography, rounded selections and semantic system colors. Current system light/dark tracking and approximate palette do not establish native accent/semantic-color integration; implement that through the platform layer and verify preference changes.
+Use the user's Cinny screenshot as the information-layout reference: space rail, compact rooms, room header, grouped timeline, rounded composer and optional members/details inspector. Adapt with macOS typography, rounded selections and semantic system colors. Use GPUI Kit semantic theme tokens and system light/dark appearance. Native macOS system accent/material matching is a separate platform task. Verify live appearance/accent changes and accessibility preferences separately on each frontend.
 
 Space rail → room/DM list → conversation → optional thread/details panel. Collapse navigation on narrow windows. Default to conversations, reveal details on demand, and retain a return-to-call control during navigation. Provide guided verification/recovery and actionable errors. Keep technical diagnostics out of normal product flows.
+
+### Selectable chat styles and color schemes
+
+Provide four timeline styles through Appearance preferences:
+
+| Style | Presentation |
+| --- | --- |
+| Element-like | Left-aligned room timeline, avatar gutter, grouped sender headers, timestamps and message actions; inspired by Element Desktop's density. |
+| IRC | Compact rows with a narrow timestamp/name column; minimal avatars and decoration; readable alignment for busy rooms. |
+| Minimal | Quiet left-aligned text with restrained metadata, separators and spacing; show sender changes clearly. |
+| Chat bubbles | Incoming/outgoing rounded bubbles, grouped sender metadata and alignment similar to the current macOS frontend. |
+
+Keep all styles compatible with threads, replies, edits, reactions, attachments,
+stickers, delivery failures and decryption placeholders. Group by Matrix user ID,
+not display name; expose exact message times without repeating a header on every
+message. Style changes must preserve the selected room, drafts, reading position
+and active thread. Start with an account-wide local preference; per-room overrides
+are deferred until the global preference works. Provide density, text-size and
+timestamp-visibility preferences without changing protocol behavior.
+
+Color schemes are independent of chat style: System (default, follows macOS
+appearance/accent), Light, Dark, and curated palettes including high contrast,
+Gruvbox and Solarized. Each curated palette needs explicit light/dark variants
+or a clear supported appearance. Use shared semantic color tokens for surfaces,
+text, accent, selection, mentions, unread, errors and message bubbles. Map these
+tokens into the shared GPUI theme; keep platform-specific window/menu conventions.
+Do not force a palette to imitate Liquid Glass on Linux/Windows. Store preferences
+locally without credentials, preview changes immediately, and offer Reset to System.
+
+Acceptance: switch every style and palette on a populated conversation without
+losing drafts/scroll position or hiding message actions. Check sender identity,
+long names, wrapping, selection/copy, emoji, media, threads, keyboard focus,
+VoiceOver/screen-reader labels and large histories. Verify readable contrast,
+high-contrast/reduced-transparency settings and live System appearance/accent
+changes on each target OS. Screenshots use explicit offline samples.
+
+Delivery: implement the shared preferences/token model during M2, ship the four
+working timeline renderers and curated palettes before M5 exit, and include
+cross-frontend parity and persistence in release acceptance. Current bubble UI
+is the first renderer; a style picker and additional schemes are not implemented.
 
 ## Milestones and acceptance
 
@@ -62,7 +104,7 @@ Estimates are engineering weeks for one experienced full-time developer, assumin
 5. Embed Element Call and establish a three-participant encrypted call spanning macOS, Windows and Linux. Test microphone, camera, screen sharing, permissions and reconnect.
 6. Record dependency/license inventory, minimum OS/runtime/server requirements, sync capability behavior and UI/runtime decision.
 
-Exit: verified messaging/session restoration and encrypted cross-platform call; documented decision on Iced and call runtime. Compilation alone does not pass M0. If server sync requirements exclude older servers, publish that limitation or implement/test a supported fallback before claiming compatibility.
+Exit: verified messaging/session restoration and encrypted cross-platform call; documented frontend/bridge acceptance and call runtime decision. Compilation alone does not pass M0. If server sync requirements exclude older servers, publish that limitation or implement/test a supported fallback before claiming compatibility.
 
 ### M1 — foundation and login (2–3 weeks)
 
@@ -121,7 +163,10 @@ Exit: clean-machine install, launch, browser callback, upgrade with session rete
 ## Workspace boundaries
 
 ```text
-crates/desktop/       Iced views and presentation
+macos/               GPUI bundle helper and retained SwiftUI reference
+crates/bridge/       Retained UniFFI bridge for the SwiftUI reference
+crates/gpui/          Primary shared GPUI + GPUI Kit frontend
+crates/desktop/       Retained Iced reference frontend
 crates/core/          Matrix services and account lifecycle
 crates/platform/     OS credentials, notifications, links, permissions
 crates/call-host/    Element Call runtime and restricted bridge
@@ -150,25 +195,82 @@ CI: native macOS/Linux/Windows builds, fmt, Clippy and meaningful tests; isolate
 - [ ] M2a: attachment/media picker, encrypted transfers, previews and failure/retry checks.
 - [ ] M2b: Unicode emoji picker/shortcodes/skin tones and interoperable emoji reactions.
 - [ ] M2c: Matrix sticker rendering/sending and a documented compatible pack source.
+- [ ] Appearance: Element-like, IRC, minimal and bubble styles; independent System/light/dark/curated color schemes, persisted preferences and parity checks.
 - [ ] M3a: Matrix space navigation, hierarchy, membership and permission-aware management.
 
 ## Progress
 
-- Three-crate workspace, Cargo/Nix lockfiles and draft three-OS CI. macOS check/build, rustfmt, Clippy with warnings denied and 16 unit tests pass. Linux/Windows and CI are unverified.
-- User screenshots confirm discovery and password sign-in on voltized.de. Same-device relaunch, logout cleanup, browser login, token refresh, interrupted-login and multi-instance handling remain pending.
-- macOS interface now uses proportional bold/semibold San Francisco headings, compact sign-in, system appearance and a 1120 × 760 split-view workspace. Search, unread counts, selection, Tab navigation, Command-F and Command-Q are wired. Native menus remain pending.
-- User screenshot confirms live room loading on voltized.de. Fixed avatar centering that overrode fixed width and pushed names to the right. Kept distinct rooms with identical names; room IDs are the identity.
-- SDK timeline increment: selected-room sync subscriptions, observable message history, initial/explicit 30-event back-pagination, plain-text composer, local echo/delivery state and send queue. Per-room in-memory drafts survive navigation; account/selection generations reject stale results and pending sends remain tracked across navigation. Missing decryption keys and redactions have visible placeholders. User screenshot confirms live history rendering. Sending and isolated E2EE interoperability remain pending. Native sliding sync is required; no legacy-sync fallback is claimed.
-- Credential-free native workspace preview launched and its own 2240 × 1520 capture was visually inspected. Corrected a bold-font fallback discovered in the first capture. Previews never access Keychain, authenticate or synchronize.
-- Offline populated conversation preview launched and captured for layout QA; sample data is explicitly labeled, sending disabled and no credentials accessed.
-- Next: verify history, live delivery, pagination and same-device relaunch using dedicated test accounts; perform isolated two-user encryption acceptance. Add verification/recovery, message actions, send-failure retry/cancel, timeline virtualization and scroll anchoring. Continue browser login/session hardening and call feasibility work.
-- Conversation presentation now includes sender display names (Matrix ID on hover), local timestamps, identity-based consecutive-message grouping, subdued rounded selection and follow-latest/Jump to Latest behavior. Grouping regression test passes. Populated offline preview inspected; live scrolling and pagination anchoring still need acceptance. Cinny-inspired layout and future native semantic colors are recorded in `docs/architecture/MACOS_UI.md`.
-- Space navigation implemented using SDK SpaceService filters: narrow rounded rail, Home, selected-space heading, joined-room filtering, nested-space indicators and unread aggregation. Parent filtering expands SDK-provided descendants with cycle/deduplication guards; shared rooms retain their IDs and drafts across navigation. Stale updates are rejected and removed-space selection falls back to Home. SDK navigation filters currently expose two levels; hierarchy discovery, deeper navigation, create/join/leave/invites and room management remain pending.
-- Native offline spaces preview launched and inspected: parent space selected, unrelated rooms hidden, nested-space marker and unread counts visible. Live space loading still requires connected-account acceptance.
-- M0 remains incomplete: encrypted messaging, calling and cross-platform physical acceptance are outstanding. See `docs/compatibility/STATUS.md`.
-- User explicitly requested spaces, attachments, stickers and emoji as planned workstreams. They now have dedicated scope and acceptance sections above; no implementation completion is implied. The 18–27 week envelope predates the detailed sticker/media scope and must be re-estimated after M0 and pack/codec decisions.
+GPUI migration implemented on `feature/gpui-migration`. M0 is still in progress; no complete
+milestone exit is claimed. This section supersedes earlier frontend status notes.
+
+### Implemented
+
+- [x] Shared Rust core and OS credential integration, pinned Cargo/Nix inputs,
+  HTTPS homeserver validation and password discovery/sign-in/restore/logout paths.
+- [x] Primary GPUI + GPUI Kit frontend for the three desktop targets, replacing
+  the split UI strategy in source. Kit 0.9.1 and matching dependencies are locked.
+- [x] GPUI sign-in, room search, unread counts, joined-space rail, Home filtering,
+  SDK timelines, plain-text send queue and explicit history pagination are wired.
+- [x] Grouped sender headers using user identity and time/date boundaries, stable
+  SDK message IDs, selectable message text and virtualized sender-group scrolling.
+- [x] Room-owned composer state preserves draft/cursor/undo state across navigation.
+  Fixed delayed input events writing to the wrong room; account changes clear it.
+- [x] Readonly sender/account profiles use SDK global profile data and available
+  cached room context, with copy ID, retry and stale-request/account guards.
+- [x] Semantic GPUI theme, vector icon family, system fonts, platform decorations,
+  native menu/shortcut wiring and standard macOS development bundle helper.
+- [x] Standard macOS/Linux/Windows DEVELOPMENT.md, with a separate optional Nix
+  section. Earlier Iced/SwiftUI frontends retained as references.
+- [x] Isolated, pinned, loopback-only TLS Synapse fixture with generated accounts
+  and ignored local state; normal application credentials are never used by it.
+- [x] Repository contribution rules require a dedicated branch per feature and
+  worktrees for concurrent work; local AI folders/installed skills are ignored.
+- [x] User-requested UI/UX Pro Max skill installed repo-locally at the recorded
+  revision and applied to relevant design/accessibility review; GPUI Kit supplies
+  stack-specific implementation guidance.
+
+### Verified
+
+- macOS arm64: primary GPUI build/run and ad-hoc packaged app launch pass. Own
+  rendered-content captures inspected for grouped chat, Home, profiles, sign-in
+  and a 10,000-message virtualized fixture. Preview data is explicitly synthetic.
+- 24 Rust workspace tests pass with all features, including two actual GPUI Kit
+  control-interaction tests for draft/navigation and profile opening/closing.
+  Formatting and all-feature Clippy with warnings denied pass locally.
+- Isolated SDK/application-service test passed real profile fetching, unified
+  sync, encrypted send queue/wire events, recipient decryption, original-device
+  encrypted-store reopening and earlier-history decryption. Successful runs revoke
+  only their generated test sessions.
+- Theme token contrast was measured for the main outgoing-bubble and secondary
+  text pairs. Full accessibility/input/appearance acceptance remains separate.
+
+### Remaining acceptance and next work
+
+1. Verify the normal GPUI login → live room/timeline sync → sending → restart /
+   logout path with dedicated accounts and OS secret storage. The isolated test
+   retains the SDK session in test memory; it does not prove Keychain persistence,
+   a separate-process restart, crash recovery or normal auth restoration.
+2. Add OAuth/OIDC and legacy browser SSO, refresh/revoked-session recovery and
+   concurrent-instance protection. Existing production credentials must be retained.
+3. Complete device verification/cross-signing, backup/recovery and Element
+   interoperability. SDK-to-SDK encrypted delivery is only the first check.
+4. Complete native Linux/Windows builds/runs and CI, physical IME/keyboard /
+   accessibility, appearance transitions, minimum OS/Rust versions, measured
+   timeline performance and live pagination anchoring.
+5. Implement the Element Call/MatrixRTC runtime/media spike; message encryption
+   does not establish media E2EE. Legacy calling is a separate compatibility target.
+6. Continue attachments, emoji/reactions, stickers, full space management, threads,
+   selectable chat styles/color schemes, notifications and release packaging.
+   Those workstreams above remain planned, not completed.
+
+Earlier user screenshots prove live password login, room loading and history in
+the Iced reference only. See `docs/compatibility/STATUS.md` for historical evidence
+and `docs/architecture/GPUI.md` for the current architecture and limits.
 
 ## Primary references
+
+- https://github.com/longbridge/gpui-kit
+- https://gpui.rs/
 
 - https://github.com/iced-rs/iced
 - https://github.com/matrix-org/matrix-rust-sdk
@@ -179,7 +281,7 @@ CI: native macOS/Linux/Windows builds, fmt, Clippy and meaningful tests; isolate
 - https://github.com/tauri-apps/wry
 - https://github.com/element-hq/matrix-rust-rtc
 
-## Apple-design refinement and Home semantics
+## Earlier Apple-design refinement and Home semantics (Iced reference)
 
 The user supplied the apple-design skill as design guidance:
 https://github.com/emilkowalski/skills/blob/main/skills/apple-design/SKILL.md

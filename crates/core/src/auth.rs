@@ -185,3 +185,6 @@ pub async fn login_password(
     }
     Ok(Account::new(client))
 }
+
+#[cfg(test)]
+mod integration;

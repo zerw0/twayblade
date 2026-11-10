@@ -1,0 +1,19 @@
+name: matrixclient-integration
+services:
+  synapse:
+    image: ghcr.io/element-hq/synapse:v1.164.2@sha256:f0df87cff259872637b4b5e5174b9977e5e3046dd421505407803b5e45c5f842
+    user: "0:0"
+    environment:
+      UID: "0"
+      GID: "0"
+    ports:
+      - "127.0.0.1:18448:8448"
+    volumes:
+      - ../../test-data/local/integration:/data
+      - ./bootstrap.py:/bootstrap.py:ro
+    healthcheck:
+      test: ["CMD", "python", "/bootstrap.py", "health"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: "no"

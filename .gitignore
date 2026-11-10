@@ -50,3 +50,34 @@ recovery_key*
 .vscode/
 *.swp
 *.swo
+
+# Generated Swift bindings, native build products and development app bundles.
+/macos/.build/
+/macos/Generated/
+/macos/build/
+/.swiftpm/
+/macos/.swiftpm/
+
+# Repository-local AI tooling, installed skills, transcripts and worktrees.
+/.agent/
+/.agents/
+/.codex/
+/.claude/
+/.cursor/
+/.windsurf/
+/.gemini/
+/.opencode/
+/.continue/
+/.copilot/
+/.kiro/
+/.qoder/
+/.trae/
+/.roo/
+/.kilocode/
+/.augment/
+/.aider*
+/.ai/
+/.ai-worktrees/
+/.worktrees/
+/.github/agents/
+/.github/skills/

@@ -6,6 +6,7 @@ use iced::widget::{button, column, container, row, scrollable, text, text_input}
 use iced::{Center, Element, Fill, Subscription, Task, Theme, theme};
 use matrix_client_core::auth::{self, Account};
 use matrix_client_core::conversation::{Conversation, ConversationSnapshot, MessageRow};
+use matrix_client_core::profile::UserProfile;
 use matrix_client_core::rooms::{RoomSnapshot, RoomSummary};
 use matrix_client_core::spaces::{SpaceSnapshot, SpaceSummary};
 use matrix_client_core::{LoginDiscovery, discover_login, validate_homeserver};
@@ -30,6 +31,14 @@ fn main() -> iced::Result {
         Err(_) => application,
     };
     application.run()
+}
+
+struct ProfilePage {
+    user_id: String,
+    display_name: String,
+    data: Option<UserProfile>,
+    loading: bool,
+    error: String,
 }
 
 struct App {
@@ -64,6 +73,8 @@ struct App {
     selected_space: Option<String>,
     spaces_loading: bool,
     account_menu_open: bool,
+    profile_page: Option<ProfilePage>,
+    profile_request: u64,
 }
 
 impl Default for App {
@@ -100,6 +111,8 @@ impl Default for App {
             selected_space: None,
             spaces_loading: true,
             account_menu_open: false,
+            profile_page: None,
+            profile_request: 0,
         }
     }
 }
@@ -143,6 +156,17 @@ enum Message {
     SelectSpace(Option<String>),
     ToggleAccountMenu,
     FocusSearch,
+    OpenProfile {
+        user_id: String,
+        display_name: String,
+    },
+    CloseProfile,
+    CopyProfileId,
+    ProfileLoaded {
+        request: u64,
+        account_instance: u128,
+        result: Result<UserProfile, &'static str>,
+    },
     EarlierLoaded {
         generation: u64,
         result: Result<bool, &'static str>,
@@ -209,6 +233,7 @@ impl App {
                     }),
                     messages: if preview_conversation {
                         vec![MessageRow {
+                            id: "preview-message".into(),
                             sender: "Interface preview".into(),
                             display_name: Some("Preview member".into()),
                             timestamp_ms: 1_794_300_000_000,
@@ -252,6 +277,59 @@ impl App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::OpenProfile {
+                user_id,
+                display_name,
+            } => {
+                self.profile_request = self.profile_request.wrapping_add(1);
+                let request = self.profile_request;
+                self.profile_page = Some(ProfilePage {
+                    user_id: user_id.clone(),
+                    display_name,
+                    data: None,
+                    loading: !self.preview,
+                    error: String::new(),
+                });
+                if let Some(account) = self.account.clone() {
+                    let account_instance = account.instance_id();
+                    let room = self.selected_room.clone();
+                    return Task::perform(
+                        async move {
+                            Message::ProfileLoaded {
+                                request,
+                                account_instance,
+                                result: account.profile(user_id, room).await,
+                            }
+                        },
+                        |message| message,
+                    );
+                }
+            }
+            Message::CloseProfile => {
+                self.profile_request = self.profile_request.wrapping_add(1);
+                self.profile_page = None;
+            }
+            Message::CopyProfileId => {
+                if let Some(page) = &self.profile_page {
+                    return iced::clipboard::write(page.user_id.clone());
+                }
+            }
+            Message::ProfileLoaded {
+                request,
+                account_instance,
+                result,
+            } => {
+                if request == self.profile_request
+                    && self.account.as_ref().map(Account::instance_id) == Some(account_instance)
+                    && let Some(page) = &mut self.profile_page
+                {
+                    page.loading = false;
+                    match result {
+                        Ok(profile) => page.data = Some(profile),
+                        Err(error) => page.error = error.into(),
+                    }
+                }
+            }
             Message::ToggleAccountMenu => self.account_menu_open = !self.account_menu_open,
             Message::FocusSearch => return iced::widget::operation::focus("room-search"),
             Message::SpacesUpdated(snapshot) => {
@@ -570,6 +648,8 @@ impl App {
                 match result {
                     Ok(()) => {
                         self.account = None;
+                        self.profile_page = None;
+                        self.profile_request = self.profile_request.wrapping_add(1);
                         self.discovery = None;
                         self.rooms.clear();
                         self.selected_room = None;
@@ -701,6 +781,61 @@ impl App {
     fn view(&self) -> Element<'_, Message> {
         let theme = self.theme();
         let secondary = appearance::muted(&theme);
+        if let Some(page) = &self.profile_page
+            && (self.account.is_some() || self.preview_workspace)
+        {
+            let name = page
+                .data
+                .as_ref()
+                .map(|data| data.display_name.as_str())
+                .unwrap_or(&page.display_name);
+            let mut content = column![
+                button(text("Back to conversation").size(13))
+                    .on_press(Message::CloseProfile)
+                    .style(button::text),
+                text("Profile").size(22).font(appearance::BOLD),
+                text(name).size(18).font(appearance::SEMIBOLD),
+                text(&page.user_id).size(13),
+                button(text("Copy Matrix ID").size(12)).on_press(Message::CopyProfileId),
+            ]
+            .spacing(16);
+            if page.loading {
+                content = content.push(text("Loading profile…").size(13).color(secondary));
+            }
+            if let Some(data) = &page.data {
+                if let Some(room) = &data.room_name {
+                    content = content.push(text(format!("Conversation: {room}")).size(13));
+                }
+                if let Some(room_name) = &data.room_display_name
+                    && room_name != &data.display_name
+                {
+                    content =
+                        content.push(text(format!("Name in this room: {room_name}")).size(13));
+                }
+                if !data.server_profile_available {
+                    content = content.push(
+                        text("Showing the saved conversation profile.")
+                            .size(12)
+                            .color(secondary),
+                    );
+                }
+            }
+            if !page.error.is_empty() {
+                content = content.push(text(&page.error).size(13)).push(
+                    button(text("Try Again").size(12)).on_press(Message::OpenProfile {
+                        user_id: page.user_id.clone(),
+                        display_name: page.display_name.clone(),
+                    }),
+                );
+            }
+            if self.preview {
+                content = content.push(text("Offline sample profile").size(12).color(secondary));
+            }
+            return container(container(content).max_width(400).padding(24))
+                .center_x(Fill)
+                .center_y(Fill)
+                .into();
+        }
         if self.preview_workspace {
             return self.workspace("Interface preview · no account connected".into(), &theme);
         }
@@ -1069,6 +1204,12 @@ impl App {
             navigation = navigation.push(
                 container(
                     column![
+                        button(text("My Profile").size(12))
+                            .style(button::text)
+                            .on_press(Message::OpenProfile {
+                                user_id: user_id.clone(),
+                                display_name: "You".into()
+                            }),
                         text(user_id).size(11),
                         text(self.sync_status).size(11).color(secondary),
                         reconnect,
@@ -1144,7 +1285,13 @@ impl App {
                     entry = entry.push(
                         row![
                             iced::widget::tooltip(
-                                text(display_name).size(13).font(appearance::SEMIBOLD),
+                                button(text(display_name).size(13).font(appearance::SEMIBOLD))
+                                    .padding(0)
+                                    .style(button::text)
+                                    .on_press(Message::OpenProfile {
+                                        user_id: message.sender.clone(),
+                                        display_name: display_name.into()
+                                    }),
                                 text(&message.sender).size(12),
                                 iced::widget::tooltip::Position::Top,
                             ),
@@ -1322,6 +1469,10 @@ fn message_time(timestamp_ms: i64) -> String {
 fn can_group(previous: &MessageRow, current: &MessageRow) -> bool {
     previous.sender == current.sender
         && (0..300_000).contains(&current.timestamp_ms.saturating_sub(previous.timestamp_ms))
+        && chrono::DateTime::from_timestamp_millis(previous.timestamp_ms)
+            .map(|time| time.with_timezone(&chrono::Local).date_naive())
+            == chrono::DateTime::from_timestamp_millis(current.timestamp_ms)
+                .map(|time| time.with_timezone(&chrono::Local).date_naive())
 }
 
 fn preview_rooms() -> Vec<RoomSummary> {
@@ -1469,6 +1620,7 @@ mod tests {
             room_id: "!room:example.org".into(),
             conversation: None,
             messages: vec![MessageRow {
+                id: "test-message".into(),
                 sender: "test".into(),
                 display_name: None,
                 timestamp_ms: 0,
@@ -1481,8 +1633,37 @@ mod tests {
     }
 
     #[test]
+    fn late_profile_result_cannot_reopen_profile_after_logout() {
+        let mut app = App {
+            profile_page: Some(ProfilePage {
+                user_id: "@test:example.org".into(),
+                display_name: "Test".into(),
+                data: None,
+                loading: true,
+                error: String::new(),
+            }),
+            profile_request: 3,
+            ..App::default()
+        };
+        let _ = app.update(Message::SignedOut(Ok(())));
+        let _ = app.update(Message::ProfileLoaded {
+            request: 3,
+            account_instance: 12,
+            result: Ok(UserProfile {
+                user_id: "@test:example.org".into(),
+                display_name: "Test".into(),
+                room_name: None,
+                room_display_name: None,
+                server_profile_available: true,
+            }),
+        });
+        assert!(app.profile_page.is_none());
+    }
+
+    #[test]
     fn message_grouping_uses_identity_and_a_forward_time_window() {
         let first = MessageRow {
+            id: "group-message".into(),
             sender: "@one:example.org".into(),
             display_name: Some("Sam".into()),
             timestamp_ms: 1_000_000,
