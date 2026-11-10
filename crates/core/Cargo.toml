@@ -1,0 +1,24 @@
+[package]
+name = "matrix-client-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+matrix-sdk.workspace = true
+matrix-sdk-ui.workspace = true
+async-stream.workspace = true
+futures-util.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+url.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+directories.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+matrix-client-platform = { path = "../platform" }
+
+[lints]
+workspace = true
