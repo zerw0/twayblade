@@ -74,6 +74,11 @@ fn main() {
                     Some("MatrixClient"),
                 ),
                 KeyBinding::new("escape", CloseProfile, Some("MatrixClient")),
+                KeyBinding::new(if cfg!(target_os = "macos") { "cmd-k" } else { "ctrl-k" }, FindConversation, Some("MatrixClient")),
+                KeyBinding::new(if cfg!(target_os = "macos") { "ctrl-cmd-s" } else { "ctrl-alt-s" }, app::ToggleSidebar, Some("MatrixClient")),
+                KeyBinding::new(if cfg!(target_os = "macos") { "cmd-[" } else { "alt-left" }, app::NavigateBack, Some("MatrixClient")),
+                KeyBinding::new(if cfg!(target_os = "macos") { "cmd-]" } else { "alt-right" }, app::NavigateForward, Some("MatrixClient")),
+                KeyBinding::new(if cfg!(target_os = "macos") { "alt-cmd-i" } else { "ctrl-alt-i" }, ToggleDetails, Some("MatrixClient")),
                 KeyBinding::new(if cfg!(target_os = "macos") { "cmd-n" } else { "ctrl-n" }, NewDirectMessage, Some("MatrixClient")),
                 KeyBinding::new(if cfg!(target_os = "macos") { "cmd-shift-n" } else { "ctrl-shift-n" }, NewRoom, Some("MatrixClient")),
                 KeyBinding::new(
@@ -188,6 +193,13 @@ fn main() {
                         if args.iter().any(|arg| arg == "--preview-verify") {
                             view.snapshot.security.verification = Some(matrix_client_core::security::VerificationView { flow: "sample".into(), device: "Sample second device".into(), incoming: false, phase: matrix_client_core::security::VerificationPhase::Emojis([("🐶", "Dog"), ("🌳", "Tree"), ("🚀", "Rocket"), ("🎸", "Guitar"), ("🍎", "Apple"), ("🔔", "Bell"), ("🦋", "Butterfly")].into_iter().map(|(symbol, name)| (symbol.into(), name.into())).collect()) });
                         } else { view.security_restore = true; }
+                    }
+                    if args.iter().any(|arg| arg == "--preview-info") {
+                        view.details_open = true;
+                    }
+                    if args.iter().any(|arg| arg == "--preview-members") {
+                        view.details_open = true;
+                        view.info_tab = app::InfoTab::Members;
                     }
                     if args.iter().any(|arg| arg == "--preview-emoji") {
                         view.status = "Sample data · Emoji picker".into();

@@ -114,7 +114,14 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
             level: 0,
             avatar: None,
             can_add_rooms: true,
-            room_ids: ["general".into(), "research".into()].into_iter().collect(),
+            room_ids: [
+                "general".into(),
+                "research".into(),
+                "critique".into(),
+                "announcements".into(),
+            ]
+            .into_iter()
+            .collect(),
         }],
         notifications: matrix_client_core::notifications::RulesSnapshot {
             ready: true,
@@ -129,6 +136,25 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
                 unread: 3,
                 topic: Some("Day-to-day design talk".into()),
                 encrypted: true,
+                public: true,
+                favourite: true,
+                pinned: 2,
+                ..Default::default()
+            },
+            Room {
+                id: "critique".into(),
+                name: "Critique".into(),
+                unread: 4,
+                mentions: 1,
+                encrypted: true,
+                ..Default::default()
+            },
+            Room {
+                id: "announcements".into(),
+                name: "Announcements".into(),
+                unread: 6,
+                muted: true,
+                public: true,
                 ..Default::default()
             },
             Room {
@@ -240,18 +266,24 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
             display_name: "Alex".into(),
             role: MemberRole::Admin,
             avatar: None,
+            ..Default::default()
         },
         Member {
             user_id: snapshot.user_id.clone(),
             display_name: "You".into(),
             role: MemberRole::Moderator,
             avatar: None,
+            ..Default::default()
         },
         Member {
             user_id: "@sam:preview.invalid".into(),
             display_name: "Sam".into(),
             role: MemberRole::Member,
             avatar: None,
+            can_kick: true,
+            can_ban: true,
+            can_mute: true,
+            ..Default::default()
         },
     ];
     snapshot.members_state = MembersState::Ready;

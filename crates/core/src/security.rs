@@ -307,6 +307,31 @@ impl Security {
         Ok(())
     }
 
+    /// Verify another user's identity (SAS emoji), shown in the same flow UI.
+    pub async fn request_user_verification(&self, user: String) -> Result<(), SecurityError> {
+        let user = matrix_sdk::ruma::OwnedUserId::try_from(user)
+            .map_err(|_| SecurityError::Verification)?;
+        let identity = self
+            .client
+            .encryption()
+            .request_user_identity(&user)
+            .await
+            .map_err(|_| SecurityError::Unavailable)?
+            .ok_or(SecurityError::Verification)?;
+        let request = identity
+            .request_verification_with_methods(vec![VerificationMethod::SasV1])
+            .await
+            .map_err(|_| SecurityError::Verification)?;
+        set_request(
+            self.client.clone(),
+            self.flow.clone(),
+            self.updates.clone(),
+            Arc::downgrade(&self.lifetime.tasks),
+            request,
+        );
+        Ok(())
+    }
+
     pub async fn accept_verification(&self) -> Result<(), SecurityError> {
         let request = self
             .flow

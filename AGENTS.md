@@ -40,6 +40,7 @@
 - Do not spawn subagents unless explicitly requested by the user.
 
 ## Branches and collaboration
+- Division of work: Claude owns UI design and GPUI view code (layout, styling, motion, copy, captures); Codex owns the technical layer (`core`, `platform`, `gpui/src/backend*`, snapshot types, actions, tests). Technical tasks expose data contracts and add at most minimal, clearly marked placeholder wiring; they do not build or restyle views.
 - Create and switch to a dedicated branch before starting each feature: `feature/<short-name>`. Use `fix/<short-name>` for fixes and `docs/<short-name>` for documentation-only work. Do not implement features directly on `main`.
 - Base new feature branches on `main` unless the task specifies another base. Keep each branch focused on one feature, including its related tests and documentation.
 - Inspect Git status before switching or editing. Preserve existing work; never reset, discard or stash someone else's changes to make room for your task. Use a separate worktree when unrelated work or another contributor occupies the current checkout.
@@ -48,7 +49,8 @@
 
 ## UI design guidance
 - Apply the user-requested UI/UX Pro Max skill for UI design, implementation and review: `.agents/skills/ui-ux-pro-max/SKILL.md` when installed locally. Upstream: https://github.com/nextlevelbuilder/ui-ux-pro-max-skill (selected revision `9b675f0b13c9c28dec445e8ce4633c18c39b6467`). Its canonical skill path is `.claude/skills/ui-ux-pro-max/SKILL.md` upstream.
-- The local skill is intentionally ignored. Contributors can install it repo-locally using their agent's skill installer; do not commit AI tool state or installed skill folders.
+- Also apply the Impeccable skill (`.claude/skills/impeccable/SKILL.md` or `.agents/skills/impeccable/SKILL.md` when installed locally; upstream https://github.com/pbakaus/impeccable, revision `f2baa414a87d9acf1e21ccf776bfaec0262ad6df`). The chat client is an Operate surface: restraint, earned familiarity and native expectations over expression. Follow its craft floor (no kicker/eyebrow labels, no emoji standing in for icons, one icon family, accent only for primary actions, selection and state, 150–250 ms ease-out state motion, a reduced-motion path). Its launcher script downloads a binary; do not run it without the user's approval, and use the documented fallback of reading its references directly.
+- The local skills are intentionally ignored. Contributors can install it repo-locally using their agent's skill installer; do not commit AI tool state or installed skill folders.
 - GPUI is the implementation stack. The skill has no GPUI stack guide: use its relevant style/accessibility/interaction guidance and GPUI Kit's current APIs and coding/design guides. Do not substitute a web stack or apply mobile/marketing layouts to the desktop client.
 - Keep semantic theme tokens, readable text contrast, visible keyboard focus, descriptive icon controls, stable message identities and virtualized long histories. Treat generated design suggestions as recommendations and verify their fit before saving or applying them.
 - Keep `AGENTS.md`, `PLAN.md` and product documentation tracked even though AI tool folders are ignored.

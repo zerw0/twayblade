@@ -31,6 +31,114 @@ const TONE_NAMES: [&str; 6] = [
     "Medium dark",
     "Dark",
 ];
+/// Columns in the full picker grid; arrow up/down move by one row.
+const COLUMNS: usize = 8;
+const CELL: f32 = 34.;
+/// Category bar: CLDR groups with a representative glyph, in picker order.
+/// Line icons, not emoji glyphs, so the bar matches the app's icon system.
+const GROUPS: [(emojis::Group, IconName, &str); 9] = [
+    (
+        emojis::Group::SmileysAndEmotion,
+        IconName::FaceSlightlySmiling,
+        "Smileys & Emotion",
+    ),
+    (
+        emojis::Group::PeopleAndBody,
+        IconName::Hand,
+        "People & Body",
+    ),
+    (
+        emojis::Group::AnimalsAndNature,
+        IconName::PawPrint,
+        "Animals & Nature",
+    ),
+    (
+        emojis::Group::FoodAndDrink,
+        IconName::Utensils,
+        "Food & Drink",
+    ),
+    (
+        emojis::Group::TravelAndPlaces,
+        IconName::Plane,
+        "Travel & Places",
+    ),
+    (
+        emojis::Group::Activities,
+        IconName::Volleyball,
+        "Activities",
+    ),
+    (emojis::Group::Objects, IconName::Lightbulb, "Objects"),
+    (emojis::Group::Symbols, IconName::Heart, "Symbols"),
+    (emojis::Group::Flags, IconName::Flag, "Flags"),
+];
+enum Row {
+    Header(&'static str),
+    /// A range into `Grid::emojis`.
+    Cells(Range<usize>),
+}
+/// The full picker's content: one flat emoji list (for keyboard selection)
+/// laid out as headed rows (for a virtualised, uniform-height list).
+struct Grid {
+    emojis: Vec<&'static emojis::Emoji>,
+    rows: Vec<Row>,
+    /// (group, first row) for the category bar.
+    sections: Vec<(Option<emojis::Group>, usize)>,
+}
+fn toned(emoji: &'static emojis::Emoji, tone: usize) -> &'static emojis::Emoji {
+    emoji.with_skin_tone(TONES[tone % 6]).unwrap_or(emoji)
+}
+/// The six single-tone variants of an emoji, or None when it has no tones.
+fn tone_variants(emoji: &'static emojis::Emoji) -> Option<Vec<&'static emojis::Emoji>> {
+    emoji.skin_tones()?.next()?;
+    let variants: Vec<_> = TONES
+        .iter()
+        .filter_map(|tone| emoji.with_skin_tone(*tone))
+        .collect();
+    (variants.len() == 6).then_some(variants)
+}
+fn grid(query: &str, preferences: &Preferences) -> Grid {
+    let mut grid = Grid {
+        emojis: Vec::new(),
+        rows: Vec::new(),
+        sections: Vec::new(),
+    };
+    let section = |grid: &mut Grid, group, label, values: Vec<&'static emojis::Emoji>| {
+        if values.is_empty() {
+            return;
+        }
+        grid.sections.push((group, grid.rows.len()));
+        grid.rows.push(Row::Header(label));
+        let start = grid.emojis.len();
+        grid.emojis.extend(values);
+        let end = grid.emojis.len();
+        let mut row = start;
+        while row < end {
+            grid.rows.push(Row::Cells(row..(row + COLUMNS).min(end)));
+            row += COLUMNS;
+        }
+    };
+    let query = query.trim();
+    if !query.is_empty() {
+        let found = results(query, preferences);
+        section(&mut grid, None, "Search Results", found);
+        return grid;
+    }
+    let recent = preferences
+        .recents
+        .iter()
+        .filter_map(|value| emojis::get(value))
+        .collect();
+    section(&mut grid, None, "Frequently Used", recent);
+    for (group, _, label) in GROUPS {
+        let values = group
+            .emojis()
+            .filter(|emoji| emoji.unicode_version().major() <= 15)
+            .map(|emoji| toned(emoji, preferences.tone))
+            .collect();
+        section(&mut grid, Some(group), label, values);
+    }
+    grid
+}
 #[derive(Default, Serialize, Deserialize)]
 pub(super) struct Preferences {
     pub recents: Vec<String>,
@@ -91,6 +199,10 @@ impl Preferences {
 pub(super) struct Picker {
     pub reaction: Option<String>,
     pub selected: usize,
+    /// The emoji (index into the grid) whose skin-tone popover is open.
+    tones: Option<usize>,
+    tone_selected: usize,
+    scroll: UniformListScrollHandle,
     room: String,
     account: u128,
     original: String,
@@ -155,6 +267,9 @@ impl MatrixApp {
         self.emoji_picker = Some(Picker {
             reaction,
             selected: 0,
+            tones: None,
+            tone_selected: 0,
+            scroll: UniformListScrollHandle::new(),
             room: self.snapshot.selected_room.clone(),
             account: self.snapshot.account_instance,
             original,
@@ -178,6 +293,9 @@ impl MatrixApp {
         self.emoji_picker = shortcode_at(&original, cursor).map(|(range, query)| Picker {
             reaction: None,
             selected: 0,
+            tones: None,
+            tone_selected: 0,
+            scroll: UniformListScrollHandle::new(),
             room: self.snapshot.selected_room.clone(),
             account: self.snapshot.account_instance,
             original,
@@ -186,13 +304,56 @@ impl MatrixApp {
         });
     }
     fn emoji_results(&self, cx: &App) -> Vec<&'static emojis::Emoji> {
-        let query = self
+        let picker = self.emoji_picker.as_ref();
+        if let Some(query) = picker.and_then(|picker| picker.completion.as_deref()) {
+            return results(query, &self.emoji_preferences);
+        }
+        self.emoji_grid(cx).emojis
+    }
+    fn emoji_grid(&self, cx: &App) -> Grid {
+        grid(
+            self.emoji_search.read(cx).value().as_ref(),
+            &self.emoji_preferences,
+        )
+    }
+    /// A click (or Return) on a grid emoji: tone-capable ones open the tone
+    /// popover; the rest insert immediately.
+    fn pick_emoji(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let values = self.emoji_results(cx);
+        let Some(emoji) = values.get(index).copied() else {
+            return;
+        };
+        let completion = self
             .emoji_picker
             .as_ref()
-            .and_then(|picker| picker.completion.as_deref())
-            .map(str::to_owned)
-            .unwrap_or_else(|| self.emoji_search.read(cx).value().to_string());
-        results(&query, &self.emoji_preferences)
+            .is_some_and(|picker| picker.completion.is_some());
+        if !completion && tone_variants(emoji).is_some() {
+            let tone = self.emoji_preferences.tone % 6;
+            if let Some(picker) = &mut self.emoji_picker {
+                picker.selected = index;
+                picker.tones = Some(index);
+                picker.tone_selected = tone;
+            }
+            cx.notify();
+            return;
+        }
+        self.choose_emoji(emoji.as_str().into(), window, cx);
+    }
+    /// Insert one tone variant and remember the tone for the grid and completions.
+    fn choose_tone(&mut self, tone: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(index) = self.emoji_picker.as_ref().and_then(|picker| picker.tones) else {
+            return;
+        };
+        let Some(variant) = self
+            .emoji_results(cx)
+            .get(index)
+            .and_then(|emoji| tone_variants(emoji))
+            .and_then(|variants| variants.get(tone % 6).copied())
+        else {
+            return;
+        };
+        self.emoji_preferences.tone = tone % 6;
+        self.choose_emoji(variant.as_str().into(), window, cx);
     }
     pub(super) fn choose_emoji(
         &mut self,
@@ -256,9 +417,29 @@ impl MatrixApp {
         let Some(picker) = &self.emoji_picker else {
             return;
         };
+        if picker.tones.is_some() {
+            let tone = picker.tone_selected;
+            match event.keystroke.key.as_str() {
+                "escape" => self.emoji_picker.as_mut().unwrap().tones = None,
+                "enter" => self.choose_tone(tone, window, cx),
+                "left" | "right" => {
+                    let step = if event.keystroke.key == "left" { 5 } else { 1 };
+                    self.emoji_picker.as_mut().unwrap().tone_selected = (tone + step) % 6;
+                }
+                _ => return,
+            }
+            cx.stop_propagation();
+            window.prevent_default();
+            cx.notify();
+            return;
+        }
         let values = self.emoji_results(cx);
         let selected = picker.selected;
-        let step = if picker.completion.is_some() { 1 } else { 6 };
+        let step = if picker.completion.is_some() {
+            1
+        } else {
+            COLUMNS
+        };
         match event.keystroke.key.as_str() {
             "escape" => {
                 self.emoji_picker = None;
@@ -266,8 +447,8 @@ impl MatrixApp {
                     .update(cx, |state, cx| state.focus(window, cx));
             }
             "enter" => {
-                if let Some(emoji) = values.get(selected) {
-                    self.choose_emoji(emoji.as_str().into(), window, cx);
+                if selected < values.len() {
+                    self.pick_emoji(selected, window, cx);
                 }
             }
             "up" | "down" | "left" | "right" if !values.is_empty() => {
@@ -277,8 +458,22 @@ impl MatrixApp {
                     "left" => -1,
                     _ => 1,
                 };
-                self.emoji_picker.as_mut().unwrap().selected =
-                    (selected as isize + offset).rem_euclid(values.len() as isize) as usize;
+                let next = (selected as isize + offset).rem_euclid(values.len() as isize) as usize;
+                self.emoji_picker.as_mut().unwrap().selected = next;
+                if self.emoji_picker.as_ref().unwrap().completion.is_none() {
+                    let grid = self.emoji_grid(cx);
+                    if let Some(row) = grid
+                        .rows
+                        .iter()
+                        .position(|row| matches!(row, Row::Cells(range) if range.contains(&next)))
+                    {
+                        self.emoji_picker
+                            .as_ref()
+                            .unwrap()
+                            .scroll
+                            .scroll_to_item(row, ScrollStrategy::Nearest);
+                    }
+                }
             }
             _ => return,
         }
@@ -290,63 +485,222 @@ impl MatrixApp {
         let Some(picker) = &self.emoji_picker else {
             return div().into_any_element();
         };
-        let values = self.emoji_results(cx);
-        let completion = picker.completion.is_some();
-        let count = if completion { 6 } else { 18 };
-        let start = picker.selected / count * count;
-        let mut choices = if completion {
-            v_flex()
-        } else {
-            h_flex().flex_wrap()
-        };
-        choices = choices.gap(px(4.));
-        for (index, emoji) in values.iter().enumerate().skip(start).take(count) {
-            let value = emoji.as_str().to_owned();
-            let label = if completion {
-                format!(
-                    "{}  :{}: · {}",
-                    value,
-                    emoji.shortcode().unwrap_or(""),
-                    emoji.name()
-                )
-            } else {
-                value.clone()
-            };
-            choices = choices.child(
-                Button::new(SharedString::from(format!("emoji-{index}")))
-                    .ghost()
-                    .small()
-                    .label(label)
-                    .selected(picker.selected == index)
-                    .accessibility_label(format!("Insert {}", emoji.name()))
-                    .tooltip(emoji.name().to_owned())
-                    .when(!completion, |button| button.w(px(38.)).h(px(34.)))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.choose_emoji(value.clone(), window, cx)
-                    })),
-            );
+        if picker.completion.is_some() {
+            return self.emoji_completion(picker, cx);
         }
+        let grid = self.emoji_grid(cx);
+        let empty = grid.emojis.is_empty();
+        let selected = picker.selected;
+        // The category bar highlights the section holding the selected emoji.
+        let current = grid
+            .sections
+            .iter()
+            .rev()
+            .find(|(_, row)| {
+                grid.rows[*row..]
+                    .iter()
+                    .find_map(|row| match row {
+                        Row::Cells(range) => Some(range.start),
+                        Row::Header(_) => None,
+                    })
+                    .is_some_and(|start| start <= selected)
+            })
+            .map(|(group, _)| *group);
+        let mut bar = h_flex()
+            .px(px(6.))
+            .gap(px(1.))
+            .border_b_1()
+            .border_color(cx.theme().border);
+        let recent_row = grid
+            .sections
+            .iter()
+            .find(|(group, _)| group.is_none())
+            .map(|(_, row)| *row);
+        let searching = !self.emoji_search.read(cx).value().trim().is_empty();
+        if !searching {
+            let mut tabs: Vec<(Option<emojis::Group>, IconName, &str)> = Vec::new();
+            if recent_row.is_some() {
+                tabs.push((None, IconName::Clock, "Frequently Used"));
+            }
+            for (group, icon, label) in GROUPS {
+                tabs.push((Some(group), icon, label));
+            }
+            for (index, (group, glyph, label)) in tabs.into_iter().enumerate() {
+                let row = grid
+                    .sections
+                    .iter()
+                    .find(|(section, _)| *section == group)
+                    .map(|(_, row)| *row)
+                    .unwrap_or(0);
+                let first = grid.rows.get(row + 1).and_then(|row| match row {
+                    Row::Cells(range) => Some(range.start),
+                    Row::Header(_) => None,
+                });
+                let active = current == Some(group);
+                bar = bar.child(
+                    Button::new(SharedString::from(format!("emoji-group-{index}")))
+                        .ghost()
+                        .size(px(28.))
+                        .rounded(px(6.))
+                        .selected(active)
+                        .accessibility_label(label)
+                        .tooltip(label)
+                        .child(Icon::new(glyph).size(px(15.)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(picker) = &mut this.emoji_picker {
+                                picker.tones = None;
+                                if let Some(first) = first {
+                                    picker.selected = first;
+                                }
+                                picker.scroll.scroll_to_item(row, ScrollStrategy::Top);
+                            }
+                            cx.notify();
+                        })),
+                );
+            }
+        }
+        let rows = grid.rows.len();
+        let list = uniform_list(
+            "emoji-grid",
+            rows,
+            cx.processor(|this, range: Range<usize>, _, cx| {
+                let grid = this.emoji_grid(cx);
+                let selected = this
+                    .emoji_picker
+                    .as_ref()
+                    .map_or(0, |picker| picker.selected);
+                let muted = cx.theme().muted_foreground;
+                range
+                    .filter_map(|ix| grid.rows.get(ix).map(|row| (ix, row)))
+                    .map(|(ix, row)| match row {
+                        Row::Header(label) => div()
+                            .id(("emoji-header", ix))
+                            .h(px(CELL))
+                            .px(px(4.))
+                            .pt(px(12.))
+                            .text_size(px(11.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(muted)
+                            .child(*label)
+                            .into_any_element(),
+                        Row::Cells(cells) => h_flex()
+                            .h(px(CELL))
+                            .children(cells.clone().map(|index| {
+                                let emoji = grid.emojis[index];
+                                let tones = tone_variants(emoji).is_some();
+                                Button::new(SharedString::from(format!("emoji-{index}")))
+                                    .ghost()
+                                    .size(px(CELL))
+                                    .rounded(px(6.))
+                                    .selected(selected == index)
+                                    .accessibility_label(format!("Insert {}", emoji.name()))
+                                    .tooltip(if tones {
+                                        format!("{} · choose a skin tone", emoji.name())
+                                    } else {
+                                        emoji.name().to_owned()
+                                    })
+                                    .child(div().text_size(px(20.)).child(emoji.as_str()))
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.pick_emoji(index, window, cx)
+                                    }))
+                            }))
+                            .into_any_element(),
+                    })
+                    .collect::<Vec<_>>()
+            }),
+        )
+        .track_scroll(&picker.scroll)
+        .h(px(CELL * 8.))
+        .w_full();
+        let hovered = grid.emojis.get(selected).map(|emoji| {
+            (
+                emoji.as_str(),
+                emoji.name(),
+                emoji.shortcode().map(|code| format!(":{code}:")),
+            )
+        });
+        let tone_popover = picker.tones.and_then(|index| {
+            let variants = tone_variants(grid.emojis.get(index)?)?;
+            let chosen = picker.tone_selected;
+            Some(
+                v_flex()
+                    .id("emoji-tones")
+                    .absolute()
+                    .left(px(12.))
+                    .right(px(12.))
+                    .bottom(px(42.))
+                    .p(px(8.))
+                    .gap(px(6.))
+                    .rounded(px(10.))
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().popover)
+                    .shadow_lg()
+                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                        if let Some(picker) = &mut this.emoji_picker {
+                            picker.tones = None;
+                        }
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Skin Tone"),
+                    )
+                    .child(h_flex().justify_between().children(
+                        variants.into_iter().enumerate().map(|(tone, variant)| {
+                            Button::new(SharedString::from(format!("emoji-tone-{tone}")))
+                                .ghost()
+                                .size(px(36.))
+                                .rounded(px(7.))
+                                .selected(tone == chosen)
+                                .accessibility_label(format!(
+                                    "{}, {}",
+                                    variant.name(),
+                                    TONE_NAMES[tone]
+                                ))
+                                .tooltip(TONE_NAMES[tone])
+                                .child(div().text_size(px(22.)).child(variant.as_str()))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.choose_tone(tone, window, cx)
+                                }))
+                        }),
+                    ))
+                    .test_support(),
+            )
+        });
         v_flex()
             .id("emoji-picker")
-            .p(px(10.))
-            .gap(px(6.))
-            .w(if completion { px(440.) } else { px(288.) })
-            .rounded(px(10.))
+            .relative()
+            .w(px(CELL * COLUMNS as f32 + 24.))
+            .rounded(px(12.))
             .border_1()
             .border_color(cx.theme().border)
-            .bg(cx.theme().background)
+            .bg(cx.theme().popover)
+            .shadow_lg()
             .child(
                 h_flex()
-                    .justify_between()
-                    .child(if picker.reaction.is_some() {
-                        "Add reaction"
-                    } else {
-                        "Emoji"
-                    })
+                    .p(px(10.))
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .id("emoji-search-panel")
+                            .flex_1()
+                            .child(
+                                Input::new(&self.emoji_search)
+                                    .accessibility_id("emoji-search")
+                                    .aria_label("Search emoji")
+                                    .prefix(Icon::new(IconName::Search).size(px(13.)))
+                                    .small(),
+                            )
+                            .test_support(),
+                    )
                     .child(
                         Button::new("emoji-close")
                             .ghost()
-                            .small()
+                            .xsmall()
                             .icon(IconName::X)
                             .accessibility_label("Close emoji picker")
                             .tooltip("Close · Escape")
@@ -358,77 +712,95 @@ impl MatrixApp {
                             })),
                     ),
             )
-            .when(!completion, |view| {
-                view.child(
-                    div()
-                        .id("emoji-search-panel")
-                        .child(
-                            Input::new(&self.emoji_search)
-                                .accessibility_id("emoji-search")
-                                .aria_label("Search emoji")
-                                .small(),
-                        )
-                        .test_support(),
-                )
-            })
-            .child(
-                Button::new("emoji-tone")
-                    .ghost()
-                    .small()
-                    .label(format!(
-                        "Skin tone: {}",
-                        TONE_NAMES[self.emoji_preferences.tone % 6]
-                    ))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.emoji_preferences.tone = (this.emoji_preferences.tone + 1) % 6;
-                        if !this.preview {
-                            this.emoji_preferences.save();
-                        }
-                        cx.notify();
-                    })),
-            )
-            .when(values.is_empty(), |view| view.child("No emoji found."))
-            .child(choices)
+            .when(!searching, |view| view.child(bar))
+            .child(div().px(px(12.)).py(px(4.)).child(if empty {
+                div()
+                    .h(px(CELL * 8.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("No emoji found")
+                    .into_any_element()
+            } else {
+                list.into_any_element()
+            }))
             .child(
                 h_flex()
-                    .gap(px(6.))
-                    .child(
-                        Button::new("emoji-prev")
-                            .small()
-                            .label("Previous")
-                            .disabled(start == 0)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Some(picker) = &mut this.emoji_picker {
-                                    picker.selected = picker.selected.saturating_sub(count);
-                                }
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("emoji-next")
-                            .small()
-                            .label("Next")
-                            .disabled(start + count >= values.len())
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Some(picker) = &mut this.emoji_picker {
-                                    picker.selected += count;
-                                }
-                                cx.notify();
-                            })),
-                    ),
-            )
-            .child(
-                div()
-                    .text_size(px(10.))
-                    .text_color(cx.theme().muted_foreground)
-                    .child(if completion {
-                        "↑ ↓ to choose · Return to insert · Escape to close"
-                    } else if self.emoji_preferences.recents.is_empty() {
-                        "Arrow keys to choose · Return to insert"
-                    } else {
-                        "Recent emoji first · Arrows to choose · Return to insert"
+                    .h(px(36.))
+                    .px(px(12.))
+                    .gap(px(8.))
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .text_size(px(11.5))
+                    .when_some(hovered, |footer, (glyph, name, code)| {
+                        footer
+                            .child(div().text_size(px(18.)).child(glyph))
+                            .child(div().flex_1().min_w_0().truncate().child(name))
+                            .children(code.map(|code| {
+                                div().text_color(cx.theme().muted_foreground).child(code)
+                            }))
                     }),
             )
+            .children(tone_popover)
+            .test_support()
+            .into_any_element()
+    }
+
+    /// Inline `:shortcode` completion above the composer: a short list.
+    fn emoji_completion(&self, picker: &Picker, cx: &mut Context<Self>) -> AnyElement {
+        let values = self.emoji_results(cx);
+        let count = 6;
+        let start = picker.selected / count * count;
+        let mut choices = v_flex().gap(px(1.));
+        for (index, emoji) in values.iter().enumerate().skip(start).take(count) {
+            let value = emoji.as_str().to_owned();
+            choices = choices.child(
+                Button::new(SharedString::from(format!("emoji-{index}")))
+                    .ghost()
+                    .small()
+                    .w_full()
+                    .justify_start()
+                    .selected(picker.selected == index)
+                    .accessibility_label(format!("Insert {}", emoji.name()))
+                    .child(
+                        h_flex()
+                            .gap(px(8.))
+                            .child(div().text_size(px(16.)).child(value.clone()))
+                            .child(format!(":{}:", emoji.shortcode().unwrap_or("")))
+                            .child(
+                                div()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(emoji.name().to_owned()),
+                            ),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.choose_emoji(value.clone(), window, cx)
+                    })),
+            );
+        }
+        v_flex()
+            .id("emoji-picker")
+            .p(px(6.))
+            .gap(px(4.))
+            .w(px(380.))
+            .rounded(px(10.))
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().popover)
+            .shadow_lg()
+            .when(values.is_empty(), |view| {
+                view.child(div().p(px(6.)).child("No emoji found"))
+            })
+            .child(choices)
+            .child(
+                div()
+                    .px(px(6.))
+                    .text_size(px(10.5))
+                    .text_color(cx.theme().muted_foreground)
+                    .child("↑ ↓ to choose · Return to insert · Escape to close"),
+            )
+            .test_support()
             .into_any_element()
     }
 }

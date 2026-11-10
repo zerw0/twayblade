@@ -275,6 +275,8 @@ fn room_state_samples_show_typing_unread_and_member_profile_navigation(cx: &mut 
         assert!(window.find("typing-notice").visible());
         assert!(window.find("new-messages-sample-3").visible());
         window.click("details", cx);
+        window.click("info-tab-Members", cx);
+        window.render_frame(cx);
         assert!(window.find("member-@alex:preview.invalid").visible());
         window.click("member-@alex:preview.invalid", cx);
         assert!(window.find("copy-profile-id").visible());
@@ -771,16 +773,14 @@ fn shortcode_skin_tone_and_reaction_share_the_picker(cx: &mut TestAppContext) {
     .expect("shortcode input");
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
-        assert!(window.find("emoji-tone").visible());
-        window.click("emoji-tone", cx);
-        // Clicking the tone button must retain completion keyboard handling.
+        assert!(window.find("emoji-picker").visible());
         window.key_down("enter", false, cx);
         assert_eq!(
             window
                 .within("composer-panel")
                 .find_by_label("Message")
                 .value(),
-            Some("hello 👍🏻")
+            Some("hello 👍")
         );
     })
     .expect("shortcode replacement");
@@ -798,7 +798,7 @@ fn shortcode_skin_tone_and_reaction_share_the_picker(cx: &mut TestAppContext) {
                 .within("composer-panel")
                 .find_by_label("Message")
                 .value(),
-            Some("hello 👍🏻")
+            Some("hello 👍")
         );
     })
     .expect("shared reaction picker");
@@ -811,6 +811,82 @@ fn shortcode_skin_tone_and_reaction_share_the_picker(cx: &mut TestAppContext) {
             Some("🦀")
         );
     });
+}
+
+#[gpui_kit::test]
+fn emoji_with_skin_tones_opens_a_tone_popover_and_remembers_the_tone(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("emoji-open", cx);
+        window.render_frame(cx);
+        assert!(window.find("emoji-group-0").visible());
+        window.within("emoji-search-panel").click("input-state", cx);
+        window.input("thumbs up", cx);
+        window.render_frame(cx);
+        window.click("emoji-0", cx);
+        window.render_frame(cx);
+        assert!(window.find("emoji-tones").visible());
+        window.click("emoji-tone-5", cx);
+        assert_eq!(
+            window
+                .within("composer-panel")
+                .find_by_label("Message")
+                .value(),
+            Some("👍🏿")
+        );
+    })
+    .expect("tone popover");
+    cx.update(|cx| {
+        let app = app.read(cx);
+        assert!(app.emoji_picker.is_none());
+        assert_eq!(app.emoji_preferences.tone, 5);
+    });
+}
+
+#[gpui_kit::test]
+fn member_actions_follow_power_levels_and_confirm_destructive_steps(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("details", cx);
+        window.click("info-tab-Members", cx);
+        window.render_frame(cx);
+        // Alex outranks you: no moderation actions, only Message/Verify/Ignore.
+        window.click("member-@alex:preview.invalid", cx);
+        window.render_frame(cx);
+        assert!(window.find("member-message").visible());
+        assert!(window.find("member-verify").visible());
+        assert!(window.find("member-ignore").visible());
+        assert!(window.try_find("member-kick").is_none());
+    })
+    .expect("member actions for an admin");
+    cx.update_window(window, |_, window, cx| {
+        window.click("close-profile", cx);
+        window.render_frame(cx);
+        window.click("member-@sam:preview.invalid", cx);
+        window.render_frame(cx);
+        assert!(window.find("member-mute").visible());
+        assert!(window.find("member-ban").visible());
+        window.click("member-kick", cx);
+    })
+    .expect("moderation actions");
+    cx.update(|cx| {
+        let confirm = app.read(cx).member_confirm.clone();
+        assert_eq!(
+            confirm,
+            Some((
+                "@sam:preview.invalid".into(),
+                matrix_client_core::room_state::MemberAction::Kick
+            ))
+        );
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("member-kick", cx);
+    })
+    .expect("confirm kick");
+    cx.update(|cx| assert!(app.read(cx).member_confirm.is_none()));
 }
 
 #[gpui_kit::test]
@@ -927,15 +1003,15 @@ fn composer_icons_have_balanced_targets_and_centres(cx: &mut TestAppContext) {
         window.input("Sample draft", cx);
         window.render_frame(cx);
         let attach = window.find("attach-file").bounds();
-        for id in [
-            "attach-file",
-            "emoji-open",
-            "send",
-            "open-settings",
-            "logout",
-        ] {
+        // The composer's toolbar row: square 26pt tool buttons, a wider send
+        // button of the same height, all on one centre line.
+        for id in ["attach-file", "emoji-open", "send", "open-settings"] {
             let bounds = window.find(id).bounds();
-            assert_eq!(bounds.size, size(px(28.), px(28.)), "{id}");
+            if id == "send" {
+                assert_eq!(bounds.size.height, px(26.), "{id}");
+            } else {
+                assert_eq!(bounds.size, size(px(26.), px(26.)), "{id}");
+            }
             if matches!(id, "emoji-open" | "send") {
                 assert!(
                     (bounds.center().y - attach.center().y).abs() < px(0.5),

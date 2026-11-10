@@ -22,6 +22,13 @@ pub struct RoomSummary {
     pub direct: bool,
     /// `mxc://` avatar, if the room has one.
     pub avatar: Option<String>,
+    /// Highlight (mention/keyword) count, shown as an accent badge.
+    pub mentions: u64,
+    /// Anyone can join; otherwise shown with a lock.
+    pub public: bool,
+    /// Tagged `m.favourite` (syncs across Matrix clients).
+    pub favourite: bool,
+    pub pinned: usize,
     /// Server-provided activity ordering (sliding sync `bump_stamp`).
     pub recency: u64,
 }
@@ -68,6 +75,10 @@ fn summary(room: Room) -> RoomSummary {
         encrypted: room.encryption_state().is_encrypted(),
         direct: room.direct_targets_length() > 0,
         avatar: room.avatar_url().map(|url| url.to_string()),
+        mentions: room.unread_notification_counts().highlight_count,
+        public: room.is_public().unwrap_or(false),
+        favourite: room.is_favourite(),
+        pinned: room.pinned_event_ids().map_or(0, |ids| ids.len()),
     }
 }
 
@@ -273,4 +284,25 @@ impl Account {
             }
         }
     }
+}
+
+impl Account {
+    /// Set or clear the `m.favourite` tag; the room list updates through sync.
+    pub async fn set_favourite(&self, room_id: &str, favourite: bool) -> Result<(), RoomError> {
+        let room = matrix_sdk::ruma::RoomId::parse(room_id)
+            .ok()
+            .and_then(|id| self.client.get_room(&id))
+            .ok_or(RoomError::Unavailable)?;
+        room.set_is_favourite(favourite, None)
+            .await
+            .map_err(|_| RoomError::Tag)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RoomError {
+    #[error("room_unavailable")]
+    Unavailable,
+    #[error("room_tag_failed")]
+    Tag,
 }

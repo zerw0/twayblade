@@ -61,11 +61,22 @@ open "target/debug/bundle/Matrix Client.app"
 ```
 
 The build helper reuses a running instance for a normal launch. Offline previews
-launch separately. Development bundles use ad-hoc signing, whose designated
-requirement contains the binary hash; changing the binary can cause macOS to
-request Keychain access again. Use Always Allow for this app's session item to
-remember permission for the current build. Stable signing across builds remains
-packaging work; do not grant access to all applications.
+launch separately.
+
+Ad-hoc signatures change with every build, so macOS asks for Keychain access
+again after each rebuild. Create a local signing identity once:
+
+```sh
+bash macos/create-dev-certificate.sh
+```
+
+It adds a self-signed "Matrix Client Development" code-signing certificate to
+your login keychain (it never leaves this Mac and is not valid for
+distribution). `macos/build.sh` then signs with it automatically, or with
+`MATRIX_CLIENT_SIGN_IDENTITY` when set. Approve the first prompt with Always
+Allow for this app's session item; later builds keep the same designated
+requirement and stop prompting. Do not grant access to all applications.
+Without the identity, the build falls back to ad-hoc signing and prints a hint.
 
 A normal launch restores the saved Keychain session. A second instance refuses
 to start. Use a dedicated test account for connected development. An unavailable keychain is an error; there is
