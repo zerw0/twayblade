@@ -50,6 +50,12 @@ pub(super) struct MatrixApp {
     pub accent_picker: Entity<color_picker::ColorPickerState>,
     pub font_selectors: [Entity<select::SelectState<select::SearchableVec<String>>>; 3],
     pub settings_status: String,
+    pub notification_busy: bool,
+    pub notification_keyword: Entity<InputState>,
+    pub notification_sample: bool,
+    pub notification_window_active: bool,
+    pub last_notification_click: u64,
+    pub notification_thread: Option<(String, String)>,
     pub account_name: Option<Entity<InputState>>,
     pub account_edit_busy: bool,
     pub snapshot: Snapshot,
@@ -196,7 +202,11 @@ impl MatrixApp {
             this.latest_visible = None;
             cx.notify();
         }));
-        subscriptions.push(cx.observe_window_activation(window, |_, _, cx| cx.notify()));
+        subscriptions.push(cx.observe_window_activation(window, |this, window, cx| {
+            this.notification_window_active = window.is_window_active();
+            this.notification_config();
+            cx.notify();
+        }));
         if !preview {
             subscriptions.push(cx.observe_window_appearance(window, |_, window, cx| {
                 Theme::sync_system_appearance(Some(window), cx);
@@ -285,6 +295,12 @@ impl MatrixApp {
                 "Preferences could not be read or backed up; saving is disabled to preserve the original file.".into()
             },
             account_name: None,
+            notification_busy: false,
+            notification_sample: false,
+            notification_window_active: window.is_window_active(),
+            last_notification_click: 0,
+            notification_thread: None,
+            notification_keyword: cx.new(|cx| InputState::new(window, cx).placeholder("Keyword")),
             account_edit_busy: false,
             navigation: Navigation {
                 selected_space: (preview && !home).then(|| "design".into()),
@@ -385,6 +401,7 @@ impl MatrixApp {
                 match result {
                     Ok((snapshot, backend)) => {
                         this.backend = Some(backend.clone());
+                        this.notification_config();
                         this.status = if snapshot.user_id.is_empty() {
                             "Sign in to your homeserver.".into()
                         } else {
@@ -456,6 +473,7 @@ impl MatrixApp {
         if self.snapshot.user_id != snapshot.user_id
             || self.snapshot.account_instance != snapshot.account_instance
         {
+            self.notification_thread = None;
             self.own_avatar = None;
             if !snapshot.user_id.is_empty()
                 && let Some(backend) = self.backend.clone()
@@ -476,6 +494,9 @@ impl MatrixApp {
             }
             self.account_name = None;
             self.account_edit_busy = false;
+            self.notification_busy = false;
+            self.notification_keyword
+                .update(cx, |input, cx| input.set_value("", window, cx));
             self.emoji_picker = None;
             self.clear_attachment();
             self.security_key = None;
@@ -590,6 +611,14 @@ impl MatrixApp {
         self.update_thread(snapshot.thread.as_ref(), cx);
         self.groups = groups;
         self.snapshot = snapshot;
+        self.notification_config();
+        if let Some((serial, target)) = self.snapshot.notification_click.clone()
+            && serial != self.last_notification_click
+        {
+            self.last_notification_click = serial;
+            self.activate_notification(target, window, cx);
+        }
+        self.open_pending_notification_thread(window, cx);
         self.refresh_viewer(window, cx);
         cx.notify();
     }
@@ -809,6 +838,46 @@ impl MatrixApp {
         cx.notify();
     }
 
+    pub(super) fn activate_notification(
+        &mut self,
+        target: matrix_client_platform::notifications::Activation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if target.account != self.snapshot.account_instance
+            || !self
+                .snapshot
+                .rooms
+                .iter()
+                .any(|room| room.id == target.room)
+        {
+            return;
+        }
+        self.navigation.selected_space = None;
+        self.select_room(target.room.clone(), window, cx);
+        cx.activate(true);
+        window.activate_window();
+        self.notification_sample = false;
+        self.notification_thread = target.thread.map(|root| (target.room, root));
+        self.open_pending_notification_thread(window, cx);
+        cx.notify();
+    }
+
+    fn open_pending_notification_thread(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((room, _)) = &self.notification_thread else {
+            return;
+        };
+        if self.navigation.selected_room.as_ref() != Some(room) {
+            self.notification_thread = None;
+            return;
+        }
+        if self.snapshot.selected_room != *room || !self.snapshot.timeline_ready {
+            return;
+        }
+        let (_, root) = self.notification_thread.take().expect("pending thread");
+        self.open_thread_event(root, window, cx);
+    }
+
     pub fn select_room(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
         self.management = None;
         cx.notify();
@@ -819,6 +888,7 @@ impl MatrixApp {
         self.clear_attachment();
         self.reset_pagination();
         self.navigation.selected_room = Some(id.clone());
+        self.notification_config();
         self.groups.clear();
         self.snapshot.messages.clear();
         self.snapshot.timeline_ready = false;

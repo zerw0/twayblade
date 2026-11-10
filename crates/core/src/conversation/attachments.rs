@@ -432,6 +432,8 @@ mod integration {
                 assert!(room.encryption_state().is_encrypted());
             }
             let conversation = Conversation {
+                read_updates: None,
+                root: None,
                 timeline: Arc::new(checked(room.timeline().await, "timeline")),
             };
             let data = b"isolated attachment round trip".to_vec();
@@ -579,6 +581,8 @@ mod integration {
             restored.send_queue().set_enabled(true).await;
             let room = restored.get_room(&room_id).expect("restored room");
             let conversation = Conversation {
+                read_updates: None,
+                root: None,
                 timeline: Arc::new(checked(room.timeline().await, "restored timeline")),
             };
             let id = row(&conversation, "restart.txt").await;
@@ -666,6 +670,8 @@ mod integration {
                 assert!(room.encryption_state().is_encrypted());
             }
             let conversation = Conversation {
+                read_updates: None,
+                root: None,
                 timeline: Arc::new(checked(room.timeline().await, "timeline")),
             };
 

@@ -16,6 +16,7 @@ use matrix_sdk_ui::timeline::{
 use std::sync::Arc;
 
 mod attachments;
+mod unread;
 mod viewer;
 pub use attachments::{AttachmentDraft, AttachmentError, sanitize_filename};
 pub use viewer::{ImageError, ViewerImage, decode_viewer_image};
@@ -121,6 +122,8 @@ pub enum ConversationError {
 #[derive(Clone)]
 pub struct Conversation {
     timeline: Arc<Timeline>,
+    read_updates: Option<tokio::sync::broadcast::Sender<(String, Option<String>)>>,
+    root: Option<String>,
 }
 
 #[derive(Clone)]
@@ -177,7 +180,14 @@ impl Conversation {
             )
             .await
             .map(|_| ())
-            .map_err(|_| ConversationError::Receipt)
+            .map_err(|_| ConversationError::Receipt)?;
+        if let Some(updates) = &self.read_updates {
+            let _ = updates.send((
+                self.timeline.room().room_id().to_string(),
+                self.root.clone(),
+            ));
+        }
+        Ok(())
     }
 
     pub async fn unread(&self, root: &str) -> Result<u64, ConversationError> {
@@ -491,25 +501,6 @@ fn fetch_reply_details<'a>(
     }
 }
 
-async fn projected_rows(
-    timeline: &Arc<Timeline>,
-    items: impl Iterator<Item = &Arc<TimelineItem>>,
-    own_user: &UserId,
-) -> Vec<MessageRow> {
-    let mut messages = rows(items, own_user);
-    let conversation = Conversation {
-        timeline: timeline.clone(),
-    };
-    for message in &mut messages {
-        if message.thread_replies > 0
-            && let Some(id) = &message.event_id
-        {
-            message.thread_unread = conversation.unread(id).await.unwrap_or(0);
-        }
-    }
-    messages
-}
-
 impl Account {
     pub fn select_room(&self, room: Option<&str>) {
         let id = room.and_then(|id| RoomId::parse(id).ok());
@@ -567,11 +558,43 @@ impl Account {
                     yield snapshot; return;
                 }
             };
-            let conversation = Conversation { timeline: timeline.clone() };
+            let conversation = Conversation {
+                timeline: timeline.clone(),
+                read_updates: Some(account.thread_read_updates.clone()), root: root.clone(),
+            };
+            let mut read_updates = account.thread_read_updates.subscribe();
+            let handler = account.client.add_event_handler({
+                let sender = account.thread_read_updates.clone();
+                let own = account.client.user_id().expect("authenticated account").to_owned();
+                let room_id = room_id.clone();
+                move |event: matrix_sdk::ruma::events::receipt::SyncReceiptEvent, room: matrix_sdk::Room| {
+                    let sender = sender.clone(); let own = own.clone(); let room_id = room_id.clone();
+                    async move {
+                        if room.room_id().as_str() != room_id { return; }
+                        use matrix_sdk::ruma::events::receipt::{ReceiptType, ReceiptThread};
+                        for receipts in event.content.values() {
+                            for (kind, users) in receipts {
+                                if !matches!(kind, ReceiptType::Read | ReceiptType::ReadPrivate) { continue; }
+                                if let Some(receipt) = users.get(&own) {
+                                    match &receipt.thread {
+                                        ReceiptThread::Thread(root) => { let _ = sender.send((room_id.clone(), Some(root.to_string()))); }
+                                        ReceiptThread::Unthreaded => { let _ = sender.send((room_id.clone(), None)); }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            let _receipt_guard = account.client.event_handler_drop_guard(handler);
+            let mut unread_cache = unread::UnreadCache::default();
+            let mut unread_tasks = tokio::task::JoinSet::new();
             let (mut items, updates) = timeline.subscribe().await;
-            snapshot.conversation = Some(conversation);
-            snapshot.messages = projected_rows(&timeline, items.iter(), account.client.user_id().expect("authenticated account")).await;
-            if let Some(root) = &root { snapshot.unread = snapshot.conversation.as_ref().expect("timeline").unread(root).await.unwrap_or(0); }
+            snapshot.conversation = Some(conversation.clone());
+            snapshot.messages = rows(items.iter(), account.client.user_id().expect("authenticated account"));
+            unread_cache.project(&mut snapshot.messages, root.as_deref());
+            if let Some(root) = &root { snapshot.unread = unread_cache.value(root); }
             snapshot.status = TimelineStatus::Ready;
             yield snapshot.clone();
             let mut updates = Box::pin(updates);
@@ -592,11 +615,33 @@ impl Account {
             let mut detail_tasks = tokio::task::JoinSet::new();
             loop {
                 fetch_reply_details(&timeline, items.iter(), &mut attempted, &mut detail_tasks);
+                unread_cache.schedule(&conversation, &mut unread_tasks);
                 tokio::select! {
+                    result = unread_tasks.join_next(), if !unread_tasks.is_empty() => {
+                        if let Some(Ok(result)) = result {
+                            unread_cache.complete(result);
+                            unread_cache.project(&mut snapshot.messages, root.as_deref());
+                            if let Some(root) = &root { snapshot.unread = unread_cache.value(root); }
+                            yield snapshot.clone();
+                        }
+                    }
+                    change = read_updates.recv() => {
+                        match change {
+                            Ok((changed_room, changed_root)) if changed_room == room_id => unread_cache.invalidate(changed_root.as_deref()),
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => unread_cache.invalidate(None),
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                            _ => continue,
+                        }
+                        unread_cache.project(&mut snapshot.messages, root.as_deref());
+                        if let Some(root) = &root { snapshot.unread = unread_cache.value(root); }
+                        yield snapshot.clone();
+                    }
                     change = cache_updates.recv() => {
                         if matches!(change, Err(tokio::sync::broadcast::error::RecvError::Closed)) { break; }
-                        snapshot.messages = projected_rows(&timeline, items.iter(), account.client.user_id().expect("authenticated account")).await;
-                        if let Some(root) = &root { snapshot.unread = snapshot.conversation.as_ref().expect("timeline").unread(root).await.unwrap_or(0); }
+                        if let Ok(change) = change && change.room_id != room.room_id() { continue; }
+                        snapshot.messages = rows(items.iter(), account.client.user_id().expect("authenticated account"));
+            unread_cache.project(&mut snapshot.messages, root.as_deref());
+                        if let Some(root) = &root { snapshot.unread = unread_cache.value(root); }
                         yield snapshot.clone();
                     }
                     result = initial_page.join_next(), if initial_pending => {
@@ -628,8 +673,9 @@ impl Account {
                     next = updates.next() => {
                         let Some(diffs) = next else { break; };
                         for diff in diffs { diff.apply(&mut items); }
-                        snapshot.messages = projected_rows(&timeline, items.iter(), account.client.user_id().expect("authenticated account")).await;
-            if let Some(root) = &root { snapshot.unread = snapshot.conversation.as_ref().expect("timeline").unread(root).await.unwrap_or(0); }
+                        snapshot.messages = rows(items.iter(), account.client.user_id().expect("authenticated account"));
+            unread_cache.project(&mut snapshot.messages, root.as_deref());
+            if let Some(root) = &root { snapshot.unread = unread_cache.value(root); }
                         yield snapshot.clone();
                     }
                 }

@@ -72,6 +72,9 @@ impl SavedSession {
 #[derive(Clone)]
 pub struct Account {
     pub(crate) client: Client,
+    pub(crate) thread_read_updates: tokio::sync::broadcast::Sender<(String, Option<String>)>,
+    pub(crate) notification_service:
+        tokio::sync::watch::Sender<Option<Arc<matrix_sdk_ui::sync_service::SyncService>>>,
     pub(crate) selected_room: tokio::sync::watch::Sender<Option<matrix_sdk::ruma::OwnedRoomId>>,
     pub(crate) sync_requests:
         Arc<Mutex<std::collections::HashMap<matrix_sdk::ruma::OwnedRoomId, usize>>>,
@@ -106,6 +109,8 @@ impl Account {
         let (session_state, monitor) = recovery::monitor(&client);
         Self {
             client,
+            thread_read_updates: tokio::sync::broadcast::channel(32).0,
+            notification_service: tokio::sync::watch::channel(None).0,
             selected_room: tokio::sync::watch::channel(None).0,
             sync_requests: Arc::new(Mutex::new(std::collections::HashMap::new())),
             sync_request_updates: tokio::sync::watch::channel(Vec::new()).0,

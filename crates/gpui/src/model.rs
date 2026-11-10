@@ -116,6 +116,12 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
             can_add_rooms: true,
             room_ids: ["general".into(), "research".into()].into_iter().collect(),
         }],
+        notifications: matrix_client_core::notifications::RulesSnapshot {
+            ready: true,
+            defaults: [matrix_client_core::notifications::DefaultLevel::All; 4],
+            keywords: vec!["Matrix".into(), "release".into()],
+            ..Default::default()
+        },
         rooms: vec![
             Room {
                 id: "general".into(),

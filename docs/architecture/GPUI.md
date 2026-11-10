@@ -30,7 +30,7 @@ backend graph constrains those versions. No web/JavaScript shell is used for cha
 - `gpui/theme.rs`: product semantic colors and typography. UI code reads theme
   roles; source palette literals are confined to the theme definition.
 
-`preferences.rs` owns versioned, serde-defaulted frontend JSON in the OS config directory. Invalid/unknown files are preserved as `.bak`; a failed backup disables writes. File replacement is atomic and background saves reject stale revisions. Settings shares the main entity in one separate window; Security entry is discarded on exit. Semantic themes and one logical-pixel helper apply appearance without replacing drafts or scrollers. Notification rules/delivery remain unimplemented; no local preference simulates a server rule.
+`preferences.rs` owns versioned, serde-defaulted frontend JSON in the OS config directory. Invalid/unknown files are preserved as `.bak`; a failed backup disables writes. File replacement is atomic and background saves reject stale revisions. Settings shares the main entity in one separate window; Security entry is discarded on exit. Semantic themes and one logical-pixel helper apply appearance without replacing drafts or scrollers. Notification rules use core SDK NotificationSettings and subscribed account-data snapshots; local preferences never simulate server rules. Core queues SDK sync candidates and uses NotificationClient with the active SyncService for decryption/filtering. Frontend wording and local device preferences feed platform notification adapters; bounded response work routes clicks through account/selection guards. Native OS acceptance remains pending.
 
 Each visited room retains its own Textarea state and subscription. Events capture
 the room ID and read that room's input entity, so delayed changes cannot overwrite
@@ -59,8 +59,10 @@ sidebar, quiet header, grouped messages, rounded composer and a dismissible
 profile inspector. Use system font selection, the system accent, semantic
 surfaces and standard window decorations. The product palette follows light/dark appearance and the OS accent. macOS reads
 AppKit controlAccentColor; Windows uses UISettings; Linux uses the desktop portal.
-A background read updates primary/selection roles within two seconds; unavailable
-accent data uses the fallback in theme.rs. This is not Liquid Glass or AppKit widgets.
+A background read updates primary/selection roles within two seconds. Linux reads
+a process cache populated by portal signals on one retained connection/runtime;
+older portals use the same proxy for fallback polling. Unavailable accent data
+uses the fallback in theme.rs. This is not Liquid Glass or AppKit widgets.
 
 The user-requested UI/UX Pro Max skill is installed repo-locally at the revision
 in AGENTS.md. Its Apple Native Experience and icon-semantics results inform the
@@ -107,8 +109,10 @@ Emoji search, cursor ranges and recents are frontend state; reactions use core.
 Thread panels retain their own composer and scroller. SDK thread focus owns relation
 encoding, pagination and unread state; main timelines hide threaded events. Public
 receipts infer Main/thread scope from the SDK timeline; only the main timeline moves
-the fully-read marker. Room badges use SDK server totals without adding thread counts
-a second time. Initial pagination uses a selection-scoped JoinSet so it progresses
+the fully-read marker. Room badges retain SDK server totals and fall back to SDK-computed notification
+counts when the server total is absent or lagging; thread counts are never added
+a second time. Changed SDK room events refresh cached summaries even when the
+room list order is unchanged. Initial pagination uses a selection-scoped JoinSet so it progresses
 even while a snapshot consumer awaits another page.
 
 Space directories and leave plans wrap SDK services; the UI receives typed room,

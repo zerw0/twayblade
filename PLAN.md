@@ -1,6 +1,6 @@
 # Native Rust Matrix client — plan
 
-Updated 2026-11-10. Status: M0 in progress; no milestone exit claimed.
+Updated 2026-11-11. Status: M0 in progress; no milestone exit claimed.
 
 ## Goal
 
@@ -94,8 +94,8 @@ action.
 menu Matrix Client › Settings…) with a sidebar of sections. Every change
 previews live, and each section has Reset to Defaults.
 
-- *Notifications.* Default level for DMs, group rooms and encrypted rooms (all
-  messages, mentions and keywords, off), keyword list, and per-room overrides
+- *Notifications.* Default level for DMs and group rooms, encrypted and unencrypted (all
+  messages or mentions and keywords; mute is a per-room override), keyword list, and per-room overrides
   from the room's context menu and details panel, all via the SDK's
   notification settings (server push rules). Native OS notifications
   (macOS UserNotifications, Linux freedesktop, Windows toasts) with sound,
@@ -137,13 +137,6 @@ credentials and explicit authorization.
 
 ## Known technical debt
 
-- Thread unread counts: every timeline update recomputes the unread count of
-  every thread root, one at a time, before the snapshot reaches the UI
-  (`projected_rows` → `Conversation::unread`, crates/core/src/conversation.rs).
-  It doesn't block rendering, but it delays every update in rooms with many
-  threads. Cache per root; recompute only when that thread gets a reply or
-  your receipt changes.
-
 - Message text is escaped and passed through Kit's Markdown renderer to get
   selectable text. Replace with a plain selectable-text element when available.
 - Release credential entry is separate from debug; release migration and
@@ -162,9 +155,10 @@ Linux and Windows CI passed on `36f850a`; macOS CI was switched to `macos-15`
    Element and physical acceptance covers thread view and replies, space
    join/leave, room directory, invites, room creation; full-size image
    viewer with zoom, pan and next/previous.
-4. **M4 settings and appearance.** Done except notifications: Settings window,
-   UI scaling, fonts, colour schemes, chat styles, avatars. Next: notification
-   rules and native delivery (M4 task 5), plus the thread-unread caching debt.
+4. **M4 settings and appearance.** Local implementation includes Settings,
+   appearance, chat styles, server notification rules and native delivery adapters.
+   Notification OS permission/delivery/click/badge acceptance and Element comparison
+   remain. Linux accent observation now retains its portal connection.
 5. **M5 calls.** Element Call runtime, direct and group calls.
 6. **M6 release.** Accessibility pass, packaging, signing, updates.
 
@@ -360,6 +354,26 @@ Chat styles, avatars and performance (2026-11-10, after operator screenshots):
   copied and hashed every frame. Dependencies are optimised in dev builds and
   `macos/build.sh --release` builds the optimised app.
 
+Thread unread caching — Notifications Task 1 (2026-11-10):
+- Per-selection root/reply-count cache; four concurrent SDK queries, immediate cached/zero snapshots and follow-up counts. Own public/private receipts and explicit mark-read invalidate; stale results are rejected and selection drop cancels work.
+- Locked fmt/strict all-feature Clippy and 91 workspace tests pass, including a counting stub, invalidation, focused-root and bound/eviction regressions. The isolated `threads_send_paginate_receipts_and_closed_unread` passes on Synapse 1.164.2 (`matrixclient.test`).
+- Offline thread controls pass; reviewed `captures/notifications-thread-{light,dark}.png` sample captures. Physical checks remain: real-account thread counts versus Element and long-history scrolling.
+
+Notification rules — Notifications Task 2 (2026-11-10):
+- SDK server defaults for four room classes (All/Mentions only), keywords and Default/All/Mentions/Mute overrides; subscribed cross-client updates, grouped Settings, details controls, room context menu and muted badges. Edits use fresh SDK views, bounded idempotent retries and sync confirmation. Changed room summaries refresh SDK notification counts, preserving higher server totals without adding thread counts.
+- Locked fmt/strict all-feature Clippy and 92 workspace tests pass; control-driven Settings/keyword/details/context-menu test passes. Reviewed release `captures/notification-{rules,room}-{light,dark}.png` sample captures.
+- `notification_rules_round_trip_and_second_client_changes` passes on isolated Synapse 1.164.2 (`matrixclient.test`), including muted unread exclusion. Physical checks: rules shown in Element, real sidebar/details/menu and keyboard/VoiceOver. Native delivery follows in Task 3.
+
+Notification delivery — Notifications Task 3 (2026-11-11):
+- Bounded SDK sync intake and NotificationClient decryption; own/muted/active-room suppression, guarded room/thread clicks and persisted local enable/sound/preview/badge controls. macOS UserNotifications (bundle detection/permission), persistent Linux D-Bus and Windows toast adapters; OS Focus remains authoritative.
+- Locked fmt/strict all-feature Clippy and 97 workspace tests pass, including unbundled behavior, skip/privacy rules and device/click controls. `encrypted_notification_delivery_and_private_preview` passes on isolated Synapse 1.164.2 (`matrixclient.test`); reviewed release `captures/notification-{delivery,private,device}-{light,dark}.png` samples.
+- Operator checks: permission grant/deny/settings link and real delivery/click-to-room/thread, sound, preview, Focus and badge from the release .app. Linux/Windows builds/runtime, desktop badge support, Windows installed app identity and cold-launch activation remain unverified; current callbacks are scoped to the running account/process.
+
+Linux accent observation — Notifications Task 4 (2026-11-11):
+- One process worker owns the portal connection/runtime, subscribes to accent changes and caches RGB. Unsupported signals fall back to queries through the same proxy; a disconnected bus retries with backoff. ashpd's settings feature is explicit.
+- Locked fmt/strict all-feature Clippy and 97 workspace tests pass; actual portal and Linux notification source typechecked in a macOS harness (not a Linux build). Reviewed release `captures/notification-accent-{light,dark}.png` samples; no new Matrix-server check applies.
+- Operator checks: Linux portal accent transitions, missing-setting fallback, connection count and bus/portal restart. Linux/Windows builds and physical execution remain pending.
+
 Not yet verified:
 - Physical GUI checks of logout, pagination, IME and VoiceOver.
 - CI on any host; Linux and Windows builds and runs.
@@ -371,7 +385,7 @@ Evidence log: `docs/compatibility/STATUS.md`. Architecture: `docs/architecture/G
 
 ```text
 crates/core/        Matrix services, auth, sync, timelines (owns all Matrix state)
-crates/platform/    OS credential store (later: notifications, deep links)
+crates/platform/    OS credentials, notifications, appearance (later: deep links)
 crates/gpui/        GPUI + GPUI Kit frontend
 macos/              Development .app bundle helper
 tests/integration/  Isolated Synapse fixture

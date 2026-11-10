@@ -14,6 +14,7 @@ pub(super) struct Preferences {
     pub version: u32,
     pub appearance: Appearance,
     pub chat: Chat,
+    pub notifications: DeviceNotifications,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -21,6 +22,26 @@ impl Default for Preferences {
             version: VERSION,
             appearance: Default::default(),
             chat: Default::default(),
+            notifications: Default::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct DeviceNotifications {
+    pub enabled: bool,
+    pub sound: bool,
+    pub preview: bool,
+    pub badge: bool,
+}
+impl Default for DeviceNotifications {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            sound: true,
+            preview: true,
+            badge: true,
         }
     }
 }
@@ -208,6 +229,10 @@ mod tests {
         custom.appearance.message_font = Some("Saved family".into());
         custom.appearance.accent = Some([17, 55, 99]);
         custom.chat.style = ChatStyle::Irc;
+        custom.notifications.enabled = true;
+        custom.notifications.preview = false;
+        custom.notifications.sound = false;
+        custom.notifications.badge = false;
         custom.save(&path).unwrap();
         assert_eq!(Preferences::load(&path).unwrap(), custom);
         for invalid in ["corrupt", "{\"version\":999}", "{\"unknown\":true}"] {

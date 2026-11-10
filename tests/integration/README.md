@@ -170,3 +170,9 @@ bytes, explicit original-byte save and cancellation. It checks that viewer fetch
 do not put decrypted content in the SDK media cache. Offline GPUI tests cover
 keyboard, focus, clipboard, gestures and save prompts; native application opening,
 physical animation and Element interoperability still need operator acceptance.
+
+Notification checks use the same isolated Synapse fixture and generated accounts:
+`bash tests/integration/run.sh notifications` covers SDK defaults, keywords, room
+modes, muted unread exclusion and second-client observation;
+`bash tests/integration/run.sh notification-delivery` checks SDK-decrypted encrypted
+items and private previews. Neither establishes native OS delivery or Element acceptance.

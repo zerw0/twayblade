@@ -1,12 +1,12 @@
 # Compatibility evidence
 
-Updated 2026-11-10. Records what has actually been run, per platform. Compile
+Updated 2026-11-11. Records what has actually been run, per platform. Compile
 checks, offline UI tests, isolated-server tests and live/physical acceptance are
 listed separately. Earlier Iced/SwiftUI evidence was removed with those frontends.
 
 | Check | macOS arm64 | Linux | Windows |
 | --- | --- | --- | --- |
-| fmt / Clippy (`-D warnings`) / unit tests | Pass locally (Rust 1.99; locked/all features; 85 tests) | Not run | Not run |
+| fmt / Clippy (`-D warnings`) / unit tests | Pass locally (Rust 1.99; locked/all features; 97 tests) | Not run | Not run |
 | CI (`.github/workflows/check.yml`) | Never observed passing | Never observed passing | Never observed passing |
 | GPUI build and launch | Pass; ad-hoc `.app` launches | Not run | Not run |
 | Offline previews and Kit interaction tests | Pass; light/dark workspace, Home, profile, sign-in, details and 10k captures; Kit interaction/layout tests | Not run | Not run |
@@ -57,7 +57,18 @@ listed separately. Earlier Iced/SwiftUI evidence was removed with those frontend
 | Chat styles (M4 Task 4) | Bubbles/IRC/Minimal in timelines/threads; density, avatars, timestamps and SDK edit state; locked fmt/strict Clippy/85 tests pass | Not run | Not run |
 | Styles offline UI (M4 Task 4) | Control-driven visible-ID/room/draft/anchor/thread/action retention; deleted/edited states; `captures/style-{bubbles,irc,minimal}-{light,dark}.png` plus attachment/thread samples | Not run | Not run |
 | Styles physical checks (M4 Task 4) | Pending: keyboard/VoiceOver, long histories, encrypted media and thread interactions | Not run | Not run |
-| Notifications (M4 Task 5) | Not implemented; SDK push rules, decrypted delivery, native OS API and fixture acceptance remain | Not run | Not run |
+| Thread unread cache (Notifications Task 1) | Immediate cached/zero snapshots; four concurrent queries; own receipts/mark-read invalidation and stale-result guards; locked fmt/strict Clippy/91 workspace tests pass | Not run | Not run |
+| Thread cache offline UI (Notifications Task 1) | Existing thread controls pass; reviewed `captures/notifications-thread-{light,dark}.png` sample captures | Not run | Not run |
+| Thread cache physical checks (Notifications Task 1) | Pending: real-account counts versus Element and long-history scrolling | Not run | Not run |
+| Notification rules (Notifications Task 2) | SDK defaults/keywords/room modes and cross-client subscription; real unread/mute exclusion, SDK count fallback and sync-safe retries; stage fmt/strict Clippy/92 tests pass (final suite: 97) | Not run | Not run |
+| Rules offline UI (Notifications Task 2) | Settings/keywords/details/context-menu controls pass; reviewed release `captures/notification-{rules,room}-{light,dark}.png` samples | Not run | Not run |
+| Rules physical checks (Notifications Task 2) | Pending: Element rules comparison, real room details/menu, keyboard/VoiceOver | Not run | Not run |
+| Notification delivery (Notifications Task 3) | SDK NotificationClient decryption, bounded intake/responses, own/mute/focus suppression; locked fmt/strict Clippy/97 workspace tests pass | D-Bus source typechecked on macOS; Linux build/runtime not run | Toast adapter source; not compiled/run |
+| Delivery offline UI (Notifications Task 3) | Device switches/persistence, private preview, stale-account guards and thread click pass; reviewed release `captures/notification-{delivery,private,device}-{light,dark}.png` samples | Not run | Not run |
+| Delivery physical checks (Notifications Task 3) | Pending: release .app permission grant/deny, System Settings, real room/thread click, sound, previews, Focus and Dock badge | Pending: daemon/actions, desktop badge support and permissions | Pending: installed app identity, toast activation and taskbar badge |
+| Notification activation after process exit (Notifications Task 3) | Pending release work; callbacks currently belong to the running account/process | Pending | Pending |
+| Portal accent worker (Notifications Task 4) | Locked fmt/strict Clippy/97 tests pass; light/dark release workspace samples reviewed in `captures/notification-accent-{light,dark}.png` | Persistent portal/runtime, signal cache and same-connection fallback; source typechecked on macOS; Linux build/runtime not run | Unchanged; not run |
+| Accent physical checks (Notifications Task 4) | System appearance/accent transition check pending | Pending: portal changes, missing setting, connection count and bus/portal restart | Not run |
 | Element interoperability (E2EE) | Pending | Pending | Pending |
 | IME, VoiceOver/screen reader, keyboard focus | Pending | Pending | Pending |
 | Element Call | Not implemented | — | — |
@@ -112,6 +123,9 @@ against Synapse v1.164.2 with generated accounts only:
 | `timeline_metadata_and_send_queue_actions` (Task 6 regression) | Synapse 1.164.2: existing SDK Unicode reaction add/remove and stable timeline identity pass after shared picker integration |
 | `encrypted_delivery_profile_and_same_device_store_restore` (M4 Task 1) | Synapse 1.164.2, `matrixclient.test`, loopback TLS: core SDK display-name update, bounded avatar upload/removal, profile and encrypted delivery/store reopen pass |
 | `timeline_metadata_and_send_queue_actions` (M4 Task 4) | Synapse 1.164.2, `matrixclient.test`: existing SDK metadata and send-queue regression passes after edit-state projection |
+| `threads_send_paginate_receipts_and_closed_unread` (Notifications Task 1) | Synapse 1.164.2, `matrixclient.test`: SDK send/pagination/scoped receipts, main filtering and closed-thread unread pass with deferred unread snapshots |
+| `notification_rules_round_trip_and_second_client_changes` (Notifications Task 2) | Synapse 1.164.2, `matrixclient.test`: four defaults round-trip, keyword add/remove, room modes/reset, actual Bob-message unread then mute exclusion and second-client observation pass |
+| `encrypted_notification_delivery_and_private_preview` (Notifications Task 3) | Synapse 1.164.2, `matrixclient.test`: second-client encrypted event stored as ciphertext; SDK resolver emits decrypted typed room/sender/body, preview-off removes sender/avatar/body; pass |
 
 ## Operator reports (not independently reproduced)
 
