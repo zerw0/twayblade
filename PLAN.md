@@ -88,16 +88,19 @@ credentials and explicit authorization.
 
 ## Next steps (in order)
 
-1. **Close M0: CI green on macOS, Linux and Windows.** Push a branch, read the
-   GitHub Actions results, fix platform build/test failures. No new features
-   until this passes.
-2. **M1: OAuth/OIDC first**, then legacy SSO, then token refresh and
-   revoked-session recovery. Servers using Matrix Authentication Service may not
-   offer password login at all, so this is on the critical path for real users.
-3. **M2 starts with verification and key recovery**, not attachments: without
-   cross-signing verification and backup restore, an existing account sees
-   history as "Unable to decrypt", which makes the client unusable for E2EE users.
-   Then attachments, then emoji picker.
+Decision 2026-11-10: build the full application first; CI is not a gate for now.
+Linux and Windows CI passed on `36f850a`; macOS CI was switched to `macos-15`
+(the `macos-14` image is retired) and its result has not been checked.
+
+1. **M1 authentication.** OAuth/OIDC (MAS servers may not offer passwords),
+   legacy SSO, token refresh, revoked-session recovery.
+2. **M2 encryption usability.** Cross-signing setup, device verification
+   (emoji/SAS), key backup and recovery-key restore, then attachments
+   (send/receive, encrypted media, previews) and the emoji picker.
+3. **M3 spaces and threads.** Thread view and replies, space join/leave,
+   room directory, invites, room creation.
+4. **M4 calls.** Element Call runtime, direct and group calls.
+5. **M5 desktop polish.** Notifications, settings, packaging.
 
 ## Progress
 
