@@ -6,7 +6,7 @@ listed separately. Earlier Iced/SwiftUI evidence was removed with those frontend
 
 | Check | macOS arm64 | Linux | Windows |
 | --- | --- | --- | --- |
-| fmt / Clippy (`-D warnings`) / unit tests | Pass locally (Rust 1.99; locked/all features; 26 tests) | Not run | Not run |
+| fmt / Clippy (`-D warnings`) / unit tests | Pass locally (Rust 1.99; locked/all features; 50 tests) | Not run | Not run |
 | CI (`.github/workflows/check.yml`) | Never observed passing | Never observed passing | Never observed passing |
 | GPUI build and launch | Pass; ad-hoc `.app` launches | Not run | Not run |
 | Offline previews and Kit interaction tests | Pass; light/dark workspace, Home, profile, sign-in, details and 10k captures; Kit interaction/layout tests | Not run | Not run |
@@ -14,7 +14,25 @@ listed separately. Earlier Iced/SwiftUI evidence was removed with those frontend
 | Live password sign-in, room list, history | Operator reports GPUI sync/messaging working; homeserver not supplied | Not run | Not run |
 | Live GPUI send, relaunch restore (Keychain), logout | Operator reports send and Keychain restore; isolated cross-process lifecycle including logout/store deletion passes | Not run | Not run |
 | `.well-known` discovery against real servers | Pending | Not run | Not run |
-| OAuth / legacy SSO | Not implemented | — | — |
+| OAuth/OIDC (Task 1) | SDK discovery/registration/PKCE, callback state, cancellation, atomic Keychain session/refresh; isolated MAS lifecycle passes | Not run | Not run |
+| OAuth offline UI (Task 1) | Kit control tests pass; sample waiting screen captured/reviewed light/dark in `captures/oauth-wait-{light,dark}.png` | Not run | Not run |
+| OAuth physical system browser / real homeserver (Task 1) | Operator check pending: browser opens, completes callback and relaunch restores on matrix.org or another OAuth server | Not run | Not run |
+| Legacy SSO (Task 2) | Provider names/icons, shared loopback/state/cancel, SDK loginToken exchange; full local OIDC flow/restore/logout passes | Not run | Not run |
+| Legacy SSO offline UI (Task 2) | Provider controls and callback/icon-limit tests pass; reviewed `captures/sso-{light,dark}.png` samples | Not run | Not run |
+| Legacy SSO physical browser / real IdP (Task 2) | Operator check pending: provider button, system browser, callback completion on a real SSO server | Not run | Not run |
+| Session recovery (Task 3) | Typed soft/hard revocation, sync shutdown, same-device/store reauth, confirmed hard cleanup; isolated Synapse check passes | Not run | Not run |
+| Session recovery offline UI (Task 3) | Confirmation/cancel and soft-retention controls pass; reviewed `captures/{signed-out,soft-logout}-{light,dark}.png` | Not run | Not run |
+| Session recovery physical UI/browser (Task 3) | Operator check pending: real revocation prompt, password/browser reauth, hard cleanup confirmation | Not run | Not run |
+| Verification/recovery (Task 4) | SDK setup, SAS, backup restore/live history decryption, wrong-key rejection, cancel, recovery reset and other-device sign-out pass on isolated Synapse | Not run | Not run |
+| Verification/recovery offline UI (Task 4) | Copy/confirm lifetime, recovery exit and SAS controls pass; reviewed `captures/{verify,recovery}-{light,dark}.png` samples | Not run | Not run |
+| Verification/recovery physical/Element (Task 4) | Operator check pending: Element emoji comparison, recovery input/copy, incoming prompt, server browser device management | Not run | Not run |
+| Attachments (Task 5) | SDK encrypted/plain queue, progress/cancel, bounded thumbnails, chosen-location Save/Open and upload limits implemented | Not run | Not run |
+| Attachment offline UI (Task 5) | Explicit save/open/cancel controls pass; reviewed `captures/attachments-{light,dark}.png`, including sample confirmation and thumbnails | Not run | Not run |
+| Attachment physical checks (Task 5) | Pending: native picker, drag/drop, clipboard images and interruption during an active HTTP upload; queued-store restart is automated | Not run | Not run |
+| Emoji picker (Task 6) | Search/shortcodes, cursor insertion, shared reactions, keyboard controls, skin tones and bounded persistent recents; Unicode 15.x baseline | Not run | Not run |
+| Emoji offline UI (Task 6) | Unicode cursor/Return/shortcode/tone/reaction control tests pass; reviewed `captures/emoji-{light,dark}.png` samples | Not run | Not run |
+| Emoji physical checks (Task 6) | Pending: IME, VoiceOver, native keyboard and per-platform emoji fonts; Synapse SDK reaction regression passes | Not run | Not run |
+| System accent | Native AppKit read, actual light/dark theme updates and contrast tests pass; light/dark sample captures reviewed; live system-setting change pending | Desktop portal implementation; not run | UISettings implementation; not run |
 | Element interoperability (E2EE) | Pending | Pending | Pending |
 | IME, VoiceOver/screen reader, keyboard focus | Pending | Pending | Pending |
 | Element Call | Not implemented | — | — |
@@ -27,9 +45,8 @@ listed separately. Earlier Iced/SwiftUI evidence was removed with those frontend
   real Keychain storage and the normal auth implementation in separate processes.
   Neither establishes physical UI automation or Element interoperability.
 - The 10,000-message preview is a virtualization smoke test, not a benchmark.
-- Theme contrast: white on outgoing blue 5.59:1 (light) / 4.79:1 (dark);
-  secondary text on sidebar 5.13:1 / 5.89:1. Pairwise only; not a full audit.
-- GPUI controls are custom-rendered. No AppKit widgets, native accent colour,
+- System-accent foreground selection is tested at 4.5:1 or better; composed-state accessibility remains pending.
+- GPUI controls are custom-rendered. No AppKit widgets,
   vibrancy or complete accessibility is claimed.
 
 ## Current limitations
@@ -38,7 +55,7 @@ listed separately. Earlier Iced/SwiftUI evidence was removed with those frontend
 - One account; one running instance per OS user.
 - Logout deletes the local store after revoking the device. If remote revocation
   fails, the session and store are kept so logout can be retried.
-- Token refresh, verification, recovery and key backup are not implemented.
+- OAuth refresh, verification and recovery are implemented; Element interoperability and physical acceptance remain pending.
 
 ## Isolated-server checks
 
@@ -54,6 +71,13 @@ against Synapse v1.164.2 with generated accounts only:
 | `members_typing_and_read_receipts` | Member names/roles, typing start/stop, fully-read marker, receipt seen by another client |
 | `pagination_preserves_message_identity` | 90 messages paginated to history start with stable unique IDs |
 | `room_list_service_tracks_recency_and_details` | RoomListService reordering, name/topic refresh, leave/removal |
+| `oauth_cancel_and_wrong_state_discard_checkpoint` (Task 1) | MAS 1.27.0 / Synapse 1.164.2: cancel and wrong state reject authorization, delete scoped Keychain checkpoint/store, close listener; pass |
+| `oauth_keychain_lifecycle_across_processes` (Task 1) | MAS 1.27.0 / Synapse 1.164.2: generated account, dynamic client ID, S256 PKCE, token exchange, same-device relaunch, automatic expired-token refresh, synchronous Keychain rotation, third-process refresh and logout; pass |
+| `sso_local_oidc_token_exchange_and_restore` (Task 2) | Synapse 1.164.2 with MAS 1.27.0 as local OIDC provider: provider discovery, browser redirects/consent, one-use loginToken exchange, scoped Keychain restore and logout; pass. Internal Docker HTTP metadata validation relaxed only in fixture; browser endpoints use TLS |
+| `revoked_device_and_soft_logout_recovery` (Task 3) | Synapse 1.164.2 (normal and five-second-token fixture): second-client revocation, hard/soft status, clean sync stop, local data retained, invalid-password retry, same-device/store reauth and explicit hard cleanup; pass |
+| `secure_backup_fresh_store_recovery_and_sas` (Task 4) | Synapse 1.164.2, fresh generated account: cross-signing/backup, missing-key timeline, wrong key, fresh-store backup recovery with live re-decryption, SAS between SDK clients, cancelled verification, other-device revocation, reset rejects old key and accepts new key; pass |
+| `attachment_plain_encrypted_cancel_restart_round_trip` (Task 5) | Synapse 1.164.2: files and image thumbnails in plain/encrypted rooms, encrypted media source checked, server downloads bypass cache, oversize sparse file rejected, queued cancellation and store-reopen upload/download pass |
+| `timeline_metadata_and_send_queue_actions` (Task 6 regression) | Synapse 1.164.2: existing SDK Unicode reaction add/remove and stable timeline identity pass after shared picker integration |
 
 ## Operator reports (not independently reproduced)
 
@@ -64,7 +88,7 @@ against Synapse v1.164.2 with generated accounts only:
 
 ## Remaining gates
 
-- CI on macOS/Linux/Windows has never been observed passing (M0 exit).
+- CI deferred by operator decision; no CI gate applied to this feature work.
 - Physical checks: logout from the GUI, trackpad pagination, IME, VoiceOver.
 - Element interoperability, verification, key backup/recovery, attachments,
   thread view, large-account performance.

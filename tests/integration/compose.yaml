@@ -17,3 +17,94 @@ services:
       timeout: 5s
       retries: 30
     restart: "no"
+
+  mas-db:
+    profiles: [oauth]
+    image: postgres:17-alpine@sha256:3540c0362c809df084ffac0ae69fe794515f9de92692f02178bcdce0ef0302ac
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_DB: mas
+    # No published ports; generated test identities only on a dedicated network.
+    networks: [oauth]
+    tmpfs: [/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres -d mas"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: "no"
+  mas:
+    profiles: [oauth]
+    image: ghcr.io/element-hq/matrix-authentication-service:1.27.0@sha256:085e37263957b3b79be85de9cfda1980b97e9653f284fba0c902445e06c200b8
+    command: [server, --config, /data/mas.yaml]
+    user: "0:0"
+    ports: ["127.0.0.1:19449:8443"]
+    networks: [oauth]
+    volumes:
+      - ../../test-data/local/oauth:/data
+    depends_on:
+      mas-db:
+        condition: service_healthy
+    restart: "no"
+  mas-synapse:
+    profiles: [oauth]
+    image: ghcr.io/element-hq/synapse:v1.164.2@sha256:f0df87cff259872637b4b5e5174b9977e5e3046dd421505407803b5e45c5f842
+    user: "0:0"
+    environment:
+      UID: "0"
+      GID: "0"
+      MATRIX_FIXTURE_OAUTH: "1"
+    ports: ["127.0.0.1:19448:8448"]
+    networks: [oauth]
+    volumes:
+      - ../../test-data/local/oauth:/data
+      - ./bootstrap.py:/bootstrap.py:ro
+    healthcheck:
+      test: [CMD, python, /bootstrap.py, health]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: "no"
+  sso-synapse:
+    profiles: [sso]
+    image: ghcr.io/element-hq/synapse:v1.164.2@sha256:f0df87cff259872637b4b5e5174b9977e5e3046dd421505407803b5e45c5f842
+    user: "0:0"
+    environment:
+      UID: "0"
+      GID: "0"
+      MATRIX_FIXTURE_SSO: "1"
+    ports: ["127.0.0.1:20448:8448"]
+    networks: [oauth]
+    volumes:
+      - ../../test-data/local/sso:/data
+      - ../../test-data/local/oauth:/mas-data:ro
+      - ./bootstrap.py:/bootstrap.py:ro
+    healthcheck:
+      test: [CMD, python, /bootstrap.py, health]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: "no"
+
+  recovery-synapse:
+    profiles: [recovery]
+    image: ghcr.io/element-hq/synapse:v1.164.2@sha256:f0df87cff259872637b4b5e5174b9977e5e3046dd421505407803b5e45c5f842
+    user: "0:0"
+    environment:
+      UID: "0"
+      GID: "0"
+      MATRIX_FIXTURE_RECOVERY: "1"
+    ports: ["127.0.0.1:21448:8448"]
+    volumes:
+      - ../../test-data/local/recovery:/data
+      - ./bootstrap.py:/bootstrap.py:ro
+    healthcheck:
+      test: [CMD, python, /bootstrap.py, health]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: "no"
+
+networks:
+  oauth:
+    internal: false

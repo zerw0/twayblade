@@ -208,6 +208,7 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
         if let Some(message) = snapshot.messages.get_mut(4) {
             message.kind = MessageKind::Image;
             message.attachment = Some(Attachment {
+                preview_png: None,
                 filename: "sample-mockup.png".into(),
                 size: Some(245_760),
             });
@@ -215,6 +216,7 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
         if let Some(message) = snapshot.messages.get_mut(5) {
             message.kind = MessageKind::File;
             message.attachment = Some(Attachment {
+                preview_png: None,
                 filename: "sample-notes.pdf".into(),
                 size: Some(1_048_576),
             });

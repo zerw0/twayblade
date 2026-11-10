@@ -41,36 +41,114 @@ impl SessionStore {
         keyring::Entry::new(&self.service, ACCOUNT).map_err(|_| SecretStoreError)
     }
 
-    pub async fn load(&self) -> Result<Option<Zeroizing<String>>, SecretStoreError> {
-        let store = self.clone();
-        tokio::task::spawn_blocking(move || match store.entry()?.get_password() {
+    /// Synchronous SDK session callbacks must finish persisting rotated tokens
+    /// before returning. Each write replaces the complete OS credential record.
+    pub fn load_sync(&self) -> Result<Option<Zeroizing<String>>, SecretStoreError> {
+        match self.entry()?.get_password() {
             Ok(value) => Ok(Some(Zeroizing::new(value))),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(_) => Err(SecretStoreError),
-        })
-        .await
-        .map_err(|_| SecretStoreError)?
+        }
+    }
+
+    pub fn save_sync(&self, value: &str) -> Result<(), SecretStoreError> {
+        self.entry()?
+            .set_password(value)
+            .map_err(|_| SecretStoreError)
+    }
+
+    pub fn delete_sync(&self) -> Result<(), SecretStoreError> {
+        match self.entry()?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(_) => Err(SecretStoreError),
+        }
+    }
+
+    pub async fn load(&self) -> Result<Option<Zeroizing<String>>, SecretStoreError> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || store.load_sync())
+            .await
+            .map_err(|_| SecretStoreError)?
     }
 
     pub async fn save(&self, value: Zeroizing<String>) -> Result<(), SecretStoreError> {
         let store = self.clone();
-        tokio::task::spawn_blocking(move || {
-            store
-                .entry()?
-                .set_password(value.as_str())
-                .map_err(|_| SecretStoreError)
-        })
-        .await
-        .map_err(|_| SecretStoreError)?
+        tokio::task::spawn_blocking(move || store.save_sync(&value))
+            .await
+            .map_err(|_| SecretStoreError)?
     }
 
     pub async fn delete(&self) -> Result<(), SecretStoreError> {
         let store = self.clone();
-        tokio::task::spawn_blocking(move || match store.entry()?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(_) => Err(SecretStoreError),
+        tokio::task::spawn_blocking(move || store.delete_sync())
+            .await
+            .map_err(|_| SecretStoreError)?
+    }
+}
+
+/// Read the OS accent without changing preferences. Call on a background worker;
+/// Linux uses the local desktop portal and may be unavailable on bare desktops.
+pub fn system_accent() -> Option<[f32; 3]> {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::{NSColor, NSColorSpace};
+        let color =
+            NSColor::controlAccentColor().colorUsingColorSpace(&NSColorSpace::sRGBColorSpace())?;
+        Some([
+            color.redComponent() as f32,
+            color.greenComponent() as f32,
+            color.blueComponent() as f32,
+        ])
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use windows::UI::ViewManagement::{UIColorType, UISettings};
+        let color = UISettings::new()
+            .ok()?
+            .GetColorValue(UIColorType::Accent)
+            .ok()?;
+        Some([
+            f32::from(color.R) / 255.,
+            f32::from(color.G) / 255.,
+            f32::from(color.B) / 255.,
+        ])
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .ok()?;
+        runtime.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                let color = ashpd::desktop::settings::Settings::new()
+                    .await
+                    .ok()?
+                    .accent_color()
+                    .await
+                    .ok()?;
+                Some([
+                    color.red() as f32,
+                    color.green() as f32,
+                    color.blue() as f32,
+                ])
+            })
+            .await
+            .ok()
+            .flatten()
         })
-        .await
-        .map_err(|_| SecretStoreError)?
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    #[test]
+    fn native_system_accent_is_an_srgb_color() {
+        let accent = super::system_accent().expect("AppKit control accent");
+        assert!(
+            accent
+                .into_iter()
+                .all(|value| value.is_finite() && (0.0..=1.0).contains(&value))
+        );
     }
 }

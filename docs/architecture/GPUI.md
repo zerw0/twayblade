@@ -54,9 +54,11 @@ preventing Markdown image syntax from initiating remote image loads.
 
 Use the user's Cinny layout and Apple Messages references: space rail, compact
 sidebar, quiet header, grouped messages, rounded composer and a dismissible
-profile inspector. Use system font selection, restrained blue accents, semantic
-surfaces and standard window decorations. The product palette adapts to light/dark
-appearance but is not native macOS accent-color matching or Liquid Glass.
+profile inspector. Use system font selection, the system accent, semantic
+surfaces and standard window decorations. The product palette follows light/dark appearance and the OS accent. macOS reads
+AppKit controlAccentColor; Windows uses UISettings; Linux uses the desktop portal.
+A background read updates primary/selection roles within two seconds; unavailable
+accent data uses the fallback in theme.rs. This is not Liquid Glass or AppKit widgets.
 
 The user-requested UI/UX Pro Max skill is installed repo-locally at the revision
 in AGENTS.md. Its Apple Native Experience and icon-semantics results inform the
@@ -65,9 +67,11 @@ not persisted or adopted. GPUI has no preset in that skill: GPUI Kit's actual
 component APIs and design/coding guides remain authoritative. Mobile target-size
 or web cursor/layout rules are applied only when appropriate to desktop behavior.
 
-Measured token pairs: white on outgoing blue is 4.79:1 in dark mode and 5.59:1 in
-light mode; secondary labels against sidebar surfaces are 5.89:1 / 5.13:1. These
-checks do not establish full accessibility or composed-state contrast acceptance.
+System-accent text uses whichever of black/white has higher contrast (tested at
+4.5:1 or better for representative accents). Selection surfaces derive restrained
+tints from the same accent. Source palette literals remain in theme.rs; native
+platform adapters return only numeric RGB components. Windows/Linux accent reads
+and physical live-preference changes have not been exercised.
 
 ## Verification and remaining gates
 
@@ -85,3 +89,15 @@ and clean-machine acceptance. Element Call remains a separate restricted runtime
 References: [GPUI Kit](https://github.com/longbridge/gpui-kit),
 [GPUI examples](https://gpui.rs/examples/),
 [UI/UX Pro Max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill).
+
+Security state and SAS/backup/recovery operations live in core/security.rs. The
+frontend receives typed device/verification projections, never SDK handles or
+recovery secrets. A generated recovery key travels separately in a Zeroizing
+buffer and is discarded after copy/confirmation. Key/passphrase entry is cleared
+and its input entity replaced after use. SDK room-key imports drive timeline
+re-decryption; verification updates are guarded by flow ID and account epoch.
+
+Media preparation, queue cancellation, encryption and downloads stay in core.
+The frontend owns native dialogs and confirmation; four selection-scoped thumbnail
+workers keep timeline updates responsive. Decode and render caches are bounded.
+Emoji search, cursor ranges and recents are frontend state; reactions use core.

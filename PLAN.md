@@ -20,6 +20,8 @@ direct/group calls through Element Call.
 | Storage | SDK SQLite stores, encrypted with a passphrase held in the OS credential store. No plaintext fallback. Logout and failed sign-in delete the local store. |
 | Instances | One running instance per OS user, enforced by a lock file in the app data directory. |
 | Calls | Element Call in a separate, capability-restricted web runtime (Wry candidate). Chat UI stays native. Legacy `m.call.*` is out of scope for 1.0. |
+| Appearance | Default: system light/dark and system accent, neutral surfaces, contrasting foregrounds. Users can override scheme, accent, fonts, scale and chat style in Settings (M4). |
+| Settings | A native-style Settings window (⌘,) with sections. Preferences are stored locally as plain JSON, never with credentials. Notification rules are Matrix push rules on the server, so they sync with other clients. |
 | Toolchain | Rust minimum = the version actually built and tested (1.99). Nix shell is optional. |
 
 ## 1.0 scope
@@ -27,18 +29,20 @@ direct/group calls through Element Call.
 In:
 - One account; password, OAuth/OIDC and legacy SSO; refresh, restore, logout.
 - Rooms and DMs: history, pagination, send queue, replies, edits, reactions,
-  redactions, typing, read receipts; images/files with encrypted transfer.
+  redactions, typing, read receipts; images/files with encrypted transfer;
+  a full-size image viewer.
 - E2EE: cross-signing, device verification, key backup and recovery, visible
   undecryptable-message state. Never silently downgrade encryption.
 - Spaces: navigation, nested hierarchy, join/leave. Threads: read, reply, unread.
 - Unicode emoji picker and reactions.
 - Direct and group calls via Element Call: ringing, mute, device choice, screen share.
-- Notifications, unread counts, keyboard shortcuts, system light/dark.
+- Notifications, unread counts, keyboard shortcuts.
+- Settings: notifications, UI scaling, fonts, colour schemes, chat styles
+  (bubbles, IRC, minimal), security and account (see M4).
 
 Deferred past 1.0 (cut from the earlier plan):
 - Stickers and sticker packs; custom image emoji.
-- Alternative timeline styles (IRC, minimal, Element-like) and curated palettes
-  (Gruvbox, Solarized, …). 1.0 ships one layout with System/Light/Dark.
+- An Element-like fourth chat style and per-room style overrides.
 - Inline audio/video playback (save/open only in 1.0).
 - Space management beyond join/leave (create, edit, permissions UI).
 - Multi-account, widgets, bots, moderation tooling, legacy calls.
@@ -65,16 +69,68 @@ are done). Exit: interoperates with
 Element in encrypted rooms; reconnect without duplicate sends; fresh-install
 recovery; missing-key and revoked-device behavior; no secrets or bodies in logs.
 
-**M3 — spaces and threads (3–4 weeks).** Exit: nested/private/restricted spaces,
+**M3 — spaces, threads and image viewer (4–5 weeks).** Exit: nested/private/restricted spaces,
 cycles and multi-parent rooms behave like Element; threads paginate and keep
 unread/receipt state across clients without duplicate rendering.
 
-**M4 — calls (5–7 weeks).** Start with a macOS call-runtime spike, then the
+*Image viewer.* Clicking an image thumbnail (or pressing Space on a focused
+image, like Quick Look) opens it full size in an overlay over the
+conversation:
+- Fit to window by default; zoom with pinch, ⌘+/⌘−/⌘0 and double-click, and
+  pan when zoomed. Animated GIF/WebP play.
+- ← / → step through the room's other images in timeline order; the
+  counter and sender/time are shown in a quiet top bar.
+- Save…, Copy Image, Open in Default App and Show in Timeline; Escape or a
+  click outside closes it and returns focus to the message.
+- Full-resolution media is fetched through the SDK (decrypted in memory for
+  encrypted rooms), with a progress indicator, bounded decode size and the
+  same untrusted-filename rules as attachments. Nothing decrypted is
+  written to disk unless the user saves it.
+Exit: works for plain and encrypted images from Element, large (>8k px) and
+corrupt files fail with a clear message, and keyboard-only use reaches every
+action.
+
+**M4 — settings and appearance (3–4 weeks).** One Settings window (⌘,,
+menu Matrix Client › Settings…) with a sidebar of sections. Every change
+previews live, and each section has Reset to Defaults.
+
+- *Notifications.* Default level for DMs, group rooms and encrypted rooms (all
+  messages, mentions and keywords, off), keyword list, and per-room overrides
+  from the room's context menu and details panel, all via the SDK's
+  notification settings (server push rules). Native OS notifications
+  (macOS UserNotifications, Linux freedesktop, Windows toasts) with sound,
+  message-preview toggle (off hides sender and body on the lock screen),
+  Dock/taskbar badge and click-to-open-room. Encrypted messages are decrypted
+  for notifications through the SDK notification client. Respect OS Focus/DND.
+- *Appearance: scaling.* Interface scale 85–150% in steps, also via ⌘+, ⌘−
+  and ⌘0. It scales the whole layout, not just text.
+- *Appearance: fonts.* Interface font (system by default), message font
+  family and size (independent of scale), monospace font for code.
+- *Appearance: colour schemes.* System (default), Light, Dark, High contrast,
+  and curated palettes, each with light and dark variants: Solarized,
+  Gruvbox, Nord. Accent: system or a custom colour. Palettes map onto the
+  existing semantic tokens in `theme.rs`; every palette must pass 4.5:1 text
+  contrast, checked by a unit test per palette.
+- *Appearance: chat styles.* Bubbles (current), IRC (one line per message:
+  time, sender, text, no avatars) and Minimal (left-aligned, no bubbles,
+  sender headers only on change). Plus density (compact/regular), avatars
+  on/off and timestamps (hover, always). All styles keep replies,
+  reactions, threads, edits, attachments, failed sends and undecryptable
+  states, and group by Matrix user ID.
+- *Security.* The existing verification, recovery and devices screens move here.
+- *Account.* Display name and avatar editing, sign out.
+
+Exit: switching style, scheme, font or scale on a populated room keeps the
+selected room, drafts, scroll position and the open thread; no message action
+is hidden in any style. Preferences survive relaunch. Notification levels set
+here are reflected in Element for the same account.
+
+**M5 — calls (5–7 weeks).** Start with a macOS call-runtime spike, then the
 complete lifecycle and Linux/Windows. Exit: encrypted direct and group calls with
 Element on each OS, including denied permissions, device removal, network change
 and screen sharing (Wayland and X11). Transport TLS is not media E2EE.
 
-**M5 — release (3–5 weeks).** Notifications, accessibility pass, migrations,
+**M6 — release (3–5 weeks).** Accessibility pass, migrations,
 packaging, signing, updates. Exit: clean-machine install, upgrade with session
 retained, uninstall, notification activation. Signed artifacts need release
 credentials and explicit authorization.
@@ -92,15 +148,16 @@ Decision 2026-11-10: build the full application first; CI is not a gate for now.
 Linux and Windows CI passed on `36f850a`; macOS CI was switched to `macos-15`
 (the `macos-14` image is retired) and its result has not been checked.
 
-1. **M1 authentication.** OAuth/OIDC (MAS servers may not offer passwords),
-   legacy SSO, token refresh, revoked-session recovery.
-2. **M2 encryption usability.** Cross-signing setup, device verification
-   (emoji/SAS), key backup and recovery-key restore, then attachments
-   (send/receive, encrypted media, previews) and the emoji picker.
-3. **M3 spaces and threads.** Thread view and replies, space join/leave,
-   room directory, invites, room creation.
-4. **M4 calls.** Element Call runtime, direct and group calls.
-5. **M5 desktop polish.** Notifications, settings, packaging.
+1. **M1 authentication** and **2. M2 encryption usability** are implemented
+   (see Progress). Remaining: real-browser sign-in on a public server, and
+   Element interoperability for verification and attachments.
+3. **M3 spaces, threads and image viewer.** Thread view and replies, space
+   join/leave, room directory, invites, room creation; full-size image
+   viewer with zoom, pan and next/previous.
+4. **M4 settings and appearance.** Settings window with notifications, UI
+   scaling, fonts, colour schemes and chat styles (bubbles, IRC, minimal).
+5. **M5 calls.** Element Call runtime, direct and group calls.
+6. **M6 release.** Accessibility pass, packaging, signing, updates.
 
 ## Progress
 
@@ -114,8 +171,8 @@ Done (macOS arm64, offline and isolated-server verification only):
   row, room header (avatar, topic, encryption lock), bubble timeline with day
   separators and undecryptable/deleted states, rounded composer, details panel
   (Cmd-I) and profile panel (Escape closes). Two-step sign-in (server, then
-  implemented password options). Browser sign-in controls await M1; controls
-  for unbuilt features are omitted, not faked.
+  implemented password and OAuth options). Controls for unbuilt features
+  are omitted, not faked.
 - Home (rooms outside all spaces), room search, recency-sorted rooms, per-room
   drafts, pagination, plain-text send queue, read-only profiles.
 - Offline previews, incl. a 10,000-message virtualization smoke fixture.
@@ -133,6 +190,75 @@ Functional workspace (2026-11-10, Codex; reviewed):
 - Debt cleared: typed core errors/statuses, core records used directly,
   RoomListService-driven room list; separate release credential entry.
 - 26 unit/UI tests; six isolated-server checks (see STATUS.md).
+
+OAuth/OIDC — Task 1 (2026-11-10):
+- SDK metadata/discovery, dynamic registration, PKCE and one-shot loopback
+  callback; system-browser action, Cancel and typed inline failures.
+- Password-compatible atomic Keychain record holds OAuth client ID/session;
+  synchronous SDK refresh callbacks persist rotations and serialize with logout.
+- fmt/strict Clippy/31 unit/UI tests pass; light/dark sample captures reviewed.
+  MAS 1.27.0 + Synapse 1.164.2: login, cancel, wrong state, expired-token refresh,
+  three-process relaunch and logout pass. Physical browser/real-server check pending.
+
+Legacy SSO — Task 2 (2026-11-10):
+- SDK provider discovery/name buttons and bounded provider icons; shared
+  one-shot state-checked callback, cancellation and SDK loginToken exchange.
+- fmt/strict Clippy/34 unit/UI tests pass; light/dark SSO sample captures reviewed.
+- Synapse 1.164.2 with local MAS 1.27.0 OIDC: full redirect, token exchange,
+  Keychain restore and logout pass. Physical browser/real IdP check pending.
+
+Session recovery — Task 3 (2026-11-10):
+- SDK revocation events stop sync and show signed-out UI. Soft reauthentication
+  retains store/device (password, OAuth and SSO); hard logout needs local-data
+  deletion confirmation. Credential generations reject stale refresh writes.
+- fmt/strict Clippy/36 unit/UI tests pass; light/dark soft/hard samples reviewed.
+- Synapse 1.164.2: second-client device revocation, clean sync stop, retained
+  credentials before confirmation, failed/successful same-device soft recovery
+  and cleanup pass. Physical revoked-session/browser reauth checks pending.
+
+Verification and recovery — Task 4 (2026-11-10):
+- SDK cross-signing/backup setup, one-time recovery-key copy/confirmation,
+  key/passphrase restore, live history re-decryption, SAS and incoming prompts.
+- Settings → Security lists verified devices, revokes other password devices,
+  uses OAuth browser management when advertised, and confirms recovery-key reset.
+- fmt/strict Clippy/42 unit/UI tests pass; light/dark verification/recovery
+  captures reviewed. Isolated Synapse: SAS/cancel, wrong key, fresh-store old
+  history restore, device revocation and recovery reset pass. Element/physical
+  UI and browser-management acceptance remain pending.
+
+Attachments — Task 5 (2026-11-10):
+- Native file picker, drop/paste, filename/size/thumbnail confirmation; SDK encrypted
+  send queue, upload progress/cancel and restore; server upload limit enforced.
+- Bounded image decode/render cache, file Save/Open with chosen destination,
+  sanitised names and atomic downloads; opening requires an explicit action.
+- fmt/strict Clippy/45 unit/UI tests pass; light/dark attachment captures reviewed.
+  Synapse media round trips, thumbnails, oversize, cancel and queued restart pass.
+  Physical dialogs/drop/paste and interruption during an active HTTP upload pending.
+
+Emoji picker — Task 6 (2026-11-10):
+- Shared searchable composer/reaction picker, keyboard selection, six skin tones,
+  bounded persistent recents and `:shortcode` completion; inserts at Unicode cursor.
+- Unicode 15.x baseline avoids newer missing system-font glyphs. Sample actions
+  stay offline; room/account/cursor changes reject stale insertion.
+- fmt/strict Clippy/49 unit/UI tests pass; light/dark emoji captures reviewed.
+  Synapse `timeline_metadata_and_send_queue_actions` reaction regression passes;
+  physical keyboard/IME/screen-reader and platform font checks remain pending.
+
+Review fixes (2026-11-10, after Codex tasks 1–6):
+- Browser callback keeps listening through preconnect sockets, favicon and
+  forged-state requests instead of failing sign-in on the first connection.
+- macOS bundle sets `LSFileQuarantineEnabled`, so opened attachments get
+  Gatekeeper's downloaded-file warning. Windows Mark-of-the-Web is still missing.
+- Recovery-key confirmation no longer requires copying to the clipboard.
+- Open question: OAuth registration sends the homeserver URL as `client_uri`;
+  it should be the client's own homepage once one exists.
+
+System accent (2026-11-10):
+- Primary controls, outgoing bubbles and selection tints derive from the OS
+  accent, with contrasting foregrounds. macOS uses AppKit; Windows uses
+  UISettings; Linux uses the desktop portal (fallback when unavailable).
+- Native macOS read, actual theme-update and contrast tests pass (50 tests total).
+  Live preference changes and Windows/Linux execution remain platform checks.
 
 Not yet verified:
 - Physical GUI checks of logout, pagination, IME and VoiceOver.
@@ -152,7 +278,7 @@ tests/integration/  Isolated Synapse fixture
 docs/               Architecture and compatibility evidence
 ```
 
-Add `call-host` (Element Call runtime) when M4 starts, not before.
+Add `call-host` (Element Call runtime) when M5 starts, not before.
 
 ## References
 

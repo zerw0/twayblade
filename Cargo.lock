@@ -337,6 +337,7 @@ dependencies = [
  "getrandom 0.4.3",
  "serde",
  "serde_repr",
+ "tokio",
  "wayland-backend",
  "wayland-client",
  "wayland-protocols",
@@ -5178,10 +5179,13 @@ dependencies = [
  "async-stream",
  "directories",
  "futures-util",
+ "image",
  "imbl",
  "matrix-client-platform",
  "matrix-sdk",
  "matrix-sdk-ui",
+ "mime",
+ "mime_guess",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -5196,9 +5200,14 @@ name = "matrix-client-gpui"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "directories",
+ "emojis",
  "futures-util",
  "gpui-kit",
  "matrix-client-core",
+ "matrix-client-platform",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
  "tokio",
  "zeroize",
@@ -5208,9 +5217,12 @@ dependencies = [
 name = "matrix-client-platform"
 version = "0.1.0"
 dependencies = [
+ "ashpd",
  "keyring",
+ "objc2-app-kit 0.3.2",
  "thiserror 2.0.21",
  "tokio",
+ "windows 0.62.2",
  "zeroize",
 ]
 
@@ -5591,9 +5603,9 @@ dependencies = [
 
 [[package]]
 name = "mime"
-version = "0.3.18"
+version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5848f5a9e8117cf94f2f90faac24a87ff81600ff8628c1e3deaab572e76bfa1"
+checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 
 [[package]]
 name = "mime2ext"
@@ -9098,8 +9110,10 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
+ "tracing",
  "windows-sys 0.61.2",
 ]
 
@@ -11208,6 +11222,7 @@ dependencies = [
  "rustix",
  "serde",
  "serde_repr",
+ "tokio",
  "tracing",
  "uds_windows",
  "uuid",

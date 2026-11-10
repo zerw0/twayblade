@@ -110,3 +110,45 @@ Run `keychain` separately for the macOS cross-process lifecycle. All service
 checks hard-reject a non-loopback fixture URL and revoke their generated sessions
 on success. Metadata/action checks use unencrypted rooms; media transfer and
 Element interoperability are outside these tests.
+
+## OAuth/OIDC fixture
+
+Run `nix develop --command bash tests/integration/run.sh oauth` on macOS with an
+unlocked Keychain and local Docker. The separate `oauth` Compose profile pins
+MAS 1.27.0, Synapse 1.164.2 and PostgreSQL 17 by digest. Only TLS loopback ports
+19448/19449 are published; PostgreSQL has no published port and uses tmpfs.
+Generated credentials/configuration remain in ignored `test-data/local/oauth/`;
+no host trust settings change. Fixture rate limits are raised and access tokens
+expire after five seconds. The runner stops only its three OAuth services.
+
+`oauth_cancel_and_wrong_state_discard_checkpoint` checks callback rejection and
+cleanup. `oauth_keychain_lifecycle_across_processes` drives MAS registration and
+consent using Python HTTP forms, then restores/refreshes/signs out in separate
+processes. This exercises real OAuth endpoints and OS storage; the operator still
+checks system-browser interaction on a real OAuth homeserver.
+
+Legacy SSO: `nix develop --command bash tests/integration/run.sh sso` starts a
+separate Synapse at TLS loopback port 20448 with MAS as its local OIDC provider.
+The fixture requests `openid`, maps the stable subject, and relaxes Synapse's
+OIDC metadata URL checks for its internal Docker HTTP backchannel. Browser TLS
+and signed ID-token validation remain enabled. The runner tests
+`sso_local_oidc_token_exchange_and_restore` and stops its services afterward.
+
+Session recovery: `nix develop --command bash tests/integration/run.sh recovery`
+uses the normal fixture plus a separate Synapse on TLS loopback port 21448 with
+five-second nonrefreshable tokens. `revoked_device_and_soft_logout_recovery`
+revokes a device from a second SDK client, checks sync termination and retained
+local data, then checks failed/successful soft reauthentication and hard cleanup.
+
+Encryption usability: `nix develop --command bash tests/integration/run.sh security`
+generates a fresh user and runs `secure_backup_fresh_store_recovery_and_sas`.
+It covers setup, wrong key, a fresh store restoring old encrypted history live,
+SAS/cancel, other-device sign-out and recovery-key reset. The original device is
+offline during backup restoration to exclude key gossip as the recovery source.
+The runner prefers an existing local `colima-matrixclient-test` context; override
+with `MATRIX_TEST_DOCKER_CONTEXT`. Avoid two fixture VMs sharing the same ports.
+
+Run `bash tests/integration/run.sh media` for generated-user plain/encrypted file
+and image round trips, server thumbnail/download, oversize rejection, queue cancel
+and persisted upload restart. This does not simulate interrupting an HTTP request
+mid-transfer or exercise native file dialogs/clipboard/drop.
