@@ -20,7 +20,8 @@ direct/group calls through Element Call.
 | Storage | SDK SQLite stores, encrypted with a passphrase held in the OS credential store. No plaintext fallback. Logout and failed sign-in delete the local store. |
 | Instances | One running instance per OS user, enforced by a lock file in the app data directory. |
 | Calls | Element Call in a separate, capability-restricted web runtime (Wry candidate). Chat UI stays native. Legacy `m.call.*` is out of scope for 1.0. |
-| Appearance | Follow the system accent with neutral surfaces and contrasting foregrounds. |
+| Appearance | Default: system light/dark and system accent, neutral surfaces, contrasting foregrounds. Users can override scheme, accent, fonts, scale and chat style in Settings (M4). |
+| Settings | A native-style Settings window (⌘,) with sections. Preferences are stored locally as plain JSON, never with credentials. Notification rules are Matrix push rules on the server, so they sync with other clients. |
 | Toolchain | Rust minimum = the version actually built and tested (1.99). Nix shell is optional. |
 
 ## 1.0 scope
@@ -28,18 +29,20 @@ direct/group calls through Element Call.
 In:
 - One account; password, OAuth/OIDC and legacy SSO; refresh, restore, logout.
 - Rooms and DMs: history, pagination, send queue, replies, edits, reactions,
-  redactions, typing, read receipts; images/files with encrypted transfer.
+  redactions, typing, read receipts; images/files with encrypted transfer;
+  a full-size image viewer.
 - E2EE: cross-signing, device verification, key backup and recovery, visible
   undecryptable-message state. Never silently downgrade encryption.
 - Spaces: navigation, nested hierarchy, join/leave. Threads: read, reply, unread.
 - Unicode emoji picker and reactions.
 - Direct and group calls via Element Call: ringing, mute, device choice, screen share.
-- Notifications, unread counts, keyboard shortcuts, system light/dark.
+- Notifications, unread counts, keyboard shortcuts.
+- Settings: notifications, UI scaling, fonts, colour schemes, chat styles
+  (bubbles, IRC, minimal), security and account (see M4).
 
 Deferred past 1.0 (cut from the earlier plan):
 - Stickers and sticker packs; custom image emoji.
-- Alternative timeline styles (IRC, minimal, Element-like) and curated palettes
-  (Gruvbox, Solarized, …). 1.0 ships one layout with System/Light/Dark.
+- An Element-like fourth chat style and per-room style overrides.
 - Inline audio/video playback (save/open only in 1.0).
 - Space management beyond join/leave (create, edit, permissions UI).
 - Multi-account, widgets, bots, moderation tooling, legacy calls.
@@ -66,16 +69,68 @@ are done). Exit: interoperates with
 Element in encrypted rooms; reconnect without duplicate sends; fresh-install
 recovery; missing-key and revoked-device behavior; no secrets or bodies in logs.
 
-**M3 — spaces and threads (3–4 weeks).** Exit: nested/private/restricted spaces,
+**M3 — spaces, threads and image viewer (4–5 weeks).** Exit: nested/private/restricted spaces,
 cycles and multi-parent rooms behave like Element; threads paginate and keep
 unread/receipt state across clients without duplicate rendering.
 
-**M4 — calls (5–7 weeks).** Start with a macOS call-runtime spike, then the
+*Image viewer.* Clicking an image thumbnail (or pressing Space on a focused
+image, like Quick Look) opens it full size in an overlay over the
+conversation:
+- Fit to window by default; zoom with pinch, ⌘+/⌘−/⌘0 and double-click, and
+  pan when zoomed. Animated GIF/WebP play.
+- ← / → step through the room's other images in timeline order; the
+  counter and sender/time are shown in a quiet top bar.
+- Save…, Copy Image, Open in Default App and Show in Timeline; Escape or a
+  click outside closes it and returns focus to the message.
+- Full-resolution media is fetched through the SDK (decrypted in memory for
+  encrypted rooms), with a progress indicator, bounded decode size and the
+  same untrusted-filename rules as attachments. Nothing decrypted is
+  written to disk unless the user saves it.
+Exit: works for plain and encrypted images from Element, large (>8k px) and
+corrupt files fail with a clear message, and keyboard-only use reaches every
+action.
+
+**M4 — settings and appearance (3–4 weeks).** One Settings window (⌘,,
+menu Matrix Client › Settings…) with a sidebar of sections. Every change
+previews live, and each section has Reset to Defaults.
+
+- *Notifications.* Default level for DMs, group rooms and encrypted rooms (all
+  messages, mentions and keywords, off), keyword list, and per-room overrides
+  from the room's context menu and details panel, all via the SDK's
+  notification settings (server push rules). Native OS notifications
+  (macOS UserNotifications, Linux freedesktop, Windows toasts) with sound,
+  message-preview toggle (off hides sender and body on the lock screen),
+  Dock/taskbar badge and click-to-open-room. Encrypted messages are decrypted
+  for notifications through the SDK notification client. Respect OS Focus/DND.
+- *Appearance: scaling.* Interface scale 85–150% in steps, also via ⌘+, ⌘−
+  and ⌘0. It scales the whole layout, not just text.
+- *Appearance: fonts.* Interface font (system by default), message font
+  family and size (independent of scale), monospace font for code.
+- *Appearance: colour schemes.* System (default), Light, Dark, High contrast,
+  and curated palettes, each with light and dark variants: Solarized,
+  Gruvbox, Nord. Accent: system or a custom colour. Palettes map onto the
+  existing semantic tokens in `theme.rs`; every palette must pass 4.5:1 text
+  contrast, checked by a unit test per palette.
+- *Appearance: chat styles.* Bubbles (current), IRC (one line per message:
+  time, sender, text, no avatars) and Minimal (left-aligned, no bubbles,
+  sender headers only on change). Plus density (compact/regular), avatars
+  on/off and timestamps (hover, always). All styles keep replies,
+  reactions, threads, edits, attachments, failed sends and undecryptable
+  states, and group by Matrix user ID.
+- *Security.* The existing verification, recovery and devices screens move here.
+- *Account.* Display name and avatar editing, sign out.
+
+Exit: switching style, scheme, font or scale on a populated room keeps the
+selected room, drafts, scroll position and the open thread; no message action
+is hidden in any style. Preferences survive relaunch. Notification levels set
+here are reflected in Element for the same account.
+
+**M5 — calls (5–7 weeks).** Start with a macOS call-runtime spike, then the
 complete lifecycle and Linux/Windows. Exit: encrypted direct and group calls with
 Element on each OS, including denied permissions, device removal, network change
 and screen sharing (Wayland and X11). Transport TLS is not media E2EE.
 
-**M5 — release (3–5 weeks).** Notifications, accessibility pass, migrations,
+**M6 — release (3–5 weeks).** Accessibility pass, migrations,
 packaging, signing, updates. Exit: clean-machine install, upgrade with session
 retained, uninstall, notification activation. Signed artifacts need release
 credentials and explicit authorization.
@@ -96,10 +151,13 @@ Linux and Windows CI passed on `36f850a`; macOS CI was switched to `macos-15`
 1. **M1 authentication** and **2. M2 encryption usability** are implemented
    (see Progress). Remaining: real-browser sign-in on a public server, and
    Element interoperability for verification and attachments.
-3. **M3 spaces and threads.** Thread view and replies, space join/leave,
-   room directory, invites, room creation.
-4. **M4 calls.** Element Call runtime, direct and group calls.
-5. **M5 desktop polish.** Notifications, settings, packaging.
+3. **M3 spaces, threads and image viewer.** Thread view and replies, space
+   join/leave, room directory, invites, room creation; full-size image
+   viewer with zoom, pan and next/previous.
+4. **M4 settings and appearance.** Settings window with notifications, UI
+   scaling, fonts, colour schemes and chat styles (bubbles, IRC, minimal).
+5. **M5 calls.** Element Call runtime, direct and group calls.
+6. **M6 release.** Accessibility pass, packaging, signing, updates.
 
 ## Progress
 
@@ -220,7 +278,7 @@ tests/integration/  Isolated Synapse fixture
 docs/               Architecture and compatibility evidence
 ```
 
-Add `call-host` (Element Call runtime) when M4 starts, not before.
+Add `call-host` (Element Call runtime) when M5 starts, not before.
 
 ## References
 

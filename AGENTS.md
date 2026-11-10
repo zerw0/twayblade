@@ -15,7 +15,7 @@
 - Keep SDK clients and credentials out of public UI snapshots. Bound update queues, cancel account/selection tasks, and reject stale snapshots.
 - `core`: Matrix SDK integration, authentication, messaging, crypto, and session lifecycle. It owns Matrix state.
 - `platform`: credentials, notifications, deep links, OS permissions, packaging integration.
-- `call-host` (planned, M4): isolated Element Call runtime and capability-restricted IPC.
+- `call-host` (planned, M5): isolated Element Call runtime and capability-restricted IPC.
 - `core` returns data and typed errors; user-facing wording belongs in the frontend.
 - Use SDK timelines, sync, crypto, and stores rather than reimplementing protocol state or cryptography.
 - Add crates and dependencies when needed; avoid empty abstraction layers and speculative features.
