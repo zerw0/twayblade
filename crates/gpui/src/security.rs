@@ -1,4 +1,5 @@
 //! Security UI wording and interactions. Secrets never enter backend snapshots.
+use crate::theme::scaled_px as px;
 use crate::{
     app::MatrixApp,
     backend::{SecurityAction, SecurityOutcome},
@@ -160,34 +161,7 @@ impl MatrixApp {
     pub(super) fn security_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let security = &self.snapshot.security;
         let muted = cx.theme().muted_foreground;
-        let mut body = v_flex()
-            .id("security-content")
-            .w(px(600.))
-            .gap(px(16.))
-            .py(px(24.))
-            .child(
-                h_flex()
-                    .gap(px(12.))
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_size(px(22.))
-                            .font_weight(FontWeight::BOLD)
-                            .child("Settings · Security"),
-                    )
-                    .child(
-                        Button::new("close-security")
-                            .label("Close")
-                            .disabled(self.busy || self.security_key.is_some())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.security_open = false;
-                                this.security_restore = false;
-                                this.security_device = None;
-                                this.security_reset_confirmation = false;
-                                cx.notify();
-                            })),
-                    ),
-            );
+        let mut body = v_flex().id("security-content").w_full().gap(px(12.));
         if self.preview {
             body = body.child(
                 div()
@@ -292,6 +266,9 @@ impl MatrixApp {
                     "Checking encryption and backup…"
                 }));
             }
+            if let Some(flow) = &security.verification {
+                body = body.child(self.verification_view(flow, cx));
+            }
             if security.ready {
                 body = body.child(div().font_weight(FontWeight::SEMIBOLD).child(
                     if security.verified {
@@ -362,9 +339,6 @@ impl MatrixApp {
                         );
                     }
                 }
-                if let Some(flow) = &security.verification {
-                    body = body.child(self.verification_view(flow, cx));
-                }
                 body = body.child(
                     div()
                         .pt(px(8.))
@@ -421,14 +395,7 @@ impl MatrixApp {
         if !self.status.is_empty() {
             body = body.child(div().text_color(muted).child(self.status.clone()));
         }
-        div()
-            .id("security-scroll")
-            .size_full()
-            .overflow_y_scroll()
-            .flex()
-            .justify_center()
-            .child(body)
-            .into_any_element()
+        body.into_any_element()
     }
 
     fn verification_view(&self, flow: &VerificationView, cx: &mut Context<Self>) -> AnyElement {

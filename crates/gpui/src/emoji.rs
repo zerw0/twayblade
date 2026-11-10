@@ -1,4 +1,5 @@
 //! Unicode picker shared by the composer and SDK reactions. Only UI preferences persist.
+use crate::theme::scaled_px as px;
 use crate::{app::MatrixApp, backend::TimelineAction};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;

@@ -288,6 +288,7 @@ fn discovery_failure(error: DiscoveryError) -> ServiceError {
 
 fn profile_failure(error: ProfileError) -> ServiceError {
     failure(match error {
+        ProfileError::InvalidImage => "Choose an image up to 8 MB and 4096 pixels per side.",
         ProfileError::InvalidUser => "This user ID is not valid.",
         ProfileError::Unavailable => {
             "This profile could not be loaded. Check your connection and try again."
@@ -926,6 +927,44 @@ impl Backend {
             }
             result
         })
+    }
+
+    pub(super) fn update_profile(
+        &self,
+        expected: u128,
+        update: matrix_client_core::profile::ProfileUpdate,
+    ) -> Result<Profile, ServiceError> {
+        let account = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session unavailable."))?
+            .account
+            .clone()
+            .filter(|a| a.instance_id() == expected)
+            .ok_or_else(|| failure("Account changed."))?;
+        self.runtime
+            .block_on(account.update_profile(update))
+            .map_err(profile_failure)?;
+        self.profile(account.user_id().to_string(), None)
+    }
+
+    /// Square avatar PNG for `mxc` at `size` physical pixels. Bounded in core.
+    pub(super) fn avatar(&self, mxc: String, size: u32) -> Result<Vec<u8>, ServiceError> {
+        let account = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?
+            .account
+            .clone()
+            .ok_or_else(|| failure("Sign in first."))?;
+        self.runtime
+            .block_on(account.avatar_thumbnail(mxc, size))
+            .map_err(|_| failure("Avatar unavailable."))
+    }
+
+    pub(super) fn own_avatar_url(&self) -> Option<String> {
+        let account = self.state.lock().ok()?.account.clone()?;
+        self.runtime.block_on(account.own_avatar_url())
     }
 
     pub(super) fn profile(

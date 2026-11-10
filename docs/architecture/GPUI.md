@@ -30,6 +30,8 @@ backend graph constrains those versions. No web/JavaScript shell is used for cha
 - `gpui/theme.rs`: product semantic colors and typography. UI code reads theme
   roles; source palette literals are confined to the theme definition.
 
+`preferences.rs` owns versioned, serde-defaulted frontend JSON in the OS config directory. Invalid/unknown files are preserved as `.bak`; a failed backup disables writes. File replacement is atomic and background saves reject stale revisions. Settings shares the main entity in one separate window; Security entry is discarded on exit. Semantic themes and one logical-pixel helper apply appearance without replacing drafts or scrollers. Notification rules/delivery remain unimplemented; no local preference simulates a server rule.
+
 Each visited room retains its own Textarea state and subscription. Events capture
 the room ID and read that room's input entity, so delayed changes cannot overwrite
 another room's draft. Switching rooms preserves buffer/cursor/undo state. A queued

@@ -38,10 +38,13 @@ pub struct MessageRow {
     pub id: String,
     pub sender: String,
     pub display_name: String,
+    /// Sender's `mxc://` avatar in this room, once the SDK has the profile.
+    pub sender_avatar: Option<String>,
     pub timestamp_ms: i64,
     /// Plain text; never log this or reply excerpts.
     pub body: String,
     pub kind: MessageKind,
+    pub edited: bool,
     pub delivery: DeliveryState,
     pub reply: Option<ReplyTarget>,
     pub reactions: Vec<Reaction>,
@@ -403,8 +406,17 @@ fn rows<'a>(
                 new_messages: std::mem::take(&mut after_marker),
                 sender: event.sender().to_string(),
                 display_name: sender_name(event.sender_profile(), event.sender()),
+                sender_avatar: match event.sender_profile() {
+                    TimelineDetails::Ready(profile) => {
+                        profile.avatar_url.as_ref().map(|url| url.to_string())
+                    }
+                    _ => None,
+                },
                 timestamp_ms: u64::from(event.timestamp().get()) as i64,
                 body,
+                edited: content
+                    .as_message()
+                    .is_some_and(|message| message.is_edited()),
                 kind,
                 attachment,
                 delivery: delivery(event.send_state()),
@@ -442,9 +454,12 @@ fn rows<'a>(
 fn fetch_reply_details<'a>(
     timeline: &Arc<Timeline>,
     items: impl Iterator<Item = &'a Arc<TimelineItem>>,
-    attempted: &mut std::collections::HashSet<String>,
+    attempted: &mut std::collections::HashMap<String, u8>,
     tasks: &mut tokio::task::JoinSet<()>,
 ) {
+    // A failed fetch (rate limit, flaky network) is retried; the SDK reports a
+    // permanent miss, e.g. history from before you joined, as Error every time.
+    const MAX_ATTEMPTS: u8 = 3;
     for item in items {
         if tasks.len() >= 4 {
             break;
@@ -455,12 +470,17 @@ fn fetch_reply_details<'a>(
         let TimelineItemContent::MsgLike(content) = event.content() else {
             continue;
         };
-        if content
-            .in_reply_to
-            .as_ref()
-            .is_some_and(|reply| matches!(reply.event, TimelineDetails::Unavailable))
-            && let Some(id) = event.event_id()
-            && attempted.insert(id.to_string())
+        if content.in_reply_to.as_ref().is_some_and(|reply| {
+            matches!(
+                reply.event,
+                TimelineDetails::Unavailable | TimelineDetails::Error(_)
+            )
+        }) && let Some(id) = event.event_id()
+            && {
+                let count = attempted.entry(id.to_string()).or_insert(0);
+                *count += 1;
+                *count <= MAX_ATTEMPTS
+            }
         {
             let timeline = timeline.clone();
             let id = id.to_owned();
@@ -568,7 +588,7 @@ impl Account {
             let mut cache_updates = account.client.event_cache().subscribe_to_room_generic_updates();
             let mut member_load = Box::pin(room_members(room.clone()));
             let mut member_pending = true;
-            let mut attempted = std::collections::HashSet::new();
+            let mut attempted = std::collections::HashMap::new();
             let mut detail_tasks = tokio::task::JoinSet::new();
             loop {
                 fetch_reply_details(&timeline, items.iter(), &mut attempted, &mut detail_tasks);

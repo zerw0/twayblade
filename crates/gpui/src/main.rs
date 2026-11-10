@@ -3,10 +3,13 @@ extern crate gpui_kit as gpui;
 
 mod app;
 mod attachments;
+mod avatars;
 mod backend;
 mod emoji;
 mod model;
+mod preferences;
 mod security;
+mod settings;
 mod spaces_ui;
 #[cfg(all(test, feature = "capture"))]
 mod tests;
@@ -16,8 +19,8 @@ mod viewer;
 mod workspace;
 
 use app::{
-    CloseProfile, FindConversation, JoinSpace, MatrixApp, NewDirectMessage, NewRoom, Quit,
-    ToggleDetails,
+    CloseProfile, DecreaseScale, FindConversation, IncreaseScale, JoinSpace, MatrixApp,
+    NewDirectMessage, NewRoom, OpenSettings, Quit, ResetScale, ToggleDetails,
 };
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
@@ -51,6 +54,7 @@ fn main() {
             // Base type anchors Kit's rem scale; window constraints below are OS pixels.
             theme::apply(cx);
             cx.bind_keys([
+                KeyBinding::new(if cfg!(target_os = "macos") { "cmd-," } else { "ctrl-," }, OpenSettings, None),
                 KeyBinding::new(
                     if cfg!(target_os = "macos") {
                         "cmd-q"
@@ -82,16 +86,22 @@ fn main() {
                     Some("MatrixClient"),
                 ),
             ]);
+            cx.bind_keys([
+                KeyBinding::new(if cfg!(target_os = "macos") { "cmd-+" } else { "ctrl-+" }, IncreaseScale, Some("MatrixClient")),
+                KeyBinding::new(if cfg!(target_os = "macos") { "cmd-=" } else { "ctrl-=" }, IncreaseScale, Some("MatrixClient")),
+                KeyBinding::new(if cfg!(target_os = "macos") { "cmd--" } else { "ctrl--" }, DecreaseScale, Some("MatrixClient")),
+                KeyBinding::new(if cfg!(target_os = "macos") { "cmd-0" } else { "ctrl-0" }, ResetScale, Some("MatrixClient")),
+            ]);
             cx.bind_keys(viewer::bindings());
             cx.on_action(|_: &Quit, cx| cx.quit());
             use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
             cx.set_menus([
                 Menu {
                     name: "Matrix Client".into(),
-                    items: vec![MenuItem::action("Quit Matrix Client", Quit)],
+                    items: if cfg!(target_os = "macos") { vec![MenuItem::action("Settings…", OpenSettings), MenuItem::Separator, MenuItem::action("Quit Matrix Client", Quit)] } else { vec![MenuItem::action("Quit Matrix Client", Quit)] },
                     disabled: false,
                 },
-                Menu { name: "File".into(), items: vec![MenuItem::action("New Direct Message…", NewDirectMessage),MenuItem::action("Create Room…", NewRoom),MenuItem::action("Join Space…", JoinSpace)], disabled: false },
+                Menu { name: "File".into(), items: vec![MenuItem::action("New Direct Message…", NewDirectMessage),MenuItem::action("Create Room…", NewRoom),MenuItem::action("Join Space…", JoinSpace)].into_iter().chain((!cfg!(target_os = "macos")).then(|| MenuItem::action("Settings…", OpenSettings))).collect(), disabled: false },
                 Menu {
                     name: "Edit".into(),
                     items: vec![
@@ -110,7 +120,7 @@ fn main() {
                 Menu { name: "Image".into(), items: vec![MenuItem::action("Previous Image",viewer::PreviousImage),MenuItem::action("Next Image",viewer::NextImage),MenuItem::Separator,MenuItem::action("Zoom In",viewer::ZoomIn),MenuItem::action("Zoom Out",viewer::ZoomOut),MenuItem::action("Fit to Window",viewer::FitImage),MenuItem::Separator,MenuItem::action("Save Image…",viewer::SaveImage),MenuItem::action("Copy Image",viewer::CopyImage),MenuItem::action("Open in Default App…",viewer::OpenImage),MenuItem::action("Show in Timeline",viewer::RevealImage),MenuItem::action("Close Image",viewer::CloseViewer)], disabled: false },
                 Menu {
                     name: "View".into(),
-                    items: vec![MenuItem::action("Room Details", ToggleDetails), MenuItem::action("Close Panel", CloseProfile)],
+                    items: vec![MenuItem::action("Increase Interface Scale", IncreaseScale), MenuItem::action("Decrease Interface Scale", DecreaseScale), MenuItem::action("Actual Interface Size", ResetScale), MenuItem::Separator, MenuItem::action("Room Details", ToggleDetails), MenuItem::action("Close Panel", CloseProfile)],
                     disabled: false,
                 },
             ]);
@@ -138,9 +148,13 @@ fn main() {
             let home = args.iter().any(|arg| arg == "--preview-home");
             let large = args.iter().any(|arg| arg == "--preview-large");
             let profile = args.iter().any(|arg| arg == "--preview-profile");
-            let (_, view) = gpui_kit::open_window(options, cx, |window, cx| {
+            let (main_window, view) = gpui_kit::open_window(options, cx, |window, cx| {
                 cx.new(|cx| {
                     let mut view = MatrixApp::new(preview, home, large, window, cx);
+                    if let Some(scale) = args.iter().position(|arg| arg == "--preview-scale").and_then(|ix| args.get(ix + 1)).and_then(|value| value.parse::<u16>().ok()) { view.preferences.appearance.scale = (scale.clamp(85,150) / 5) * 5; theme::set_appearance(view.preferences.appearance.clone(), cx); }
+                    if let Some(name) = args.iter().position(|arg| arg == "--preview-scheme").and_then(|ix| args.get(ix + 1)) && let Some(scheme) = preferences::Scheme::ALL.into_iter().find(|scheme| scheme.name() == name) { view.preferences.appearance.scheme = scheme; theme::set_appearance(view.preferences.appearance.clone(), cx); }
+                    if args.iter().any(|arg| arg == "--preview-style-irc") { view.preferences.chat.style = preferences::ChatStyle::Irc; }
+                    if args.iter().any(|arg| arg == "--preview-style-minimal") { view.preferences.chat.style = preferences::ChatStyle::Minimal; }
                     if args.iter().any(|arg| arg == "--preview-signin") {
                         view.snapshot = backend::Snapshot::default();
                         view.groups.clear();
@@ -211,6 +225,9 @@ fn main() {
                 })
             })
             .expect("The application window could not open");
+            if args.iter().any(|arg| arg == "--preview-settings") {
+                view.update(cx, |view, cx| view.open_settings(args.iter().position(|arg| arg == "--preview-settings").and_then(|ix| args.get(ix + 1)).and_then(|name| settings::Section::ALL.into_iter().find(|section| section.label().eq_ignore_ascii_case(name))).unwrap_or_default(), cx));
+            }
             let accent_view = view.downgrade();
             cx.spawn(async move |cx| {
                 loop {
@@ -218,6 +235,7 @@ fn main() {
                     if accent_view.update(cx, |_, cx| {
                         if theme::set_system_accent(accent, cx) { theme::apply(cx); }
                     }).is_err() { break; }
+                    if preview { break; }
                     cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
                 }
             }).detach();
@@ -228,7 +246,8 @@ fn main() {
                     cx.background_executor()
                         .timer(std::time::Duration::from_secs(3))
                         .await;
-                    let result = weak.update_in(cx, |_, window, _| window.render_to_image());
+                    let settings = cx.update(|cx| weak.upgrade().and_then(|main| main.read(cx).settings.as_ref().map(|entry| entry.0)));
+                    let result = settings.unwrap_or(main_window).update(cx, |_, window, cx| { window.refresh(); window.draw(cx).clear(cx); window.render_to_image() });
                     match result {
                         Ok(Ok(image)) => {
                             if image.save(path).is_err() {
@@ -242,7 +261,7 @@ fn main() {
                 .detach();
             }
             #[cfg(not(feature = "capture"))]
-            let _ = view;
+            let _ = (view, main_window);
             cx.activate(true);
         });
 }

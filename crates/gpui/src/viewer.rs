@@ -1,4 +1,5 @@
 //! In-memory image overlay. Saving is explicit, including before opening another app.
+use crate::theme::scaled_px as px;
 use crate::{
     app::MatrixApp,
     backend::{Message, MessageKind},

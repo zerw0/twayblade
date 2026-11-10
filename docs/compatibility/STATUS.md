@@ -6,7 +6,7 @@ listed separately. Earlier Iced/SwiftUI evidence was removed with those frontend
 
 | Check | macOS arm64 | Linux | Windows |
 | --- | --- | --- | --- |
-| fmt / Clippy (`-D warnings`) / unit tests | Pass locally (Rust 1.99; locked/all features; 66 tests) | Not run | Not run |
+| fmt / Clippy (`-D warnings`) / unit tests | Pass locally (Rust 1.99; locked/all features; 85 tests) | Not run | Not run |
 | CI (`.github/workflows/check.yml`) | Never observed passing | Never observed passing | Never observed passing |
 | GPUI build and launch | Pass; ad-hoc `.app` launches | Not run | Not run |
 | Offline previews and Kit interaction tests | Pass; light/dark workspace, Home, profile, sign-in, details and 10k captures; Kit interaction/layout tests | Not run | Not run |
@@ -45,6 +45,19 @@ listed separately. Earlier Iced/SwiftUI evidence was removed with those frontend
 | Image viewer (M3 Task 3) | SDK full-resolution fetch/decryption without media disk caching; bounded GIF/WebP decode, zoom/pan, history navigation, copy and explicit Save/Open; 8192px / 64MiB encoded / 96MiB decoded / 240 frames | Not run | Not run |
 | Viewer offline UI (M3 Task 3) | 66 workspace unit/UI tests pass; actual Space/arrows/zoom/Tab/Save/Open/Show-in-Timeline/Escape bindings, focus trap/return, pinch/pan and stale-load cancellation; reviewed `captures/viewer-{light,dark}.png` samples | Not run | Not run |
 | Viewer physical/Element checks (M3 Task 3) | Pending: actual trackpad, animation playback, native Save/overwrite/default app, clipboard into another app, VoiceOver and Element images; navigation covers loaded room/current-thread images and requests earlier main history | Not run | Not run |
+| Settings foundation (M4 Task 1) | Versioned local JSON, atomic save and invalid-file backup; one window, six sections, Security migration and SDK name/avatar edits; locked fmt/strict Clippy/69 tests pass | Not run | Not run |
+| Settings offline UI (M4 Task 1) | Section navigation and draft/window retention tests pass; reviewed `captures/settings-{light,dark}.png` samples | Not run | Not run |
+| Settings physical checks (M4 Task 1) | Pending: native Settings menu/shortcut, keyboard/VoiceOver, avatar picker, sign-out and real-account Security controls | Not run | Not run |
+| Colour schemes/accent (M4 Task 2) | Seven schemes, curated light/dark variants, persisted system/custom accent, swatches and picker; 12 contrast tests and retained-state control test pass; 82 workspace tests | Not run | Not run |
+| Schemes offline UI (M4 Task 2) | `captures/scheme-{system,light,dark,high-contrast,solarized,gruvbox,nord}-{light,dark}.png` samples; 4.5:1 body/muted/accent/link, 7:1 High contrast | Not run | Not run |
+| Schemes physical checks (M4 Task 2) | Pending: OS appearance/accent transitions, picker and VoiceOver; no additional server changes | Not run | Not run |
+| Scaling/fonts (M4 Task 3) | Shared logical sizes, 85–150% steps, View actions, installed-family selectors, independent message size and missing-font fallback; locked fmt/strict Clippy/83 tests pass | Not run | Not run |
+| Scaling offline UI (M4 Task 3) | Actual sidebar height scales; composer remains reachable; `captures/scale-{85,150}-{light,dark}.png` includes toolbar, bubbles and details | Not run | Not run |
+| Scaling physical checks (M4 Task 3) | Pending: shortcuts/image-zoom routing, fonts/IME, live anchors on long histories; no server changes | Not run | Not run |
+| Chat styles (M4 Task 4) | Bubbles/IRC/Minimal in timelines/threads; density, avatars, timestamps and SDK edit state; locked fmt/strict Clippy/85 tests pass | Not run | Not run |
+| Styles offline UI (M4 Task 4) | Control-driven visible-ID/room/draft/anchor/thread/action retention; deleted/edited states; `captures/style-{bubbles,irc,minimal}-{light,dark}.png` plus attachment/thread samples | Not run | Not run |
+| Styles physical checks (M4 Task 4) | Pending: keyboard/VoiceOver, long histories, encrypted media and thread interactions | Not run | Not run |
+| Notifications (M4 Task 5) | Not implemented; SDK push rules, decrypted delivery, native OS API and fixture acceptance remain | Not run | Not run |
 | Element interoperability (E2EE) | Pending | Pending | Pending |
 | IME, VoiceOver/screen reader, keyboard focus | Pending | Pending | Pending |
 | Element Call | Not implemented | — | — |
@@ -97,6 +110,8 @@ against Synapse v1.164.2 with generated accounts only:
 | `image_viewer_plain_encrypted_animation_limits_and_corrupt` (M3 Task 3) | Synapse 1.164.2, `matrixclient.test`: plain/encrypted PNG, animated GIF/WebP, >8k image and corrupt file; SDK decryption, no cached decrypted media, explicit original-byte save and cancellation; pass |
 | `attachment_plain_encrypted_cancel_restart_round_trip` (M3 Task 3 regression) | Synapse 1.164.2, `matrixclient.test`: attachment round trips, cancellation and persisted queue restart after shared atomic-save/cache changes; pass |
 | `timeline_metadata_and_send_queue_actions` (Task 6 regression) | Synapse 1.164.2: existing SDK Unicode reaction add/remove and stable timeline identity pass after shared picker integration |
+| `encrypted_delivery_profile_and_same_device_store_restore` (M4 Task 1) | Synapse 1.164.2, `matrixclient.test`, loopback TLS: core SDK display-name update, bounded avatar upload/removal, profile and encrypted delivery/store reopen pass |
+| `timeline_metadata_and_send_queue_actions` (M4 Task 4) | Synapse 1.164.2, `matrixclient.test`: existing SDK metadata and send-queue regression passes after edit-state projection |
 
 ## Operator reports (not independently reproduced)
 
