@@ -17,18 +17,20 @@ keyring = { version = "=3.6.3", features = ["apple-native"] }
 mac-usernotifications = "=0.3.1"
 block2 = "=0.6.2"
 objc2 = "=0.6.5"
-objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSError"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSError", "NSNotification", "NSOperation", "NSString", "block2"] }
 objc2-user-notifications = { version = "=0.3.2", features = ["UNUserNotificationCenter", "block2"] }
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSColor", "NSColorSpace", "objc2-core-foundation"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSColor", "NSColorSpace", "NSWorkspace", "NSAccessibility", "objc2-core-foundation"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "=3.6.3", features = ["windows-native"] }
-windows = { version = "=0.62.2", features = ["UI_ViewManagement", "UI_Notifications", "Data_Xml_Dom", "Foundation"] }
+windows = { version = "=0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "UI_ViewManagement", "UI_Notifications", "Data_Xml_Dom", "Foundation"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "=3.6.3", features = ["sync-secret-service", "crypto-rust"] }
 ashpd = { version = "=0.13.13", default-features = false, features = ["tokio", "settings"] }
 zbus = { version = "=5.19.0", default-features = false, features = ["tokio"] }
 
-[lints]
-workspace = true
+# Native observer registration and Win32 output pointers are isolated in audited
+# platform modules. Core/frontend retain the workspace-wide forbid policy.
+[lints.rust]
+unsafe_code = "deny"

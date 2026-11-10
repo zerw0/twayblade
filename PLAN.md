@@ -437,6 +437,14 @@ M4b core — Task 3, presence data (2026-11-11):
 - Live integration: isolated Synapse 1.164.2 runs with presence enabled and disabled both passed. Checks cover own online, visible shared-room partner away/status, offline setting, empty visible set and the 64-user bound. Normal isolated fixture configuration was restored while stopped.
 - Remaining: visible-set UI wiring, real-server behavior outside Synapse, physical status controls and Linux/Windows execution. An enabled server returning only bare offline remains unknown until positive evidence appears; no status is synthesized.
 
+M4b core — Task 4, Reduce Motion and typing data (2026-11-11):
+- Platform `reduce_motion()` and `reduce_motion_changes()` share a single process-wide latest-value watch channel. macOS reads `NSWorkspace.accessibilityDisplayShouldReduceMotion` and registers for its accessibility-display notification. Linux keeps a portal connection and observes `org.freedesktop.appearance/reduced-motion`, falling back to GNOME/GTK animation settings where exposed; reconnects on bus loss. Windows reads `SPI_GETCLIENTAREAANIMATION` and polls every two seconds. Unsupported reads default to false.
+- UI contract: `Snapshot.reduce_motion` remains current while signed in or out; there is no animation implementation. `ConversationSnapshot.typing` and `Snapshot.typing` are `Vec<TypingUser {user_id,name,avatar}>`, sorted by user ID, deduplicated, excluding self, capped at three; `typing_others` counts the remainder. `model::typing_text` retains the accessible frontend string, including the additional count. Member-profile updates refresh names/avatars.
+- Native observer registration and the Win32 output-pointer call require small documented unsafe blocks. Only the platform crate changes from inherited forbid to deny, with narrowly scoped module allowances; core/frontend keep forbid. No raw pointers escape the native adapters.
+- Compilation: locked strict workspace/all-target/all-feature Clippy and rustfmt check passed on macOS. The actual Linux observer source also typechecked in a separate macOS harness; this is not a Linux build. Unit/offline tests: locked all-feature workspace tests passed, including deterministic/capped typing data, shared subscription channel and actual macOS workspace preference reads.
+- Live integration: all five isolated Synapse service regressions passed, including real typing start/stop, members, receipts, E2EE and pagination. Native motion preferences do not require a Matrix server.
+- Remaining: physical OS preference changes and delivery of accessibility notifications, Linux portal execution and Windows compilation/runtime; static/reduced-motion UI rendering belongs to the UI contributor.
+
 Not yet verified:
 - Physical GUI checks of logout, pagination, IME and VoiceOver.
 - CI on any host; Linux and Windows builds and runs.

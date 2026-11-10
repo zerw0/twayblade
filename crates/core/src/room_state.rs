@@ -183,3 +183,66 @@ mod tests {
         assert!(role(UserPowerLevel::Infinite) == MemberRole::Admin);
     }
 }
+
+/// Structured typing data; IDs give deterministic order across sync responses.
+#[derive(Clone, PartialEq, Eq)]
+pub struct TypingUser {
+    pub user_id: String,
+    pub name: String,
+    pub avatar: Option<String>,
+}
+impl From<String> for TypingUser {
+    fn from(user_id: String) -> Self {
+        Self {
+            name: user_id.clone(),
+            user_id,
+            avatar: None,
+        }
+    }
+}
+impl From<&str> for TypingUser {
+    fn from(id: &str) -> Self {
+        id.to_owned().into()
+    }
+}
+pub fn typing_users(ids: &[String], members: &[Member], own: &str) -> (Vec<TypingUser>, usize) {
+    let ids: std::collections::BTreeSet<_> = ids.iter().filter(|id| id.as_str() != own).collect();
+    let others = ids.len().saturating_sub(3);
+    let users = ids
+        .into_iter()
+        .take(3)
+        .map(|id| {
+            let member = members.iter().find(|m| m.user_id == *id);
+            TypingUser {
+                user_id: id.clone(),
+                name: member
+                    .map(|m| m.display_name.clone())
+                    .unwrap_or_else(|| id.clone()),
+                avatar: member.and_then(|m| m.avatar.clone()),
+            }
+        })
+        .collect();
+    (users, others)
+}
+#[cfg(test)]
+mod typing_tests {
+    use super::*;
+    #[test]
+    fn typing_is_ordered_bounded_deduplicated_and_excludes_self() {
+        let ids = ["@z:e", "@b:e", "@a:e", "@c:e", "@d:e", "@a:e", "@own:e"].map(str::to_owned);
+        let members = vec![Member {
+            user_id: "@a:e".into(),
+            display_name: "Alex".into(),
+            avatar: Some("mxc://e/a".into()),
+            ..Default::default()
+        }];
+        let (users, others) = typing_users(&ids, &members, "@own:e");
+        assert_eq!(
+            users.iter().map(|u| u.user_id.as_str()).collect::<Vec<_>>(),
+            ["@a:e", "@b:e", "@c:e"]
+        );
+        assert_eq!(others, 2);
+        assert_eq!(users[0].name, "Alex");
+        assert_eq!(users[0].avatar.as_deref(), Some("mxc://e/a"));
+    }
+}

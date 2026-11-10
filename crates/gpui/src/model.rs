@@ -295,20 +295,25 @@ pub(super) fn typing_text(snapshot: &Snapshot) -> String {
     let names: Vec<_> = snapshot
         .typing
         .iter()
-        .filter(|id| **id != snapshot.user_id)
-        .map(|id| {
+        .filter(|user| user.user_id != snapshot.user_id)
+        .map(|user| {
             snapshot
                 .members
                 .iter()
-                .find(|member| &member.user_id == id)
-                .map_or(id.as_str(), |member| member.display_name.as_str())
+                .find(|member| member.user_id == user.user_id)
+                .map_or(user.name.as_str(), |member| member.display_name.as_str())
         })
         .collect();
     match names.as_slice() {
         [] => String::new(),
-        [name] => format!("{name} is typing…"),
-        [first, second] => format!("{first} and {second} are typing…"),
-        [first, ..] => format!("{first} and {} others are typing…", names.len() - 1),
+        [name] if snapshot.typing_others == 0 => format!("{name} is typing…"),
+        [first, second] if snapshot.typing_others == 0 => {
+            format!("{first} and {second} are typing…")
+        }
+        [first, ..] => format!(
+            "{first} and {} others are typing…",
+            names.len() - 1 + snapshot.typing_others
+        ),
     }
 }
 
@@ -382,7 +387,7 @@ mod room_state_tests {
     fn typing_labels_resolve_members_and_do_not_include_our_own_user() {
         let mut snapshot = preview(false, 6);
         assert!(typing_text(&snapshot) == "Alex is typing…");
-        snapshot.typing = vec![snapshot.user_id.clone()];
+        snapshot.typing = vec![snapshot.user_id.clone().into()];
         assert!(typing_text(&snapshot).is_empty());
         snapshot.typing = vec![
             "@alex:preview.invalid".into(),

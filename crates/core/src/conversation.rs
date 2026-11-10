@@ -138,7 +138,8 @@ pub struct ConversationSnapshot {
     pub status: TimelineStatus,
     pub members: Vec<Member>,
     pub members_state: MembersState,
-    pub typing: Vec<String>,
+    pub typing: Vec<crate::room_state::TypingUser>,
+    pub typing_others: usize,
 }
 
 impl Conversation {
@@ -547,7 +548,7 @@ impl Account {
                 generation,
                 account_instance: account.instance_id(), room_id: room_id.clone(),
                 conversation: None, messages: Vec::new(), status: TimelineStatus::Loading,
-                members: Vec::new(), members_state: MembersState::Loading, typing: Vec::new(),
+                members: Vec::new(), members_state: MembersState::Loading, typing: Vec::new(), typing_others: 0,
             };
             let room = RoomId::parse(&room_id).ok().and_then(|id| account.client.get_room(&id));
             let Some(room) = room else {
@@ -665,7 +666,10 @@ impl Account {
                     result = &mut member_load, if member_pending => {
                         member_pending = false;
                         match result {
-                            Ok(members) => { snapshot.members = members; snapshot.members_state = MembersState::Ready; }
+                            Ok(members) => {
+                                snapshot.members = members; snapshot.members_state = MembersState::Ready;
+                                for user in &mut snapshot.typing { if let Some(member)=snapshot.members.iter().find(|m|m.user_id==user.user_id) { user.name=member.display_name.clone(); user.avatar=member.avatar.clone(); } }
+                            }
                             Err(_) => snapshot.members_state = MembersState::Failed,
                         }
                         yield snapshot.clone();
@@ -676,8 +680,8 @@ impl Account {
                     }
                     change = typing.recv() => {
                         match change {
-                            Ok(ids) => snapshot.typing = ids.into_iter().map(|id| id.to_string()).collect(),
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => snapshot.typing.clear(),
+                            Ok(ids) => { let ids = ids.into_iter().map(|id| id.to_string()).collect::<Vec<_>>(); (snapshot.typing,snapshot.typing_others)=crate::room_state::typing_users(&ids,&snapshot.members,&account.user_id()); },
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => { snapshot.typing.clear(); snapshot.typing_others=0; },
                             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         }
                         yield snapshot.clone();

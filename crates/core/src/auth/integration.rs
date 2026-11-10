@@ -923,7 +923,10 @@ async fn members_typing_and_read_receipts() {
     );
     wait_snapshot(
         &mut updates,
-        |s| s.typing.contains(&alice.user_id()) && !s.typing.contains(&bob.user_id()),
+        |s| {
+            s.typing.iter().any(|u| u.user_id == alice.user_id())
+                && !s.typing.iter().any(|u| u.user_id == bob.user_id())
+        },
         "remote typing notification",
     )
     .await;

@@ -3,7 +3,9 @@
 use zeroize::Zeroizing;
 #[cfg(target_os = "linux")]
 mod accent;
+mod motion;
 pub mod notifications;
+pub use motion::{reduce_motion, reduce_motion_changes};
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 compile_error!("No credential backend is configured for this operating system");

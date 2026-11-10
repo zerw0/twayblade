@@ -58,7 +58,9 @@ pub(super) struct Snapshot {
     pub(super) timeline_ready: bool,
     pub(super) members: Vec<Member>,
     pub(super) members_state: MembersState,
-    pub(super) typing: Vec<String>,
+    pub(super) typing: Vec<matrix_client_core::room_state::TypingUser>,
+    pub(super) typing_others: usize,
+    pub(super) reduce_motion: bool,
     pub(super) sync_status: String,
     pub(super) timeline_status: String,
 }
@@ -172,6 +174,7 @@ impl BrowserLogin {
 
 pub(super) struct Backend {
     _instance: Option<auth::InstanceLock>,
+    motion_task: JoinHandle<()>,
     runtime: Runtime,
     state: Arc<Mutex<State>>,
     updates: watch::Sender<Snapshot>,
@@ -196,6 +199,7 @@ pub(super) fn render_viewer_image(
 fn publish(sender: &watch::Sender<Snapshot>, update: impl FnOnce(&mut Snapshot)) {
     sender.send_modify(|snapshot| {
         update(snapshot);
+        snapshot.reduce_motion = matrix_client_platform::reduce_motion();
         snapshot.revision = snapshot.revision.wrapping_add(1);
     });
 }
@@ -374,9 +378,24 @@ impl Backend {
         instance: Option<auth::InstanceLock>,
     ) -> Result<Arc<Self>, ServiceError> {
         let runtime = Runtime::new().map_err(|_| failure("Background runtime could not start."))?;
-        let (updates, _) = watch::channel(Snapshot::default());
+        let (updates, _) = watch::channel(Snapshot {
+            reduce_motion: matrix_client_platform::reduce_motion(),
+            ..Default::default()
+        });
+        let mut motion = matrix_client_platform::reduce_motion_changes();
+        let motion_updates = updates.clone();
+        let motion_task = runtime.spawn(async move {
+            while motion.changed().await.is_ok() {
+                let reduced = *motion.borrow_and_update();
+                let changed = motion_updates.borrow().reduce_motion != reduced;
+                if changed {
+                    publish(&motion_updates, |view| view.reduce_motion = reduced);
+                }
+            }
+        });
         Ok(Arc::new(Self {
             _instance: instance,
+            motion_task,
             runtime,
             updates,
             notification_config: watch::channel(NotificationConfig::default()).0,
@@ -663,6 +682,7 @@ impl Backend {
             snapshot.members.clear();
             snapshot.members_state = MembersState::Loading;
             snapshot.typing.clear();
+            snapshot.typing_others = 0;
             snapshot.timeline_status = "Loading messages…".into();
         });
         let shared = self.state.clone();
@@ -708,6 +728,7 @@ impl Backend {
                             for member in &mut view.members { member.presence = view.presence.get(&member.user_id).cloned(); }
                             view.members_state = snapshot.members_state;
                             view.typing = snapshot.typing;
+                            view.typing_others = snapshot.typing_others;
                         });
                     }
                     completed = work.join_next(), if !work.is_empty() => {
@@ -1108,6 +1129,7 @@ impl Backend {
             snapshot.members.clear();
             snapshot.members_state = MembersState::Loading;
             snapshot.typing.clear();
+            snapshot.typing_others = 0;
             snapshot.timeline_status.clear();
         });
         drop(state);
@@ -1556,6 +1578,7 @@ impl Backend {
 
 impl Drop for Backend {
     fn drop(&mut self) {
+        self.motion_task.abort();
         if let Ok(mut state) = self.state.lock() {
             state.stop();
         }
