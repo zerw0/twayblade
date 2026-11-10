@@ -20,6 +20,7 @@ direct/group calls through Element Call.
 | Storage | SDK SQLite stores, encrypted with a passphrase held in the OS credential store. No plaintext fallback. Logout and failed sign-in delete the local store. |
 | Instances | One running instance per OS user, enforced by a lock file in the app data directory. |
 | Calls | Element Call in a separate, capability-restricted web runtime (Wry candidate). Chat UI stays native. Legacy `m.call.*` is out of scope for 1.0. |
+| Appearance | Follow the system accent with neutral surfaces and contrasting foregrounds. |
 | Toolchain | Rust minimum = the version actually built and tested (1.99). Nix shell is optional. |
 
 ## 1.0 scope
@@ -92,11 +93,9 @@ Decision 2026-11-10: build the full application first; CI is not a gate for now.
 Linux and Windows CI passed on `36f850a`; macOS CI was switched to `macos-15`
 (the `macos-14` image is retired) and its result has not been checked.
 
-1. **M1 authentication.** OAuth/OIDC (MAS servers may not offer passwords),
-   legacy SSO, token refresh, revoked-session recovery.
-2. **M2 encryption usability.** Cross-signing setup, device verification
-   (emoji/SAS), key backup and recovery-key restore, then attachments
-   (send/receive, encrypted media, previews) and the emoji picker.
+1. **M1 authentication** and **2. M2 encryption usability** are implemented
+   (see Progress). Remaining: real-browser sign-in on a public server, and
+   Element interoperability for verification and attachments.
 3. **M3 spaces and threads.** Thread view and replies, space join/leave,
    room directory, invites, room creation.
 4. **M4 calls.** Element Call runtime, direct and group calls.
@@ -114,8 +113,8 @@ Done (macOS arm64, offline and isolated-server verification only):
   row, room header (avatar, topic, encryption lock), bubble timeline with day
   separators and undecryptable/deleted states, rounded composer, details panel
   (Cmd-I) and profile panel (Escape closes). Two-step sign-in (server, then
-  implemented password options). Browser sign-in controls await M1; controls
-  for unbuilt features are omitted, not faked.
+  implemented password and OAuth options). Controls for unbuilt features
+  are omitted, not faked.
 - Home (rooms outside all spaces), room search, recency-sorted rooms, per-room
   drafts, pagination, plain-text send queue, read-only profiles.
 - Offline previews, incl. a 10,000-message virtualization smoke fixture.
@@ -133,6 +132,75 @@ Functional workspace (2026-11-10, Codex; reviewed):
 - Debt cleared: typed core errors/statuses, core records used directly,
   RoomListService-driven room list; separate release credential entry.
 - 26 unit/UI tests; six isolated-server checks (see STATUS.md).
+
+OAuth/OIDC — Task 1 (2026-11-10):
+- SDK metadata/discovery, dynamic registration, PKCE and one-shot loopback
+  callback; system-browser action, Cancel and typed inline failures.
+- Password-compatible atomic Keychain record holds OAuth client ID/session;
+  synchronous SDK refresh callbacks persist rotations and serialize with logout.
+- fmt/strict Clippy/31 unit/UI tests pass; light/dark sample captures reviewed.
+  MAS 1.27.0 + Synapse 1.164.2: login, cancel, wrong state, expired-token refresh,
+  three-process relaunch and logout pass. Physical browser/real-server check pending.
+
+Legacy SSO — Task 2 (2026-11-10):
+- SDK provider discovery/name buttons and bounded provider icons; shared
+  one-shot state-checked callback, cancellation and SDK loginToken exchange.
+- fmt/strict Clippy/34 unit/UI tests pass; light/dark SSO sample captures reviewed.
+- Synapse 1.164.2 with local MAS 1.27.0 OIDC: full redirect, token exchange,
+  Keychain restore and logout pass. Physical browser/real IdP check pending.
+
+Session recovery — Task 3 (2026-11-10):
+- SDK revocation events stop sync and show signed-out UI. Soft reauthentication
+  retains store/device (password, OAuth and SSO); hard logout needs local-data
+  deletion confirmation. Credential generations reject stale refresh writes.
+- fmt/strict Clippy/36 unit/UI tests pass; light/dark soft/hard samples reviewed.
+- Synapse 1.164.2: second-client device revocation, clean sync stop, retained
+  credentials before confirmation, failed/successful same-device soft recovery
+  and cleanup pass. Physical revoked-session/browser reauth checks pending.
+
+Verification and recovery — Task 4 (2026-11-10):
+- SDK cross-signing/backup setup, one-time recovery-key copy/confirmation,
+  key/passphrase restore, live history re-decryption, SAS and incoming prompts.
+- Settings → Security lists verified devices, revokes other password devices,
+  uses OAuth browser management when advertised, and confirms recovery-key reset.
+- fmt/strict Clippy/42 unit/UI tests pass; light/dark verification/recovery
+  captures reviewed. Isolated Synapse: SAS/cancel, wrong key, fresh-store old
+  history restore, device revocation and recovery reset pass. Element/physical
+  UI and browser-management acceptance remain pending.
+
+Attachments — Task 5 (2026-11-10):
+- Native file picker, drop/paste, filename/size/thumbnail confirmation; SDK encrypted
+  send queue, upload progress/cancel and restore; server upload limit enforced.
+- Bounded image decode/render cache, file Save/Open with chosen destination,
+  sanitised names and atomic downloads; opening requires an explicit action.
+- fmt/strict Clippy/45 unit/UI tests pass; light/dark attachment captures reviewed.
+  Synapse media round trips, thumbnails, oversize, cancel and queued restart pass.
+  Physical dialogs/drop/paste and interruption during an active HTTP upload pending.
+
+Emoji picker — Task 6 (2026-11-10):
+- Shared searchable composer/reaction picker, keyboard selection, six skin tones,
+  bounded persistent recents and `:shortcode` completion; inserts at Unicode cursor.
+- Unicode 15.x baseline avoids newer missing system-font glyphs. Sample actions
+  stay offline; room/account/cursor changes reject stale insertion.
+- fmt/strict Clippy/49 unit/UI tests pass; light/dark emoji captures reviewed.
+  Synapse `timeline_metadata_and_send_queue_actions` reaction regression passes;
+  physical keyboard/IME/screen-reader and platform font checks remain pending.
+
+Review fixes (2026-11-10, after Codex tasks 1–6):
+- Browser callback keeps listening through preconnect sockets, favicon and
+  forged-state requests instead of failing sign-in on the first connection.
+- macOS bundle sets `LSFileQuarantineEnabled`, so opened attachments get
+  Gatekeeper's downloaded-file warning. Windows Mark-of-the-Web is still missing.
+- Recovery-key confirmation no longer requires copying to the clipboard.
+- Open question: OAuth registration sends the homeserver URL as `client_uri`;
+  it should be the client's own homepage once one exists.
+
+System accent (2026-11-10):
+- Primary controls, outgoing bubbles and selection tints derive from the OS
+  accent, with contrasting foregrounds. macOS uses AppKit; Windows uses
+  UISettings; Linux uses the desktop portal (fallback when unavailable).
+- Native macOS read, actual theme-update and contrast tests pass (50 tests total).
+  Live preference changes and Windows/Linux execution remain platform checks.
 
 Not yet verified:
 - Physical GUI checks of logout, pagination, IME and VoiceOver.

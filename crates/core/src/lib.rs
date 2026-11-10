@@ -6,6 +6,7 @@ pub mod conversation;
 pub mod profile;
 pub mod room_state;
 pub mod rooms;
+pub mod security;
 pub mod spaces;
 
 use matrix_sdk::Client;
@@ -17,6 +18,47 @@ pub struct LoginDiscovery {
     pub homeserver: String,
     pub legacy_flows: Option<Vec<String>>,
     pub oauth_metadata_available: bool,
+    pub sso: bool,
+    pub identity_providers: Vec<IdentityProvider>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IdentityProvider {
+    pub id: String,
+    pub name: String,
+    /// Bounded, decoded and re-encoded PNG; never a remote UI image URL.
+    pub icon_png: Option<Vec<u8>>,
+}
+
+#[allow(deprecated)] // Login icons are fetched before an access token exists.
+async fn provider_icon(client: &Client, uri: &matrix_sdk::ruma::MxcUri) -> Option<Vec<u8>> {
+    use matrix_sdk::ruma::api::client::media::get_content_thumbnail::v3::Request;
+    let mut request = Request::from_url(uri, 32u32.into(), 32u32.into()).ok()?;
+    request.allow_remote = true;
+    let bytes = tokio::time::timeout(Duration::from_secs(3), client.send(request))
+        .await
+        .ok()?
+        .ok()?
+        .file;
+    bounded_provider_icon(bytes)
+}
+
+fn bounded_provider_icon(bytes: Vec<u8>) -> Option<Vec<u8>> {
+    if bytes.len() > 512 * 1024 {
+        return None;
+    }
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(256);
+    limits.max_image_height = Some(256);
+    limits.max_alloc = Some(4 * 1024 * 1024);
+    reader.limits(limits);
+    let icon = reader.decode().ok()?.thumbnail(32, 32);
+    let mut output = std::io::Cursor::new(Vec::new());
+    icon.write_to(&mut output, image::ImageFormat::Png).ok()?;
+    Some(output.into_inner())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -84,6 +126,29 @@ async fn discover(server: String) -> Result<LoginDiscovery, DiscoveryError> {
     if legacy.is_err() && metadata.is_err() {
         return Err(DiscoveryError::Connection);
     }
+    let mut sso = false;
+    let mut identity_providers = Vec::new();
+    if let Ok(response) = &legacy {
+        for flow in &response.flows {
+            if let matrix_sdk::ruma::api::client::session::get_login_types::v3::LoginType::Sso(
+                flow,
+            ) = flow
+            {
+                sso = true;
+                for provider in flow.identity_providers.iter().take(16) {
+                    let icon_png = match &provider.icon {
+                        Some(uri) => provider_icon(&client, uri).await,
+                        None => None,
+                    };
+                    identity_providers.push(IdentityProvider {
+                        id: provider.id.clone(),
+                        name: provider.name.clone(),
+                        icon_png,
+                    });
+                }
+            }
+        }
+    }
     let legacy_flows = legacy.ok().map(|response| {
         response
             .flows
@@ -97,12 +162,32 @@ async fn discover(server: String) -> Result<LoginDiscovery, DiscoveryError> {
         homeserver: homeserver.to_string(),
         legacy_flows,
         oauth_metadata_available,
+        sso,
+        identity_providers,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_icons_reject_bombs_and_decode_only_bounded_images() {
+        fn png(width: u32, height: u32) -> Vec<u8> {
+            let image = image::DynamicImage::new_rgba8(width, height);
+            let mut output = std::io::Cursor::new(Vec::new());
+            image
+                .write_to(&mut output, image::ImageFormat::Png)
+                .unwrap();
+            output.into_inner()
+        }
+        assert!(bounded_provider_icon(vec![0; 512 * 1024 + 1]).is_none());
+        assert!(bounded_provider_icon(b"invalid image".to_vec()).is_none());
+        assert!(bounded_provider_icon(png(512, 512)).is_none());
+        let safe = bounded_provider_icon(png(64, 64)).unwrap();
+        let safe = image::load_from_memory(&safe).unwrap();
+        assert_eq!((safe.width(), safe.height()), (32, 32));
+    }
 
     #[test]
     fn homeserver_url_rejects_insecure_or_credential_bearing_urls() {

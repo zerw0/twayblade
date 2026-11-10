@@ -1,13 +1,19 @@
-//! Password sessions backed by encrypted SDK stores and OS secret storage.
+//! Password and OAuth sessions backed by encrypted SDK stores and OS secret storage.
 
 use directories::ProjectDirs;
 use matrix_client_platform as secrets;
-use matrix_sdk::{Client, authentication::matrix::MatrixSession};
+use matrix_sdk::{
+    AuthSession, Client,
+    authentication::{
+        matrix::MatrixSession,
+        oauth::{ClientId, OAuthSession, UserSession},
+    },
+};
 use serde::{Deserialize, Serialize};
 use std::{
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -15,14 +21,52 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::validate_homeserver;
+mod loopback;
+mod oauth;
+mod recovery;
+mod sso;
+pub use oauth::OAuthLogin;
+pub use recovery::SessionState;
+pub use sso::SsoLogin;
 
 // No Debug: this contains access credentials and the store passphrase.
 #[derive(Serialize, Deserialize)]
 struct SavedSession {
     homeserver: String,
+    #[serde(default)]
+    generation: Uuid,
     store_id: Uuid,
     passphrase: String,
     session: Option<MatrixSession>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    oauth: Option<SavedOAuth>,
+}
+
+// Keep the existing password record readable without a credential migration.
+#[derive(Serialize, Deserialize)]
+struct SavedOAuth {
+    client_id: String,
+    user: UserSession,
+}
+
+impl SavedSession {
+    fn update(&mut self, session: AuthSession) -> Result<(), AuthError> {
+        match session {
+            AuthSession::Matrix(session) => {
+                self.session = Some(session);
+                self.oauth = None;
+            }
+            AuthSession::OAuth(session) => {
+                self.oauth = Some(SavedOAuth {
+                    client_id: session.client_id.to_string(),
+                    user: session.user,
+                });
+                self.session = None;
+            }
+            _ => return Err(AuthError::Storage),
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -33,6 +77,10 @@ pub struct Account {
     remotely_revoked: Arc<AtomicBool>,
     store_path: PathBuf,
     session_store: secrets::SessionStore,
+    persistence_lock: Arc<Mutex<()>>,
+    root_certificate: Option<matrix_sdk::reqwest::Certificate>,
+    session_state: tokio::sync::watch::Receiver<SessionState>,
+    _session_monitor: Arc<recovery::SessionMonitor>,
 }
 
 impl std::fmt::Debug for Account {
@@ -46,7 +94,13 @@ impl Account {
         self.instance_id.as_u128()
     }
 
-    fn new(client: Client, store_path: PathBuf, session_store: secrets::SessionStore) -> Self {
+    pub(crate) fn new(
+        client: Client,
+        store_path: PathBuf,
+        session_store: secrets::SessionStore,
+        persistence_lock: Arc<Mutex<()>>,
+    ) -> Self {
+        let (session_state, monitor) = recovery::monitor(&client);
         Self {
             client,
             selected_room: tokio::sync::watch::channel(None).0,
@@ -54,7 +108,16 @@ impl Account {
             remotely_revoked: Arc::new(AtomicBool::new(false)),
             store_path,
             session_store,
+            persistence_lock,
+            root_certificate: None,
+            session_state,
+            _session_monitor: monitor,
         }
+    }
+
+    fn with_certificate(mut self, certificate: Option<matrix_sdk::reqwest::Certificate>) -> Self {
+        self.root_certificate = certificate;
+        self
     }
 
     pub fn user_id(&self) -> String {
@@ -67,17 +130,18 @@ impl Account {
     /// Revoke the remote session before discarding the local credentials.
     pub async fn logout(&self) -> Result<(), AuthError> {
         if !self.remotely_revoked.load(Ordering::SeqCst) {
-            self.client
-                .matrix_auth()
-                .logout()
-                .await
-                .map_err(|_| AuthError::Logout)?;
+            self.client.logout().await.map_err(|_| AuthError::Logout)?;
             self.remotely_revoked.store(true, Ordering::SeqCst);
         }
-        self.session_store
-            .delete()
-            .await
-            .map_err(|_| AuthError::Storage)?;
+        {
+            let _guard = self
+                .persistence_lock
+                .lock()
+                .map_err(|_| AuthError::Storage)?;
+            self.session_store
+                .delete_sync()
+                .map_err(|_| AuthError::Storage)?;
+        }
         // The revoked device's keys and cached history have no further use.
         remove_store(&self.store_path).await
     }
@@ -91,6 +155,14 @@ impl std::hash::Hash for Account {
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
+    #[error("auth_oauth")]
+    OAuth,
+    #[error("auth_callback")]
+    Callback,
+    #[error("auth_cancelled")]
+    Cancelled,
+    #[error("auth_timeout")]
+    Timeout,
     #[error("auth_storage")]
     Storage,
     #[error("auth_restore")]
@@ -172,6 +244,7 @@ async fn client(
         .map_err(|_| AuthError::Storage)?;
     let mut builder = Client::builder()
         .homeserver_url(&record.homeserver)
+        .handle_refresh_tokens()
         .sqlite_store(&path, Some(&record.passphrase));
     if let Some(certificate) = &context.root_certificate {
         builder = builder.add_root_certificates(vec![certificate.clone()]);
@@ -194,21 +267,33 @@ async fn restore_in(context: &AuthContext) -> Result<Option<Account>, AuthError>
         return Ok(None);
     };
     let mut record: SavedSession = serde_json::from_str(&value).map_err(|_| AuthError::Restore)?;
-    let Some(session) = record.session.take() else {
-        // A pre-login checkpoint contains no account credentials.
-        return Ok(None);
+    let session = match (record.session.take(), record.oauth.take()) {
+        (Some(session), None) => AuthSession::Matrix(session),
+        (None, Some(session)) => AuthSession::OAuth(Box::new(OAuthSession {
+            client_id: ClientId::new(session.client_id),
+            user: session.user,
+        })),
+        (None, None) => return Ok(None),
+        _ => return Err(AuthError::Restore),
     };
     let (client, path) = client(context, &record).await?;
     client
-        .matrix_auth()
-        .restore_session(session, Default::default())
+        .restore_session(session)
         .await
         .map_err(|_| AuthError::Restore)?;
-    Ok(Some(Account::new(
-        client,
-        path,
-        context.session_store.clone(),
-    )))
+    let persistence_lock =
+        install_session_callbacks(&client, context.session_store.clone(), record.store_id)?;
+    client.send_queue().enable_upload_progress(true);
+    client.send_queue().set_enabled(true).await;
+    Ok(Some(
+        Account::new(
+            client,
+            path,
+            context.session_store.clone(),
+            persistence_lock,
+        )
+        .with_certificate(context.root_certificate.clone()),
+    ))
 }
 
 pub async fn login_password(
@@ -237,7 +322,7 @@ async fn login_password_in(
     {
         let previous: SavedSession =
             serde_json::from_str(&value).map_err(|_| AuthError::Restore)?;
-        if previous.session.is_some() {
+        if previous.session.is_some() || previous.oauth.is_some() {
             return Err(AuthError::ExistingSession);
         }
         // An interrupted earlier sign-in left an empty, never-logged-in store.
@@ -245,9 +330,11 @@ async fn login_password_in(
     }
     let mut record = SavedSession {
         homeserver: homeserver.to_string(),
+        generation: Uuid::new_v4(),
         store_id: Uuid::new_v4(),
         passphrase: Uuid::new_v4().to_string(),
         session: None,
+        oauth: None,
     };
     // Prove secure storage works before transmitting the password or creating a device.
     context.save(&record).await?;
@@ -271,7 +358,64 @@ async fn login_password_in(
         let _ = client.matrix_auth().logout().await;
         return Err(error);
     }
-    Ok(Account::new(client, path, context.session_store.clone()))
+    let persistence_lock =
+        install_session_callbacks(&client, context.session_store.clone(), record.store_id)?;
+    Ok(Account::new(
+        client,
+        path,
+        context.session_store.clone(),
+        persistence_lock,
+    )
+    .with_certificate(context.root_certificate.clone()))
+}
+
+/// Serialize full-record replacement with logout. A refresh from a stale
+/// client cannot recreate a deleted record or overwrite a different account.
+fn install_session_callbacks(
+    client: &Client,
+    store: secrets::SessionStore,
+    store_id: Uuid,
+) -> Result<Arc<Mutex<()>>, AuthError> {
+    let value = store
+        .load_sync()
+        .map_err(|_| AuthError::Storage)?
+        .ok_or(AuthError::Storage)?;
+    let record: SavedSession = serde_json::from_str(&value).map_err(|_| AuthError::Storage)?;
+    let generation = record.generation;
+    let gate = Arc::new(Mutex::new(()));
+    let reload_store = store.clone();
+    let reload_gate = gate.clone();
+    let save_gate = gate.clone();
+    client
+        .set_session_callbacks(
+            Box::new(move |_| {
+                let _guard = reload_gate.lock().map_err(|_| AuthError::Storage)?;
+                let value = reload_store.load_sync()?.ok_or(AuthError::Storage)?;
+                let record: SavedSession = serde_json::from_str(&value)?;
+                if record.store_id != store_id || record.generation != generation {
+                    return Err(AuthError::Storage.into());
+                }
+                match (record.session, record.oauth) {
+                    (Some(session), None) => Ok(session.tokens),
+                    (None, Some(session)) => Ok(session.user.tokens),
+                    _ => Err(AuthError::Storage.into()),
+                }
+            }),
+            Box::new(move |client| {
+                let _guard = save_gate.lock().map_err(|_| AuthError::Storage)?;
+                let value = store.load_sync()?.ok_or(AuthError::Storage)?;
+                let mut record: SavedSession = serde_json::from_str(&value)?;
+                if record.store_id != store_id || record.generation != generation {
+                    return Err(AuthError::Storage.into());
+                }
+                record.update(client.session().ok_or(AuthError::Storage)?)?;
+                let value = Zeroizing::new(serde_json::to_string(&record)?);
+                store.save_sync(&value)?;
+                Ok(())
+            }),
+        )
+        .map_err(|_| AuthError::Storage)?;
+    Ok(gate)
 }
 
 #[cfg(test)]

@@ -13,7 +13,7 @@ import urllib.request
 
 ROOT = Path('/data')
 FIXTURE = ROOT / 'fixture.json'
-URL = 'https://127.0.0.1:18448'
+URL = 'https://127.0.0.1:21448' if os.environ.get('MATRIX_FIXTURE_RECOVERY') else 'https://127.0.0.1:20448' if os.environ.get('MATRIX_FIXTURE_SSO') else ('https://127.0.0.1:19448' if os.environ.get('MATRIX_FIXTURE_OAUTH') else 'https://127.0.0.1:18448')
 
 
 def generate():
@@ -132,9 +132,9 @@ def request(path, payload=None):
         return json.load(response)
 
 
-def register():
+def register(users=None):
     fixture = json.loads(FIXTURE.read_text())
-    for user in ['alice', 'bob']:
+    for user in (users or ['alice', 'bob']):
         nonce = request('/_synapse/admin/v1/register')['nonce']
         digest = hmac.new(fixture['registration_secret'].encode(), digestmod=hashlib.sha1)
         for field in [nonce, user, fixture[user], 'notadmin']:
@@ -150,11 +150,95 @@ def register():
     print('Isolated test accounts ready.')
 
 
+def register_security():
+    fixture = json.loads(FIXTURE.read_text())
+    username = 'security_' + secrets.token_hex(8)
+    password = secrets.token_urlsafe(32)
+    fixture[username] = password
+    fixture['security_username'] = username
+    fixture['security_password'] = password
+    FIXTURE.write_text(json.dumps(fixture))
+    register([username])
+
+
+def recovery_config():
+    import yaml
+    config = yaml.safe_load((ROOT / 'homeserver.yaml').read_text())
+    config['nonrefreshable_access_token_lifetime'] = '5s'
+    (ROOT / 'homeserver.yaml').write_text(yaml.safe_dump(config))
+    print('Isolated short-lived session fixture configured.')
+
+
+def oauth_config():
+    import yaml
+    shared = secrets.token_hex(32)
+    config = yaml.safe_load((ROOT / 'homeserver.yaml').read_text())
+    config['server_name'] = 'oauth.matrixclient.test'
+    for key in ['enable_registration', 'registration_shared_secret', 'macaroon_secret_key']:
+        config.pop(key, None)
+    config['matrix_authentication_service'] = {'enabled': True, 'endpoint': 'http://mas:8080/', 'secret': shared}
+    config['listeners'] = [listener for listener in config['listeners'] if listener['port'] != 8008]
+    config['listeners'].append({'port': 8008, 'type': 'http', 'tls': False, 'bind_addresses': ['0.0.0.0'], 'resources': [{'names': ['client']}]})
+    (ROOT / 'homeserver.yaml').write_text(yaml.safe_dump(config))
+    mas = yaml.safe_load((ROOT / 'mas.generated.yaml').read_text())
+    resources = [{'name': name} for name in ['discovery', 'human', 'oauth', 'compat', 'graphql', 'health']]
+    resources.append({'name': 'assets', 'path': '/usr/local/share/mas-cli/assets/'})
+    mas['http'] = {'public_base': 'https://127.0.0.1:19449/', 'issuer': 'https://127.0.0.1:19449/', 'listeners': [
+        {'name': 'public', 'resources': resources, 'binds': [{'address': '0.0.0.0:8443'}], 'tls': {'certificate_file': '/data/tls.crt', 'key_file': '/data/tls.key'}},
+        {'name': 'internal', 'resources': [{'name': 'discovery'}, {'name': 'oauth'}, {'name': 'health'}], 'binds': [{'address': '0.0.0.0:8080'}]}]}
+    sso_secret = secrets.token_hex(32)
+    (ROOT / 'sso-client-secret').write_text(sso_secret)
+    (ROOT / 'sso-client-secret').chmod(0o600)
+    mas['clients'] = [{'client_id': '01H8PKNWKKRPCBW4YGH1RWV279', 'client_auth_method': 'client_secret_post', 'client_secret': sso_secret, 'redirect_uris': ['https://127.0.0.1:20448/_synapse/client/oidc/callback'], 'grant_types': ['authorization_code'], 'response_types': ['code']}]
+    mas['database'] = {'host': 'mas-db', 'port': 5432, 'username': 'postgres', 'database': 'mas', 'ssl_mode': 'disable'}
+    mas['matrix'] = {'kind': 'synapse', 'homeserver': 'oauth.matrixclient.test', 'endpoint': 'http://mas-synapse:8008', 'secret': shared}
+    mas['policy'] = {'data': {'client_registration': {'allow_insecure_uris': True, 'allow_host_mismatch': True}}}
+    mas['rate_limiting'] = {'registration': {'burst': 1000, 'per_second': 100}, 'login': {'per_ip': {'burst': 1000, 'per_second': 100}, 'per_account': {'burst': 1000, 'per_second': 100}}}
+    mas['experimental'] = {'access_token_ttl': 5}
+    mas['account'] = {'password_registration_enabled': True, 'password_registration_email_required': False}
+    mas['passwords']['minimum_complexity'] = 0
+    (ROOT / 'mas.yaml').write_text(yaml.safe_dump(mas))
+    (ROOT / 'mas.yaml').chmod(0o600)
+    (ROOT / 'mas.generated.yaml').unlink()
+    print('Isolated MAS configuration generated.')
+
+
+def sso_config():
+    import yaml
+    config = yaml.safe_load((ROOT / 'homeserver.yaml').read_text())
+    config['server_name'] = 'sso.matrixclient.test'
+    config['oidc_providers'] = [{
+        'idp_id': 'fixture', 'idp_name': 'Local OIDC',
+        'issuer': 'https://127.0.0.1:19449/', 'discover': False,
+        # Isolated Docker-only HTTP backchannel; public browser endpoints stay TLS.
+        'skip_verification': True,
+        'client_id': '01H8PKNWKKRPCBW4YGH1RWV279',
+        'client_secret': Path('/mas-data/sso-client-secret').read_text(),
+        'client_auth_method': 'client_secret_post',
+        'authorization_endpoint': 'https://127.0.0.1:19449/authorize',
+        'token_endpoint': 'http://mas:8080/oauth2/token',
+        'jwks_uri': 'http://mas:8080/oauth2/keys.json',
+        'userinfo_endpoint': 'http://mas:8080/oauth2/userinfo',
+        'scopes': ['openid'],
+        'user_mapping_provider': {'config': {'localpart_template': 'oidc_{{ user.sub | lower }}', 'display_name_template': 'Local OIDC user'}}}]
+    config['sso'] = {'client_whitelist': ['http://127.0.0.1:']}
+    (ROOT / 'homeserver.yaml').write_text(yaml.safe_dump(config))
+    print('Isolated legacy SSO configuration generated.')
+
+
 if __name__ == '__main__':
     try:
         action = sys.argv[1]
         if action == 'generate':
             generate()
+        elif action == 'register-security':
+            register_security()
+        elif action == 'recovery-config':
+            recovery_config()
+        elif action == 'sso-config':
+            sso_config()
+        elif action == 'oauth-config':
+            oauth_config()
         elif action == 'health':
             request('/_matrix/client/versions')
         elif action == 'register':

@@ -74,10 +74,15 @@ impl Account {
     pub fn room_updates(&self) -> impl Stream<Item = RoomSnapshot> + Send + 'static + use<> {
         let account = self.clone();
         async_stream::stream! {
+            let mut session_state = account.session_state();
             let mut rooms = imbl::Vector::<RoomSummary>::new();
             let snapshot = |rooms: &imbl::Vector<RoomSummary>, status| RoomSnapshot {
                 account_instance: account.instance_id(), rooms: rooms.iter().cloned().collect(), status,
             };
+            if *session_state.borrow_and_update() != crate::auth::SessionState::Active {
+                yield snapshot(&rooms, SyncStatus::Stopped);
+                return;
+            }
             yield snapshot(&rooms, SyncStatus::Connecting);
             let service = match SyncService::builder(account.client.clone())
                 .with_offline_mode().build().await {
@@ -107,6 +112,13 @@ impl Account {
             loop {
                 yield snapshot(&rooms, status);
                 tokio::select! {
+                    _ = session_state.changed() => {
+                        if *session_state.borrow_and_update() != crate::auth::SessionState::Active {
+                            service.stop().await;
+                            yield snapshot(&rooms, SyncStatus::Stopped);
+                            break;
+                        }
+                    }
                     result = selection.changed() => {
                         if result.is_err() { break; }
                         let selected = selection.borrow_and_update().clone();

@@ -44,6 +44,26 @@ pub(super) struct MatrixApp {
     pub options: Option<LoginOptions>,
     pub status: String,
     pub busy: bool,
+    /// Pressed inside a toolbar row; the next mouse move starts a window drag.
+    pub window_drag: bool,
+    /// The security reminder strip was dismissed for this session.
+    pub security_notice_dismissed: bool,
+    pub confirm_session_reset: bool,
+    pub emoji_picker: Option<crate::emoji::Picker>,
+    pub emoji_search: Entity<InputState>,
+    pub emoji_preferences: crate::emoji::Preferences,
+    pub attachment_draft: Option<matrix_client_core::conversation::AttachmentDraft>,
+    pub attachment_busy: bool,
+    pub attachment_sample: bool,
+    pub attachment_request: u64,
+    pub security_open: bool,
+    pub security_restore: bool,
+    pub security_reset_confirmation: bool,
+    pub security_device: Option<String>,
+    pub security_input: Entity<InputState>,
+    pub security_key: Option<zeroize::Zeroizing<String>>,
+    pub security_key_copied: bool,
+    pub oauth_cancel: Option<tokio::sync::watch::Sender<bool>>,
     pub paginating: bool,
     pub pagination_exhausted: bool,
     pub(super) pagination_request: u64,
@@ -86,6 +106,8 @@ impl MatrixApp {
                 .placeholder("Password")
                 .masked(true)
         });
+        let emoji_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search emoji or shortcode"));
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search conversations"));
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
@@ -102,6 +124,18 @@ impl MatrixApp {
         let scroller = cx.new(|cx| MessageScrollerState::new(groups.len(), cx));
         let mut subscriptions =
             vec![cx.subscribe_in(&search, window, |_, _, _: &InputEvent, _, cx| cx.notify())];
+        subscriptions.push(cx.subscribe_in(
+            &emoji_search,
+            window,
+            |this, _, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Change)
+                    && let Some(picker) = &mut this.emoji_picker
+                {
+                    picker.selected = 0;
+                }
+                cx.notify();
+            },
+        ));
         for input in [&homeserver, &username, &password] {
             subscriptions.push(cx.subscribe_in(
                 input,
@@ -124,10 +158,12 @@ impl MatrixApp {
             cx.notify();
         }));
         subscriptions.push(cx.observe_window_activation(window, |_, _, cx| cx.notify()));
-        subscriptions.push(cx.observe_window_appearance(window, |_, window, cx| {
-            Theme::sync_system_appearance(Some(window), cx);
-            crate::theme::apply(cx);
-        }));
+        if !preview {
+            subscriptions.push(cx.observe_window_appearance(window, |_, window, cx| {
+                Theme::sync_system_appearance(Some(window), cx);
+                crate::theme::apply(cx);
+            }));
+        }
         let mut this = Self {
             navigation: Navigation {
                 selected_space: (preview && !home).then(|| "design".into()),
@@ -147,6 +183,28 @@ impl MatrixApp {
             options: None,
             status: String::new(),
             busy: !preview,
+            window_drag: false,
+            security_notice_dismissed: false,
+            oauth_cancel: None,
+            confirm_session_reset: false,
+            emoji_picker: None,
+            emoji_search,
+            emoji_preferences: if preview {
+                Default::default()
+            } else {
+                crate::emoji::Preferences::load()
+            },
+            attachment_draft: None,
+            attachment_busy: false,
+            attachment_sample: false,
+            attachment_request: 0,
+            security_open: false,
+            security_restore: false,
+            security_reset_confirmation: false,
+            security_device: None,
+            security_input: cx.new(|cx| InputState::new(window, cx).masked(true)),
+            security_key: None,
+            security_key_copied: false,
             paginating: false,
             pagination_exhausted: false,
             pagination_request: 0,
@@ -253,10 +311,24 @@ impl MatrixApp {
         if self.started && snapshot.revision <= self.snapshot.revision {
             return;
         }
+        if self.snapshot.session_state != snapshot.session_state {
+            self.options = None;
+            self.status.clear();
+            self.confirm_session_reset = false;
+        }
         self.started = true;
         if self.snapshot.user_id != snapshot.user_id
             || self.snapshot.account_instance != snapshot.account_instance
         {
+            self.emoji_picker = None;
+            self.clear_attachment();
+            self.security_key = None;
+            self.security_key_copied = false;
+            self.security_open = false;
+            self.security_restore = false;
+            self.security_device = None;
+            self.security_reset_confirmation = false;
+            self.security_input = cx.new(|cx| InputState::new(window, cx).masked(true));
             // Status from sign-in or a previous account must not enter this workspace.
             self.status.clear();
             self.reset_pagination();
@@ -334,6 +406,64 @@ impl MatrixApp {
         cx.notify();
     }
 
+    pub fn prepare_reauthentication(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy || self.preview {
+            return;
+        }
+        self.busy = true;
+        self.job(
+            window,
+            cx,
+            |backend| backend.recovery_options(),
+            |this, result, window, cx| {
+                this.busy = false;
+                match result {
+                    Ok(options) => {
+                        this.homeserver.update(cx, |state, cx| {
+                            state.set_value(options.homeserver.clone(), window, cx)
+                        });
+                        this.username.update(cx, |state, cx| {
+                            state.set_value(this.snapshot.user_id.clone(), window, cx)
+                        });
+                        this.options = Some(options);
+                        this.status.clear();
+                    }
+                    Err(error) => this.status = error.to_string(),
+                }
+            },
+        );
+    }
+
+    pub fn discard_revoked_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.confirm_session_reset || self.busy {
+            return;
+        }
+        if self.preview {
+            self.snapshot = Snapshot::default();
+            self.options = None;
+            self.confirm_session_reset = false;
+            self.status = "Sample data · Local session removed.".into();
+            cx.notify();
+            return;
+        }
+        self.busy = true;
+        self.job(
+            window,
+            cx,
+            |backend| backend.discard_revoked_session(),
+            |this, result, _, _| {
+                this.busy = false;
+                if let Err(error) = result {
+                    this.status = error.to_string();
+                } else {
+                    this.options = None;
+                    this.confirm_session_reset = false;
+                    this.status.clear();
+                }
+            },
+        );
+    }
+
     pub fn discover(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.busy || self.preview || self.backend.is_none() {
             return;
@@ -352,10 +482,8 @@ impl MatrixApp {
                         this.homeserver.update(cx, |state, cx| {
                             state.set_value(options.homeserver.clone(), window, cx)
                         });
-                        this.status = if options.password {
+                        this.status = if options.password || options.browser || options.sso {
                             ""
-                        } else if options.browser {
-                            "Browser sign-in is not available in this build yet."
                         } else {
                             "No supported sign-in option was found."
                         }
@@ -366,6 +494,76 @@ impl MatrixApp {
                 }
             },
         );
+        cx.notify();
+    }
+
+    pub fn browser_sign_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_browser_sign_in(false, None, window, cx);
+    }
+
+    pub fn sso_sign_in(
+        &mut self,
+        provider: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_browser_sign_in(true, provider, window, cx);
+    }
+
+    fn start_browser_sign_in(
+        &mut self,
+        sso: bool,
+        provider: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.busy
+            || self.preview
+            || self
+                .options
+                .as_ref()
+                .is_none_or(|options| if sso { !options.sso } else { !options.browser })
+        {
+            return;
+        }
+        self.busy = true;
+        self.status = "Opening your browser…".into();
+        let (cancel, receiver) = tokio::sync::watch::channel(false);
+        self.oauth_cancel = Some(cancel);
+        let address = self.homeserver.read(cx).value().to_string();
+        self.job(window, cx, move |backend| backend.begin_oauth(address, sso, provider), move |this, result, window, cx| {
+            match result {
+                Ok(url) => {
+                    // Never retain the authorization URL in a snapshot or diagnostics.
+                    if !*receiver.borrow() { cx.open_url(&url); }
+                    this.status = "Complete sign-in in your browser. This window will wait for up to five minutes.".into();
+                    this.job(window, cx, move |backend| backend.finish_oauth(receiver), |this, result, _, _| {
+                        this.busy = false;
+                        this.oauth_cancel = None;
+                        this.status = result.err().map(|error| error.to_string()).unwrap_or_default();
+                    });
+                }
+                Err(error) => {
+                    this.busy = false;
+                    this.oauth_cancel = None;
+                    this.status = error.to_string();
+                }
+            }
+        });
+        cx.notify();
+    }
+
+    pub fn cancel_browser_sign_in(&mut self, cx: &mut Context<Self>) {
+        if let Some(cancel) = &self.oauth_cancel {
+            cancel.send_replace(true);
+        }
+        if self.preview {
+            self.oauth_cancel = None;
+            self.busy = false;
+            self.status = "Sample data · Browser sign-in cancelled.".into();
+        } else {
+            self.status = "Cancelling browser sign-in…".into();
+        }
         cx.notify();
     }
 
@@ -426,6 +624,8 @@ impl MatrixApp {
         if self.navigation.selected_room.as_ref() == Some(&id) {
             return;
         }
+        self.emoji_picker = None;
+        self.clear_attachment();
         self.reset_pagination();
         self.navigation.selected_room = Some(id.clone());
         self.groups.clear();
@@ -472,6 +672,10 @@ impl MatrixApp {
             move |this, state, event: &InputEvent, window, cx| {
                 match event {
                     InputEvent::Change => {
+                        this.update_emoji_completion(
+                            state.read(cx).value().to_string(),
+                            state.read(cx).cursor(),
+                        );
                         this.navigation
                             .drafts
                             .insert(target.clone(), state.read(cx).value().to_string());

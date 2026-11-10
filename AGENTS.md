@@ -4,7 +4,7 @@
 - Read `PLAN.md` before implementation. Work through its milestones and keep its progress section accurate.
 - Keep the shared Matrix application core in Rust. Use GPUI + GPUI Kit for the shared macOS/Linux/Windows frontend; the user approved replacing the split frontend.
 - macOS is the primary UX and acceptance platform. Preserve Linux/Windows portability while prioritizing Mac conventions.
-- Use compact typography, restrained blue accents, system appearance, standard window decorations, and clear product language. Keep protocol identifiers and discovery diagnostics out of normal sign-in screens.
+- Use compact typography, the system accent with contrasting foregrounds, system appearance, standard window decorations, and clear product language. Keep protocol identifiers and discovery diagnostics out of normal sign-in screens.
 - Keep the chat UI native. Element Call may use a dedicated web runtime, behind a restricted bridge.
 - Required release features: E2EE, spaces, threads, OAuth/OIDC, legacy SSO, and direct/group Element Call calls.
 - Modern MatrixRTC direct calls and legacy `m.call.*` calls are separate compatibility targets.

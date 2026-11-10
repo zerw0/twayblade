@@ -138,11 +138,13 @@ async fn encrypted_delivery_profile_and_same_device_store_restore() {
         alice_client,
         run.join("alice"),
         secrets::SessionStore::default(),
+        Arc::new(Mutex::new(())),
     );
     let bob = Account::new(
         bob_client,
         run.join("bob"),
         secrets::SessionStore::default(),
+        Arc::new(Mutex::new(())),
     );
     let alice_sync = sync(&alice);
     let bob_sync = sync(&bob);
@@ -251,6 +253,7 @@ async fn encrypted_delivery_profile_and_same_device_store_restore() {
         restored_client,
         run.join("bob"),
         secrets::SessionStore::default(),
+        Arc::new(Mutex::new(())),
     );
     let restored_sync = sync(&restored);
     wait_for_room(&restored, &room_id).await;
@@ -543,11 +546,13 @@ async fn timeline_metadata_and_send_queue_actions() {
         alice_client,
         run.join("alice"),
         secrets::SessionStore::new("matrix-client.integration.metadata-unused"),
+        Arc::new(Mutex::new(())),
     );
     let bob = Account::new(
         bob_client,
         run.join("bob"),
         secrets::SessionStore::new("matrix-client.integration.metadata-unused"),
+        Arc::new(Mutex::new(())),
     );
     let alice_sync = sync(&alice);
     let bob_sync = sync(&bob);
@@ -825,11 +830,13 @@ async fn members_typing_and_read_receipts() {
         alice_client,
         run.join("alice"),
         secrets::SessionStore::new("matrix-client.integration.unused"),
+        Arc::new(Mutex::new(())),
     );
     let bob = Account::new(
         bob_client,
         run.join("bob"),
         secrets::SessionStore::new("matrix-client.integration.unused"),
+        Arc::new(Mutex::new(())),
     );
     let alice_sync = sync(&alice);
     let bob_sync = sync(&bob);
@@ -1010,6 +1017,7 @@ async fn pagination_preserves_message_identity() {
         alice_client,
         run.join("alice"),
         secrets::SessionStore::new("matrix-client.integration.unused"),
+        Arc::new(Mutex::new(())),
     );
     let syncing = sync(&account);
     wait_for_room(&account, &id).await;
@@ -1133,6 +1141,7 @@ async fn room_list_service_tracks_recency_and_details() {
         alice_client,
         run.join("alice"),
         secrets::SessionStore::new("matrix-client.integration.unused"),
+        Arc::new(Mutex::new(())),
     );
     let mut updates = Box::pin(account.room_updates());
     wait_rooms(&mut updates, |s| {
@@ -1191,4 +1200,179 @@ async fn room_list_service_tracks_recency_and_details() {
         "room-list logout",
     );
     eprintln!("PASS: RoomListService recency, metadata refresh, membership removal and unique IDs");
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+#[ignore = "requires isolated normal + short-lived Synapse and unlocked Keychain"]
+async fn revoked_device_and_soft_logout_recovery() {
+    use matrix_sdk::ruma::api::client::uiaa::{AuthData, Password, UserIdentifier};
+    for soft in [false, true] {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join(if soft {
+            "../../test-data/local/recovery"
+        } else {
+            "../../test-data/local/integration"
+        });
+        let fixture: Fixture = checked(
+            serde_json::from_slice(&checked(
+                tokio::fs::read(root.join("fixture.json")).await,
+                "fixture",
+            )),
+            "fixture JSON",
+        );
+        let certificate = checked(
+            Certificate::from_pem(&checked(tokio::fs::read(root.join("ca.crt")).await, "CA")),
+            "CA format",
+        );
+        let scope = Uuid::new_v4();
+        let context = AuthContext {
+            session_store: secrets::SessionStore::new(&format!(
+                "matrix-client.integration.recovery.{scope}"
+            )),
+            data_dir: root.join(format!("lifecycle-{scope}")),
+            root_certificate: Some(certificate.clone()),
+        };
+        let account = checked(
+            login_password_in(
+                &context,
+                fixture.homeserver.clone(),
+                "alice".into(),
+                Zeroizing::new(fixture.alice.clone()),
+            )
+            .await,
+            "initial login",
+        );
+        assert!(
+            account.discard_revoked_session().await.is_err(),
+            "active session cannot be discarded as revoked"
+        );
+        let path = account.store_path.clone();
+        let device = checked(account.client.device_id().ok_or(()), "device").to_owned();
+        let before = checked(context.session_store.load().await, "saved session").unwrap();
+        let mut changes = account.session_state();
+        let stream = account.room_updates();
+        let sync = tokio::spawn(async move {
+            tokio::pin!(stream);
+            while let Some(snapshot) = stream.next().await {
+                if snapshot.status == crate::rooms::SyncStatus::Stopped {
+                    return;
+                }
+            }
+            panic!("revoked sync did not report stop");
+        });
+        let second = checked(
+            Client::builder()
+                .homeserver_url(&fixture.homeserver)
+                .add_root_certificates(vec![certificate])
+                .build()
+                .await,
+            "second client",
+        );
+        if soft {
+            tokio::time::sleep(Duration::from_secs(6)).await;
+        } else {
+            checked(
+                second
+                    .matrix_auth()
+                    .login_username("alice", &fixture.alice)
+                    .await,
+                "second client login",
+            );
+            let mut auth = Password::new(
+                UserIdentifier::from(checked(second.user_id().ok_or(()), "second user").to_owned()),
+                fixture.alice.clone(),
+            );
+            if let Err(error) = second
+                .delete_devices(
+                    std::slice::from_ref(&device),
+                    Some(AuthData::Password(auth.clone())),
+                )
+                .await
+            {
+                auth.session = checked(
+                    error
+                        .as_uiaa_response()
+                        .and_then(|info| info.session.clone())
+                        .ok_or(()),
+                    "device revocation challenge",
+                )
+                .into();
+                checked(
+                    second
+                        .delete_devices(
+                            std::slice::from_ref(&device),
+                            Some(AuthData::Password(auth)),
+                        )
+                        .await,
+                    "revoke device from second client",
+                );
+            }
+        }
+        assert!(
+            account.client.whoami().await.is_err(),
+            "revoked/expired token accepted"
+        );
+        checked(
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while *changes.borrow_and_update() == SessionState::Active {
+                    checked(changes.changed().await, "revocation event");
+                }
+            })
+            .await,
+            "revocation notification",
+        );
+        assert_eq!(
+            *changes.borrow(),
+            if soft {
+                SessionState::SoftLoggedOut
+            } else {
+                SessionState::HardLoggedOut
+            }
+        );
+        checked(
+            checked(
+                tokio::time::timeout(Duration::from_secs(15), sync).await,
+                "sync shutdown",
+            ),
+            "sync task",
+        );
+        assert!(
+            path.exists(),
+            "store must be retained before recovery/confirmation"
+        );
+        assert!(checked(context.session_store.load().await, "retained credential").is_some());
+        if soft {
+            assert!(
+                account
+                    .reauthenticate_password(Zeroizing::new("invalid-password".into()))
+                    .await
+                    .is_err()
+            );
+            assert!(
+                checked(context.session_store.load().await, "failed reauth record")
+                    .unwrap()
+                    .as_str()
+                    == before.as_str(),
+                "failed reauthentication changed saved credentials"
+            );
+            let restored = checked(
+                account
+                    .reauthenticate_password(Zeroizing::new(fixture.alice))
+                    .await,
+                "soft reauthentication",
+            );
+            assert_eq!(restored.client.device_id(), Some(device.as_ref()));
+            assert_eq!(restored.store_path, path);
+            checked(restored.client.whoami().await, "reauthenticated token");
+            checked(restored.logout().await, "reauthenticated logout");
+        } else {
+            checked(
+                account.discard_revoked_session().await,
+                "confirmed local discard",
+            );
+            checked(second.logout().await, "second client logout");
+        }
+        assert!(!path.exists());
+        assert!(checked(context.session_store.load().await, "credential cleanup").is_none());
+    }
 }

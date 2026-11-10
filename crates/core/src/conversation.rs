@@ -15,6 +15,9 @@ use matrix_sdk_ui::timeline::{
 };
 use std::sync::Arc;
 
+mod attachments;
+pub use attachments::{AttachmentDraft, AttachmentError, sanitize_filename};
+
 /// What a timeline row represents. The frontend owns the wording.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MessageKind {
@@ -42,6 +45,7 @@ pub struct MessageRow {
     pub reactions: Vec<Reaction>,
     pub thread_replies: u32,
     pub attachment: Option<Attachment>,
+    pub upload_percent: Option<u8>,
     pub can_retry: bool,
     pub event_id: Option<String>,
     pub new_messages: bool,
@@ -70,8 +74,9 @@ pub struct Reaction {
     pub mine: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Attachment {
+    pub preview_png: Option<Arc<Vec<u8>>>,
     pub filename: String,
     pub size: Option<u64>,
 }
@@ -239,6 +244,7 @@ fn plain_excerpt(body: &str) -> String {
 
 fn attachment(filename: &str, size: Option<matrix_sdk::ruma::UInt>) -> Option<Attachment> {
     Some(Attachment {
+        preview_png: None,
         filename: filename.to_owned(),
         size: size.map(u64::from),
     })
@@ -375,6 +381,16 @@ fn rows<'a>(
                     .map(|content| reactions(content, own_user))
                     .unwrap_or_default(),
                 thread_replies: msglike.map_or(0, thread_reply_count),
+                upload_percent: match event.send_state() {
+                    Some(EventSendState::NotSentYet {
+                        progress: Some(progress),
+                    }) => Some(
+                        ((progress.progress.current.saturating_mul(100)
+                            / progress.progress.total.max(1))
+                        .min(100)) as u8,
+                    ),
+                    _ => None,
+                },
                 can_retry: matches!(
                     event.send_state(),
                     Some(EventSendState::SendingFailed { .. })

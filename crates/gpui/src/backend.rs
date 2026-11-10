@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
 use matrix_client_core::{
-    auth::{self, Account},
+    auth::{self, Account, SessionState},
     conversation::Conversation,
 };
 
@@ -27,6 +27,8 @@ pub(super) use matrix_client_core::{
 pub(super) struct Snapshot {
     pub(super) revision: u64,
     pub(super) account_instance: u128,
+    pub(super) session_state: SessionState,
+    pub(super) security: matrix_client_core::security::SecuritySnapshot,
     pub(super) user_id: String,
     pub(super) rooms: Vec<Room>,
     pub(super) spaces: Vec<Space>,
@@ -45,6 +47,8 @@ pub(super) struct LoginOptions {
     pub(super) homeserver: String,
     pub(super) password: bool,
     pub(super) browser: bool,
+    pub(super) sso: bool,
+    pub(super) providers: Vec<matrix_client_core::IdentityProvider>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -62,6 +66,7 @@ fn failure(message: impl ToString) -> ServiceError {
 #[derive(Default)]
 struct State {
     account: Option<Account>,
+    security: Option<matrix_client_core::security::Security>,
     conversation: Option<Conversation>,
     epoch: u64,
     selection: u64,
@@ -72,6 +77,7 @@ struct State {
 
 impl State {
     fn stop(&mut self) {
+        self.security = None;
         for task in self.tasks.drain(..) {
             task.abort();
         }
@@ -85,6 +91,25 @@ impl State {
     }
 }
 
+enum BrowserLogin {
+    OAuth(auth::OAuthLogin),
+    Sso(auth::SsoLogin),
+}
+impl BrowserLogin {
+    fn browser_url(&self) -> &str {
+        match self {
+            Self::OAuth(login) => login.browser_url(),
+            Self::Sso(login) => login.browser_url(),
+        }
+    }
+    async fn finish(self, cancel: watch::Receiver<bool>) -> Result<Account, AuthError> {
+        match self {
+            Self::OAuth(login) => login.finish(cancel).await,
+            Self::Sso(login) => login.finish(cancel).await,
+        }
+    }
+}
+
 pub(super) struct Backend {
     _instance: Option<auth::InstanceLock>,
     runtime: Runtime,
@@ -92,6 +117,7 @@ pub(super) struct Backend {
     updates: watch::Sender<Snapshot>,
     // Serialize lifecycle changes. GPUI invokes operations only on background workers.
     lifecycle: Mutex<()>,
+    oauth: Mutex<Option<BrowserLogin>>,
 }
 
 fn publish(sender: &watch::Sender<Snapshot>, update: impl FnOnce(&mut Snapshot)) {
@@ -99,6 +125,24 @@ fn publish(sender: &watch::Sender<Snapshot>, update: impl FnOnce(&mut Snapshot))
         update(snapshot);
         snapshot.revision = snapshot.revision.wrapping_add(1);
     });
+}
+
+pub(super) enum SecurityAction {
+    Setup,
+    Refresh,
+    SignOutBrowser(String),
+    Recover(Zeroizing<String>),
+    Reset,
+    Request(String),
+    Accept,
+    Confirm,
+    Cancel(bool),
+    SignOut(String, Zeroizing<String>),
+}
+pub(super) enum SecurityOutcome {
+    Done,
+    RecoveryKey(Zeroizing<String>),
+    BrowserUrl(String),
 }
 
 pub(super) enum TimelineAction {
@@ -120,6 +164,10 @@ pub(super) fn timeline_status_text(status: TimelineStatus) -> &'static str {
 
 fn auth_failure(error: AuthError) -> ServiceError {
     failure(match error {
+        AuthError::OAuth => "Browser sign-in failed. Check your connection and try again.",
+        AuthError::Callback => "The browser response was invalid. Start sign-in again.",
+        AuthError::Cancelled => "Browser sign-in cancelled.",
+        AuthError::Timeout => "Browser sign-in timed out after five minutes. Try again.",
         AuthError::Storage => {
             "Secure session storage could not be opened. Unlock your OS credential store and retry."
         }
@@ -173,6 +221,21 @@ fn sync_status_text(status: SyncStatus) -> &'static str {
     }
 }
 
+fn media_failure(error: matrix_client_core::conversation::AttachmentError) -> ServiceError {
+    use matrix_client_core::conversation::AttachmentError::*;
+    failure(&match error {
+        Limit { maximum } => format!(
+            "This file exceeds the server’s upload limit of {} MB.",
+            maximum / 1_000_000
+        ),
+        File => "This file could not be read.".into(),
+        Connection => "The server’s upload limit could not be checked. Try again.".into(),
+        Upload => "The attachment could not be queued or cancelled.".into(),
+        Download => "The attachment could not be saved.".into(),
+        Unavailable => "This attachment is no longer available.".into(),
+    })
+}
+
 fn conversation_failure(error: ConversationError) -> ServiceError {
     failure(match error {
         ConversationError::EmptyMessage => "Write a message first.",
@@ -202,6 +265,7 @@ impl Backend {
             updates,
             state: Arc::new(Mutex::new(State::default())),
             lifecycle: Mutex::new(()),
+            oauth: Mutex::new(None),
         }))
     }
 
@@ -216,11 +280,9 @@ impl Backend {
                 .legacy_flows
                 .as_ref()
                 .is_some_and(|flows| flows.iter().any(|flow| flow == "m.login.password")),
-            browser: discovery.oauth_metadata_available
-                || discovery
-                    .legacy_flows
-                    .as_ref()
-                    .is_some_and(|flows| flows.iter().any(|flow| flow == "m.login.sso")),
+            browser: discovery.oauth_metadata_available,
+            sso: discovery.sso,
+            providers: discovery.identity_providers,
         })
     }
 
@@ -252,11 +314,179 @@ impl Backend {
             .lock()
             .map_err(|_| failure("Session is unavailable."))?;
         let password = Zeroizing::new(password);
+        let recovery = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?
+            .account
+            .clone()
+            .filter(|account| *account.session_state().borrow() == SessionState::SoftLoggedOut);
         let account = self
             .runtime
-            .block_on(auth::login_password(homeserver, username, password))
+            .block_on(async move {
+                if let Some(account) = recovery {
+                    account.reauthenticate_password(password).await
+                } else {
+                    auth::login_password(homeserver, username, password).await
+                }
+            })
             .map_err(auth_failure)?;
         self.connect(account)
+    }
+
+    pub(super) fn begin_oauth(
+        &self,
+        homeserver: String,
+        sso: bool,
+        provider: Option<String>,
+    ) -> Result<String, ServiceError> {
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?;
+        let recovery = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?
+            .account
+            .clone()
+            .filter(|account| *account.session_state().borrow() == SessionState::SoftLoggedOut);
+        let pending = self
+            .runtime
+            .block_on(async move {
+                match (sso, recovery) {
+                    (true, Some(account)) => auth::SsoLogin::reauthenticate(account, provider)
+                        .await
+                        .map(BrowserLogin::Sso),
+                    (false, Some(account)) => auth::OAuthLogin::reauthenticate(account)
+                        .await
+                        .map(BrowserLogin::OAuth),
+                    (true, None) => auth::SsoLogin::begin(homeserver, provider)
+                        .await
+                        .map(BrowserLogin::Sso),
+                    (false, None) => auth::OAuthLogin::begin(homeserver)
+                        .await
+                        .map(BrowserLogin::OAuth),
+                }
+            })
+            .map_err(auth_failure)?;
+        let url = pending.browser_url().to_owned();
+        *self
+            .oauth
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))? = Some(pending);
+        Ok(url)
+    }
+
+    pub(super) fn finish_oauth(&self, cancel: watch::Receiver<bool>) -> Result<(), ServiceError> {
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?;
+        let pending = self
+            .oauth
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?
+            .take()
+            .ok_or_else(|| failure("Start browser sign-in again."))?;
+        let account = self
+            .runtime
+            .block_on(pending.finish(cancel))
+            .map_err(auth_failure)?;
+        self.connect(account)
+    }
+
+    pub(super) fn recovery_options(&self) -> Result<LoginOptions, ServiceError> {
+        let account = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?
+            .account
+            .clone()
+            .ok_or_else(|| failure("No saved session."))?;
+        if *account.session_state().borrow() != SessionState::SoftLoggedOut {
+            return Err(failure("This session cannot be resumed."));
+        }
+        self.discover(account.homeserver())
+    }
+
+    pub(super) fn discard_revoked_session(&self) -> Result<(), ServiceError> {
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?;
+        let account = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?
+            .account
+            .clone()
+            .ok_or_else(|| failure("No saved session."))?;
+        self.runtime
+            .block_on(account.discard_revoked_session())
+            .map_err(auth_failure)?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?;
+        state.stop();
+        state.account = None;
+        publish(&self.updates, |snapshot| {
+            let revision = snapshot.revision;
+            *snapshot = Snapshot::default();
+            snapshot.revision = revision;
+        });
+        Ok(())
+    }
+
+    pub(super) fn security_action(
+        &self,
+        expected: u128,
+        action: SecurityAction,
+    ) -> Result<SecurityOutcome, ServiceError> {
+        let security = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| failure("Session is unavailable."))?;
+            if state.account.as_ref().map(Account::instance_id) != Some(expected) {
+                return Err(failure("The account changed."));
+            }
+            state
+                .security
+                .clone()
+                .ok_or_else(|| failure("Security information is still loading."))?
+        };
+        let result = self.runtime.block_on(async {
+            use SecurityAction::*;
+            match action {
+                Setup => return security.setup_backup().await.map(SecurityOutcome::RecoveryKey),
+                Refresh => security.refresh().await?,
+                SignOutBrowser(device) => return security.device_management_url(device).await.map(SecurityOutcome::BrowserUrl),
+                Recover(key) => security.recover(key).await?,
+                Reset => return security.reset_recovery().await.map(SecurityOutcome::RecoveryKey),
+                Request(device) => security.request_verification(device).await?,
+                Accept => security.accept_verification().await?,
+                Confirm => security.confirm_verification().await?,
+                Cancel(mismatch) => security.cancel_verification(mismatch).await?,
+                SignOut(device, password) => security.sign_out_device(device, password).await?,
+            }
+            Ok(SecurityOutcome::Done)
+        }).map_err(|error| failure(match error {
+            matrix_client_core::security::SecurityError::Unavailable => "Security information could not be loaded. Check your connection.",
+            matrix_client_core::security::SecurityError::Setup => "Secure backup could not be set up. Verify this device before trying again.",
+            matrix_client_core::security::SecurityError::Recovery => "Recovery failed. Check your recovery key or passphrase and connection.",
+            matrix_client_core::security::SecurityError::Verification => "Verification could not be completed. Start again on both devices.",
+            matrix_client_core::security::SecurityError::DeviceAuthentication => "The device could not be signed out. Check your password or your server’s authentication requirements.",
+        }))?;
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?;
+        if state.account.as_ref().map(Account::instance_id) != Some(expected) {
+            return Err(failure("The account changed."));
+        }
+        Ok(result)
     }
 
     pub(super) fn snapshot(&self) -> Snapshot {
@@ -303,22 +533,51 @@ impl Backend {
         state.timeline_task = Some(self.runtime.spawn(async move {
             let stream = account.conversation_updates(room_id, selection);
             tokio::pin!(stream);
-            while let Some(snapshot) = stream.next().await {
-                let Ok(mut state) = shared.lock() else {
-                    return;
-                };
-                if state.epoch != epoch || state.selection != selection {
-                    return;
+            let mut thumbnails = std::collections::HashMap::<String, Arc<Vec<u8>>>::new();
+            let mut attempted = std::collections::HashSet::new();
+            let mut pending = std::collections::VecDeque::<String>::new();
+            let mut work = tokio::task::JoinSet::new();
+            let mut current: Option<Conversation> = None;
+            loop {
+                while work.len() < 4 && let Some(id) = pending.pop_front() && let Some(conversation) = current.clone() {
+                    work.spawn(async move {
+                        let png = tokio::time::timeout(std::time::Duration::from_secs(15), conversation.attachment_thumbnail(&id)).await.ok().and_then(Result::ok);
+                        (id, png)
+                    });
                 }
-                state.conversation = snapshot.conversation;
-                publish(&updates, |view| {
-                    view.timeline_ready = state.conversation.is_some();
-                    view.timeline_status = timeline_status_text(snapshot.status).into();
-                    view.messages = snapshot.messages;
-                    view.members = snapshot.members;
-                    view.members_state = snapshot.members_state;
-                    view.typing = snapshot.typing;
-                });
+                tokio::select! {
+                    snapshot = stream.next() => {
+                        let Some(mut snapshot) = snapshot else { break; };
+                        current = snapshot.conversation.clone();
+                        let candidates = snapshot.messages.iter().rev().filter(|message| message.kind == matrix_client_core::conversation::MessageKind::Image).take(128).map(|message| message.id.clone()).collect::<std::collections::HashSet<_>>();
+                        attempted.retain(|id| candidates.contains(id));
+                        pending.retain(|id| candidates.contains(id));
+                        for message in snapshot.messages.iter_mut().rev() {
+                            if let Some(attachment) = &mut message.attachment { attachment.preview_png = thumbnails.get(&message.id).cloned(); }
+                            if candidates.contains(&message.id) && attempted.insert(message.id.clone()) { pending.push_back(message.id.clone()); }
+                        }
+                        let Ok(mut state) = shared.lock() else { return; };
+                        if state.epoch != epoch || state.selection != selection { return; }
+                        state.conversation = snapshot.conversation;
+                        publish(&updates, |view| {
+                            view.timeline_ready = state.conversation.is_some();
+                            view.timeline_status = timeline_status_text(snapshot.status).into();
+                            view.messages = snapshot.messages;
+                            view.members = snapshot.members;
+                            view.members_state = snapshot.members_state;
+                            view.typing = snapshot.typing;
+                        });
+                    }
+                    completed = work.join_next(), if !work.is_empty() => {
+                        if let Some(Ok((id, Some(png)))) = completed {
+                            if thumbnails.len() >= 32 { thumbnails.clear(); }
+                            thumbnails.insert(id.clone(), png.clone());
+                            let Ok(state) = shared.lock() else { return; };
+                            if state.epoch != epoch || state.selection != selection { return; }
+                            publish(&updates, |view| { if let Some(attachment) = view.messages.iter_mut().find(|message| message.id == id).and_then(|message| message.attachment.as_mut()) { attachment.preview_png = Some(png); } });
+                        }
+                    }
+                }
             }
         }));
         Ok(())
@@ -376,6 +635,74 @@ impl Backend {
             snapshot.timeline_status.clear();
         });
         Ok(())
+    }
+
+    pub(super) fn media_conversation(
+        &self,
+        room: &str,
+        account: u128,
+    ) -> Result<Conversation, ServiceError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?;
+        if state.account.as_ref().map(Account::instance_id) != Some(account)
+            || self.updates.borrow().selected_room != room
+        {
+            return Err(failure("Conversation changed."));
+        }
+        state
+            .conversation
+            .clone()
+            .ok_or_else(|| failure("Conversation is still loading."))
+    }
+    pub(super) fn prepare_attachment(
+        &self,
+        room: String,
+        account: u128,
+        source: crate::attachments::AttachmentSource,
+    ) -> Result<matrix_client_core::conversation::AttachmentDraft, ServiceError> {
+        let conversation = self.media_conversation(&room, account)?;
+        self.runtime
+            .block_on(async {
+                match source {
+                    crate::attachments::AttachmentSource::File(path) => {
+                        conversation.prepare_file(path).await
+                    }
+                    crate::attachments::AttachmentSource::Bytes(name, bytes) => {
+                        conversation.prepare_bytes(name, bytes).await
+                    }
+                }
+            })
+            .map_err(media_failure)
+    }
+    pub(super) fn send_attachment(
+        &self,
+        room: String,
+        account: u128,
+        draft: matrix_client_core::conversation::AttachmentDraft,
+    ) -> Result<(), ServiceError> {
+        let conversation = self.media_conversation(&room, account)?;
+        self.runtime
+            .block_on(conversation.send_attachment(draft))
+            .map_err(media_failure)
+    }
+    pub(super) fn media_action(
+        &self,
+        room: String,
+        account: u128,
+        message: String,
+        path: Option<std::path::PathBuf>,
+    ) -> Result<(), ServiceError> {
+        let conversation = self.media_conversation(&room, account)?;
+        self.runtime
+            .block_on(async {
+                match path {
+                    Some(path) => conversation.download_attachment(&message, &path).await,
+                    None => conversation.cancel_attachment(&message).await,
+                }
+            })
+            .map_err(media_failure)
     }
 
     pub(super) fn send_text(&self, room_id: String, body: String) -> Result<(), ServiceError> {
@@ -505,12 +832,16 @@ impl Backend {
 
 impl Backend {
     fn connect(&self, account: Account) -> Result<(), ServiceError> {
+        let _runtime = self.runtime.enter();
+        let security = matrix_client_core::security::Security::new(&account);
+        let mut security_updates = security.subscribe();
         let mut state = self
             .state
             .lock()
             .map_err(|_| failure("Session is unavailable."))?;
         state.stop();
         state.account = Some(account.clone());
+        state.security = Some(security);
         let epoch = state.epoch;
         publish(&self.updates, |snapshot| {
             let revision = snapshot.revision;
@@ -522,6 +853,45 @@ impl Backend {
                 ..Default::default()
             };
         });
+        let shared = self.state.clone();
+        let updates = self.updates.clone();
+        state.tasks.push(self.runtime.spawn(async move {
+            while security_updates.changed().await.is_ok() {
+                let snapshot = security_updates.borrow_and_update().clone();
+                let Ok(state) = shared.lock() else {
+                    return;
+                };
+                if state.epoch != epoch {
+                    return;
+                }
+                publish(&updates, |view| view.security = snapshot);
+            }
+        }));
+        let mut session_changes = account.session_state();
+        let shared = self.state.clone();
+        let updates = self.updates.clone();
+        state.tasks.push(self.runtime.spawn(async move {
+            loop {
+                let session_state = *session_changes.borrow_and_update();
+                if session_state != SessionState::Active {
+                    if let Ok(mut state) = shared.lock() {
+                        if state.epoch != epoch {
+                            return;
+                        }
+                        state.stop();
+                        publish(&updates, |view| {
+                            view.session_state = session_state;
+                            view.timeline_ready = false;
+                            view.sync_status.clear();
+                        });
+                    }
+                    return;
+                }
+                if session_changes.changed().await.is_err() {
+                    return;
+                }
+            }
+        }));
         let (typing_tx, mut typing_rx) = watch::channel::<Option<(String, bool)>>(None);
         state.typing_intent = Some(typing_tx);
         let typing_account = account.clone();
