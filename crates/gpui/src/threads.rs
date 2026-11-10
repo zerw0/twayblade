@@ -23,6 +23,7 @@ pub(super) struct ThreadPanel {
     pub request: u64,
     pub messages: Vec<Message>,
     pub groups: Vec<Range<usize>>,
+    pub group_signatures: Vec<u64>,
     pub scroller: Entity<MessageScrollerState>,
     pub composer: Entity<TextareaState>,
     pub ready: bool,
@@ -46,6 +47,30 @@ impl MatrixApp {
         else {
             return;
         };
+        self.open_thread_root(root, window, cx);
+    }
+
+    pub(super) fn open_thread_event(
+        &mut self,
+        root: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let row = self
+            .snapshot
+            .messages
+            .iter()
+            .find(|message| message.event_id.as_ref() == Some(&root))
+            .cloned()
+            .unwrap_or_else(|| Message {
+                id: root.clone(),
+                event_id: Some(root),
+                ..Default::default()
+            });
+        self.open_thread_root(row, window, cx);
+    }
+
+    fn open_thread_root(&mut self, root: Message, window: &mut Window, cx: &mut Context<Self>) {
         let Some(room) = self.navigation.selected_room.clone() else {
             return;
         };
@@ -113,11 +138,16 @@ impl MatrixApp {
         };
         let groups = model::grouped(&messages);
         let scroller = cx.new(|cx| MessageScrollerState::new(groups.len(), cx));
+        let group_signatures = groups
+            .iter()
+            .map(|group| model::group_signature(&messages, group.clone()))
+            .collect();
         self.thread = Some(ThreadPanel {
             room: room.clone(),
             root,
             request,
             messages,
+            group_signatures,
             groups,
             scroller,
             composer,
@@ -208,10 +238,25 @@ impl MatrixApp {
             .zip(new[prefix..].iter().rev())
             .take_while(|(a, b)| a == b)
             .count();
+        let signatures: Vec<_> = groups
+            .iter()
+            .map(|group| model::group_signature(&messages, group.clone()))
+            .collect();
         thread.scroller.update(cx, |s, cx| {
             s.splice(prefix..old.len() - suffix, new.len() - prefix - suffix, cx);
-            s.remeasure(cx);
+            let mut remeasure = |new_index: usize, old_index: usize| {
+                if thread.group_signatures.get(old_index) != signatures.get(new_index) {
+                    s.remeasure_items(new_index..new_index + 1, cx);
+                }
+            };
+            for index in 0..prefix {
+                remeasure(index, index);
+            }
+            for index in 0..suffix {
+                remeasure(new.len() - suffix + index, old.len() - suffix + index);
+            }
         });
+        thread.group_signatures = signatures;
         thread.messages = messages;
         thread.groups = groups;
         thread.ready = snapshot.ready;

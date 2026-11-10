@@ -208,6 +208,8 @@ fn main() {
                     if args.iter().any(|arg| arg == "--preview-viewer") { view.preview_viewer(window,cx); }
                     if args.iter().any(|arg| arg == "--preview-directory") { view.open_management(spaces_ui::ManageKind::Directory("design".into()),window,cx); }
                     if args.iter().any(|arg| arg == "--preview-invites") { view.status = "Sample data · Invitations preview".into(); view.snapshot.invites = vec![matrix_client_core::space_actions::Invite { id: "sample-room".into(), name: "Planning".into(), ..Default::default() },matrix_client_core::space_actions::Invite { id: "sample-dm".into(), name: "Sam".into(), direct: true, ..Default::default() },matrix_client_core::space_actions::Invite { id: "sample-space".into(), name: "Product team".into(), space: true, ..Default::default() }]; }
+                    if args.iter().any(|arg| arg == "--preview-notification") { view.notification_sample = true;
+                        if args.iter().any(|arg| arg == "--preview-no-message-preview") { view.preferences.notifications.preview = false; } }
                     if args.iter().any(|arg| arg == "--preview-thread") { view.open_thread("sample-0".into(), window, cx); }
                     if args.iter().any(|arg| arg == "--preview-details") {
                         view.details_open = true;

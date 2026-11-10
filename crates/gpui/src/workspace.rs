@@ -699,13 +699,15 @@ impl MatrixApp {
                 )
                 .into_any_element()
         };
-        Button::new(SharedString::from(format!("room-{}", room.id)))
+        let row = Button::new(SharedString::from(format!("room-{}", room.id)))
             .ghost()
             .w_full()
             .h(px(28.))
             .p_0()
             .rounded(px(6.))
-            .accessibility_label(if room.unread > 0 {
+            .accessibility_label(if room.muted {
+                format!("{}, notifications muted", room.name)
+            } else if room.unread > 0 {
                 format!("{}, {} unread", room.name, room.unread)
             } else {
                 room.name.clone()
@@ -729,11 +731,54 @@ impl MatrixApp {
                             .when(unread, |name| name.font_weight(FontWeight::SEMIBOLD))
                             .child(room.name.clone()),
                     )
+                    .when(room.muted, |row| {
+                        row.child(
+                            Icon::new(IconName::BellOff)
+                                .size(px(13.))
+                                .text_color(secondary),
+                        )
+                    })
                     .when(unread, |row| row.child(badge(room.unread, cx))),
             )
             .on_click(
                 cx.listener(move |this, _, window, cx| this.select_room(id.clone(), window, cx)),
-            )
+            );
+        let room_id = room.id.clone();
+        let weak = cx.entity().downgrade();
+        let available = self.preview || self.snapshot.notifications.ready;
+        let selected_mode = self.snapshot.notifications.room_mode(&room.id);
+        div()
+            .id(SharedString::from(format!("room-context-{}", room.id)))
+            .child(row)
+            .context_menu(move |mut menu, _, _| {
+                use matrix_client_core::notifications::{RoomMode, RuleChange};
+                if !available {
+                    return menu;
+                }
+                for (label, mode) in [
+                    ("Notifications: Default", RoomMode::Default),
+                    ("All messages", RoomMode::All),
+                    ("Mentions and keywords", RoomMode::Mentions),
+                    ("Mute", RoomMode::Mute),
+                ] {
+                    let weak = weak.clone();
+                    let room_id = room_id.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(label)
+                            .checked(mode == selected_mode)
+                            .on_click(move |_, window, cx| {
+                                let _ = weak.update(cx, |this, cx| {
+                                    this.change_notification_rule(
+                                        RuleChange::Room(room_id.clone(), mode),
+                                        window,
+                                        cx,
+                                    )
+                                });
+                            }),
+                    );
+                }
+                menu
+            })
             .into_any_element()
     }
 
@@ -2337,6 +2382,7 @@ impl MatrixApp {
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .child(encryption)
+                    .child(self.room_notification_controls(&room.id, cx))
                     .child(
                         Button::new("copy-room-id")
                             .ghost()
@@ -2485,6 +2531,8 @@ impl MatrixApp {
 
 impl Render for MatrixApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.notification_window_active = window.is_window_active();
+        self.notification_config();
         if let Some(viewer) = &mut self.viewer {
             viewer.clamp_pan(window);
         }
@@ -2590,7 +2638,10 @@ impl Render for MatrixApp {
                     .flex_1()
                     .min_h_0()
                     .child(content)
-                    .children(overlay),
+                    .children(overlay)
+                    .when(self.notification_sample, |view| {
+                        view.child(self.notification_sample_view(cx))
+                    }),
             )
     }
 }

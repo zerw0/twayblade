@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use futures_util::{Stream, StreamExt};
-use matrix_sdk::Room;
+use matrix_sdk::{Room, ruma::RoomId};
 use matrix_sdk_ui::room_list_service::filters;
 use matrix_sdk_ui::sync_service::{State, SyncService};
 
@@ -14,6 +14,7 @@ pub struct RoomSummary {
     pub id: String,
     pub name: String,
     pub unread: u64,
+    pub muted: bool,
     pub is_space: bool,
     pub topic: Option<String>,
     /// Only `true` once the SDK has confirmed `m.room.encryption`.
@@ -31,6 +32,7 @@ pub struct RoomSnapshot {
     pub rooms: Vec<RoomSummary>,
     pub invites: Vec<crate::space_actions::Invite>,
     pub status: SyncStatus,
+    pub notifications: crate::notifications::RulesSnapshot,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -53,7 +55,14 @@ fn summary(room: Room) -> RoomSummary {
             .map(|name| name.to_string())
             .or_else(|| room.name())
             .unwrap_or_else(|| room.room_id().to_string()),
-        unread: room.unread_notification_counts().notification_count,
+        // Native sync may omit/lag the server total. Keep that total when it
+        // is higher, and use SDK-computed notifications as a fallback; never
+        // add per-thread summaries to it a second time.
+        unread: room
+            .unread_notification_counts()
+            .notification_count
+            .max(room.num_unread_notifications()),
+        muted: false,
         is_space: room.is_space(),
         topic: room.topic().filter(|topic| !topic.trim().is_empty()),
         encrypted: room.encryption_state().is_encrypted(),
@@ -63,10 +72,14 @@ fn summary(room: Room) -> RoomSummary {
 }
 
 // Dropping the UI subscription must stop both room and encryption sync tasks.
-struct StopOnDrop(Arc<SyncService>);
+struct StopOnDrop(
+    Arc<SyncService>,
+    tokio::sync::watch::Sender<Option<Arc<SyncService>>>,
+);
 
 impl Drop for StopOnDrop {
     fn drop(&mut self) {
+        self.1.send_replace(None);
         let service = self.0.clone();
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move { service.stop().await });
@@ -155,6 +168,7 @@ impl Account {
             let mut rooms = imbl::Vector::<RoomSummary>::new();
             let snapshot = |rooms: &imbl::Vector<RoomSummary>, status| RoomSnapshot {
                 account_instance: account.instance_id(), rooms: rooms.iter().cloned().collect(), invites: Vec::new(), status,
+                notifications: Default::default(),
             };
             if *session_state.borrow_and_update() != crate::auth::SessionState::Active {
                 yield snapshot(&rooms, SyncStatus::Stopped);
@@ -169,7 +183,8 @@ impl Account {
                     return;
                 }
             };
-            let _cleanup = StopOnDrop(service.clone());
+            account.notification_service.send_replace(Some(service.clone()));
+            let _cleanup = StopOnDrop(service.clone(), account.notification_service.clone());
             let mut state = Box::pin(service.state());
             let list = match service.room_list_service().all_rooms().await {
                 Ok(list) => list,
@@ -188,12 +203,38 @@ impl Account {
             service.room_list_service().set_room_subscriptions(&ids).await;
             service.start().await;
             let mut status = SyncStatus::Syncing;
+            let rules = account.notification_rules().await.ok();
+            let mut rule_changes = rules.as_ref().map(|rules| rules.subscribe());
+            let mut rule_snapshot = match &rules { Some(rules) => rules.snapshot().await, None => Default::default() };
             loop {
                 let mut current = snapshot(&rooms, status);
+                current.notifications = rule_snapshot.clone();
+                for room in &mut current.rooms {
+                    room.muted = rule_snapshot.room_mode(&room.id) == crate::notifications::RoomMode::Mute;
+                    if room.muted { room.unread = 0; }
+                }
                 current.invites = account.invites().await;
                 yield current;
                 tokio::select! {
-                    change = all_updates.recv() => { if matches!(change, Err(tokio::sync::broadcast::error::RecvError::Closed)) { break; } }
+                    _ = async { match &mut rule_changes { Some(changes) => { let _ = changes.recv().await; }, None => std::future::pending().await } } => {
+                        if let Some(rules) = &rules { rule_snapshot = rules.snapshot().await; }
+                    }
+                    change = all_updates.recv() => {
+                        let changed = match change {
+                            Ok(change) => Some(change.iter_all_room_ids().map(|id| id.to_string()).collect::<std::collections::HashSet<_>>()),
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => None,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        };
+                        // Entry identities/order may be unchanged while SDK
+                        // unread/profile state changes behind their handles.
+                        for cached in rooms.iter_mut() {
+                            if changed.as_ref().is_none_or(|ids| ids.contains(&cached.id))
+                                && let Ok(id) = RoomId::parse(&cached.id)
+                                && let Some(room) = account.client.get_room(&id) {
+                                    *cached = summary(room);
+                                }
+                        }
+                    }
                     _ = session_state.changed() => {
                         if *session_state.borrow_and_update() != crate::auth::SessionState::Active {
                             service.stop().await;

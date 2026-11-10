@@ -4,6 +4,7 @@ use crate::{
     app::{MatrixApp, OpenSettings},
     preferences::{ChatStyle, Density, Preferences, Scheme, Timestamps, Variant},
 };
+use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
     component::{
         button::{Button, ButtonVariants},
@@ -34,9 +35,14 @@ impl Section {
         Self::Security,
         Self::Account,
     ];
-    /// Sections with working settings. General and Notifications return when
-    /// they have real controls (notifications are M4 task 5).
-    pub const VISIBLE: [Self; 4] = [Self::Appearance, Self::Chat, Self::Security, Self::Account];
+    /// Sections with working settings. General remains hidden until it has controls.
+    pub const VISIBLE: [Self; 5] = [
+        Self::Notifications,
+        Self::Appearance,
+        Self::Chat,
+        Self::Security,
+        Self::Account,
+    ];
     fn icon(self) -> gpui_kit::assets::IconName {
         use gpui_kit::assets::IconName;
         match self {
@@ -65,6 +71,389 @@ pub(super) struct SettingsWindow {
     _observe: Subscription,
 }
 impl MatrixApp {
+    pub(super) fn notification_config(&self) {
+        if self.preview {
+            return;
+        }
+        if let Some(backend) = &self.backend {
+            backend.set_notification_config(crate::backend::NotificationConfig {
+                device: self.preferences.notifications.clone(),
+                context: matrix_client_core::notifications::NotificationContext {
+                    enabled: self.preferences.notifications.enabled,
+                    active: self.notification_window_active,
+                    focused_room: self.navigation.selected_room.clone(),
+                },
+                unread: self.snapshot.unread_total,
+            });
+        }
+    }
+
+    fn device_notifications(&self, cx: &mut Context<Self>) -> AnyElement {
+        use matrix_client_platform::notifications::Permission;
+        let permission = if self.preview {
+            Permission::Granted
+        } else {
+            self.snapshot.notification_permission
+        };
+        let label = match permission {
+            Permission::Granted => "Allowed by the system",
+            Permission::Denied => "Denied by the system",
+            Permission::NotRequested => "Permission will be requested when enabled",
+            Permission::Unavailable => {
+                if cfg!(target_os = "macos") {
+                    "Unavailable here — run the app bundle"
+                } else {
+                    "System notifications are unavailable"
+                }
+            }
+            Permission::Unknown => "Checking system permission…",
+        };
+        let values = &self.preferences.notifications;
+        let rows = [
+            (
+                "device-notifications",
+                "Enable notifications",
+                values.enabled,
+            ),
+            ("notification-sound", "Sound", values.sound),
+            ("notification-preview", "Message preview", values.preview),
+            ("notification-badge", "Dock / taskbar badge", values.badge),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (id, label, checked))| {
+            form_row(
+                label,
+                switch::Switch::new(id)
+                    .accessibility_label(label)
+                    .checked(checked)
+                    .on_click(cx.listener(move |this, checked: &bool, window, cx| {
+                        match index {
+                            0 => this.preferences.notifications.enabled = *checked,
+                            1 => this.preferences.notifications.sound = *checked,
+                            2 => this.preferences.notifications.preview = *checked,
+                            _ => this.preferences.notifications.badge = *checked,
+                        }
+                        this.save_preferences(window, cx);
+                        this.notification_config();
+                        cx.notify();
+                    })),
+                cx,
+            )
+        })
+        .collect::<Vec<_>>();
+        v_flex()
+            .gap(px(8.))
+            .child(div().text_size(px(13.)).child("This device"))
+            .child(group(rows, cx))
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(cx.theme().muted_foreground)
+                    .child(label),
+            )
+            .when(permission == Permission::Denied, |view| {
+                view.child(
+                    Button::new("open-notification-system-settings")
+                        .small()
+                        .label("Open System Settings")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.job(
+                                window,
+                                cx,
+                                |backend| backend.open_notification_settings(),
+                                |this, result, _, cx| {
+                                    if let Err(error) = result {
+                                        this.settings_status = error.to_string();
+                                        cx.notify();
+                                    }
+                                },
+                            )
+                        })),
+                )
+            })
+            .when(self.snapshot.notification_failed, |view| {
+                view.child(div().text_size(px(12.)).child(
+                    "A notification could not be delivered. Check system notification settings.",
+                ))
+            })
+            .into_any_element()
+    }
+
+    pub(super) fn notification_sample_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        let preview = self.preferences.notifications.preview;
+        v_flex()
+            .id("notification-sample")
+            .absolute()
+            .top(px(58.))
+            .right(px(18.))
+            .w(px(340.))
+            .p(px(14.))
+            .gap(px(6.))
+            .rounded(px(10.))
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().background)
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Sample data · Notification preview"),
+            )
+            .child(
+                div()
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(if preview {
+                        "Alex · General"
+                    } else {
+                        "Matrix Client"
+                    }),
+            )
+            .child(div().text_size(px(13.)).child(if preview {
+                "The sample review is ready."
+            } else {
+                "New message"
+            }))
+            .child(
+                Button::new("sample-notification-open")
+                    .small()
+                    .label("Open conversation")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.activate_notification(
+                            matrix_client_platform::notifications::Activation {
+                                account: this.snapshot.account_instance,
+                                room: "general".into(),
+                                thread: Some("$sample-0:preview.invalid".into()),
+                            },
+                            window,
+                            cx,
+                        );
+                    })),
+            )
+            .into_any_element()
+    }
+
+    pub(super) fn change_notification_rule(
+        &mut self,
+        change: matrix_client_core::notifications::RuleChange,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use matrix_client_core::notifications::{RoomMode, RuleChange};
+        if self.notification_busy {
+            return;
+        }
+        if self.preview {
+            let rules = &mut self.snapshot.notifications;
+            match change {
+                RuleChange::Default(class, level) => rules.defaults[class.index()] = level,
+                RuleChange::AddKeyword(word) => {
+                    let word = word.trim().to_owned();
+                    if !word.is_empty() && !rules.keywords.contains(&word) {
+                        rules.keywords.push(word);
+                    }
+                }
+                RuleChange::RemoveKeyword(word) => rules.keywords.retain(|value| *value != word),
+                RuleChange::Room(room, mode) => {
+                    rules.rooms.insert(room.clone(), mode);
+                    if let Some(room) = self
+                        .snapshot
+                        .rooms
+                        .iter_mut()
+                        .find(|value| value.id == room)
+                    {
+                        room.muted = mode == RoomMode::Mute;
+                        if room.muted {
+                            room.unread = 0;
+                        }
+                    }
+                }
+            }
+            self.settings_status = "Sample data · Notification rule preview".into();
+            cx.notify();
+            return;
+        }
+        if !self.snapshot.notifications.ready {
+            return;
+        }
+        self.notification_busy = true;
+        self.settings_status = "Saving notification settings…".into();
+        let account = self.snapshot.account_instance;
+        self.job(
+            window,
+            cx,
+            move |backend| backend.notification_rule(change),
+            move |this, result, _, cx| {
+                if this.snapshot.account_instance != account {
+                    return;
+                }
+                this.notification_busy = false;
+                this.settings_status = match result {
+                    Ok(()) => "Notification settings saved.".into(),
+                    Err(error) => error.to_string(),
+                };
+                cx.notify();
+            },
+        );
+    }
+
+    fn notification_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        use matrix_client_core::notifications::{DefaultLevel, RoomClass, RuleChange};
+        if !self.preview && !self.snapshot.notifications.ready {
+            return div()
+                .text_size(px(13.))
+                .child("Notification settings are loading. Check your connection if this persists.")
+                .into_any_element();
+        }
+        let rules = &self.snapshot.notifications;
+        let labels = [
+            "Direct chats",
+            "Encrypted direct chats",
+            "Group rooms",
+            "Encrypted group rooms",
+        ];
+        let ids = [
+            ["notify-dm-all", "notify-dm-mentions"],
+            ["notify-encrypted-dm-all", "notify-encrypted-dm-mentions"],
+            ["notify-group-all", "notify-group-mentions"],
+            [
+                "notify-encrypted-group-all",
+                "notify-encrypted-group-mentions",
+            ],
+        ];
+        let rows = RoomClass::ALL
+            .into_iter()
+            .enumerate()
+            .map(|(index, class)| {
+                let level = rules.defaults[index];
+                form_row(
+                    labels[index],
+                    segmented(
+                        [
+                            (ids[index][0], "All messages", level == DefaultLevel::All),
+                            (
+                                ids[index][1],
+                                "Mentions and keywords",
+                                level == DefaultLevel::Mentions,
+                            ),
+                        ],
+                        cx,
+                        move |this, index, window, cx| {
+                            this.change_notification_rule(
+                                RuleChange::Default(
+                                    class,
+                                    if index == 0 {
+                                        DefaultLevel::All
+                                    } else {
+                                        DefaultLevel::Mentions
+                                    },
+                                ),
+                                window,
+                                cx,
+                            );
+                        },
+                    ),
+                    cx,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut keywords = v_flex().gap(px(4.));
+        for (index, word) in rules.keywords.iter().enumerate() {
+            let remove = word.clone();
+            keywords = keywords.child(
+                h_flex()
+                    .px(px(12.))
+                    .py(px(4.))
+                    .gap(px(8.))
+                    .child(div().flex_1().text_size(px(13.)).child(word.clone()))
+                    .child(
+                        Button::new(SharedString::from(format!("remove-keyword-{index}")))
+                            .ghost()
+                            .xsmall()
+                            .icon(gpui_kit::assets::IconName::X)
+                            .accessibility_label(format!("Remove keyword {word}"))
+                            .tooltip("Remove keyword")
+                            .disabled(self.notification_busy)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.change_notification_rule(
+                                    RuleChange::RemoveKeyword(remove.clone()),
+                                    window,
+                                    cx,
+                                )
+                            })),
+                    ),
+            );
+        }
+        v_flex().gap(px(14.))
+            .child(group(rows, cx))
+            .child(div().text_size(px(13.)).child("Keywords"))
+            .child(keywords)
+            .child(h_flex().id("notification-keyword-entry").gap(px(8.)).child(Input::new(&self.notification_keyword).disabled(self.notification_busy)).child(
+                Button::new("add-notification-keyword").small().label("Add").disabled(self.notification_busy)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    let word = this.notification_keyword.read(cx).value().to_string();
+                    if word.trim().is_empty() { return; }
+                    this.change_notification_rule(RuleChange::AddKeyword(word), window, cx);
+                    this.notification_keyword.update(cx, |input, cx| input.set_value("", window, cx));
+                }))
+            ))
+            .child(div().text_size(px(12.)).text_color(cx.theme().muted_foreground).child("These notification rules sync with your other Matrix apps. Mute is available for individual rooms."))
+            .child(self.device_notifications(cx))
+            .into_any_element()
+    }
+
+    pub(super) fn room_notification_controls(
+        &self,
+        room: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use matrix_client_core::notifications::{RoomMode, RuleChange};
+        if !self.preview && !self.snapshot.notifications.ready {
+            return div().into_any_element();
+        }
+        let mode = self.snapshot.notifications.room_mode(room);
+        let room = room.to_owned();
+        v_flex()
+            .px(px(6.))
+            .py(px(8.))
+            .gap(px(6.))
+            .child(div().text_size(px(13.)).child("Notifications"))
+            .child(segmented(
+                [
+                    (
+                        "room-notifications-default",
+                        "Default",
+                        mode == RoomMode::Default,
+                    ),
+                    ("room-notifications-all", "All", mode == RoomMode::All),
+                    (
+                        "room-notifications-mentions",
+                        "Mentions",
+                        mode == RoomMode::Mentions,
+                    ),
+                    ("room-notifications-mute", "Mute", mode == RoomMode::Mute),
+                ],
+                cx,
+                move |this, index, window, cx| {
+                    this.change_notification_rule(
+                        RuleChange::Room(
+                            room.clone(),
+                            [
+                                RoomMode::Default,
+                                RoomMode::All,
+                                RoomMode::Mentions,
+                                RoomMode::Mute,
+                            ][index],
+                        ),
+                        window,
+                        cx,
+                    )
+                },
+            ))
+            .into_any_element()
+    }
+
     pub(super) fn open_settings(&mut self, section: Section, cx: &mut Context<Self>) {
         let main = cx.entity();
         // GPUI draws a newly opened window immediately. Release the main entity
@@ -754,12 +1143,14 @@ impl Render for SettingsWindow {
                 Section::Account => main.account_settings(window, cx),
                 Section::Appearance => main.appearance_settings(cx),
                 Section::Chat => main.chat_settings(cx),
-                Section::General | Section::Notifications => div().into_any_element(),
+                Section::Notifications => main.notification_settings(cx),
+                Section::General => div().into_any_element(),
             };
             let resettable = matches!(section, Section::Appearance | Section::Chat);
             let muted = cx.theme().muted_foreground;
             let panel = v_flex()
                 .id("settings-body")
+                .test_support()
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()

@@ -1,6 +1,9 @@
-//! OS secret storage. There is deliberately no file or mock fallback.
+//! OS credentials, notifications and appearance. No plaintext secret fallback.
 
 use zeroize::Zeroizing;
+#[cfg(target_os = "linux")]
+mod accent;
+pub mod notifications;
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 compile_error!("No credential backend is configured for this operating system");
@@ -115,28 +118,7 @@ pub fn system_accent() -> Option<[f32; 3]> {
     }
     #[cfg(target_os = "linux")]
     {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .ok()?;
-        runtime.block_on(async {
-            tokio::time::timeout(std::time::Duration::from_secs(2), async {
-                let color = ashpd::desktop::settings::Settings::new()
-                    .await
-                    .ok()?
-                    .accent_color()
-                    .await
-                    .ok()?;
-                Some([
-                    color.red() as f32,
-                    color.green() as f32,
-                    color.blue() as f32,
-                ])
-            })
-            .await
-            .ok()
-            .flatten()
-        })
+        accent::read()
     }
 }
 
