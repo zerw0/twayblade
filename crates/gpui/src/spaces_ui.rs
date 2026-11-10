@@ -26,6 +26,13 @@ pub(super) enum ManageKind {
     Dm,
     JoinSpace,
 }
+impl ManageKind {
+    /// Short forms open as a small centred dialog; browsing and leaving keep
+    /// the full conversation area because they list many rooms.
+    pub fn is_dialog(&self) -> bool {
+        matches!(self, Self::Create | Self::Dm | Self::JoinSpace)
+    }
+}
 pub(super) struct Management {
     pub _subscriptions: Vec<Subscription>,
     pub kind: ManageKind,
@@ -705,13 +712,20 @@ impl MatrixApp {
         if !page.status.is_empty() {
             body = body.child(div().child(page.status.clone()));
         }
+        let dialog = page.kind.is_dialog();
+        // A dialog's header must not be a window drag region.
+        let header = if dialog {
+            h_flex().id("management-header").h(px(44.)).flex_none()
+        } else {
+            self.toolbar("management-toolbar", cx)
+        };
         v_flex()
-            .flex_1()
+            .when(!dialog, |view| view.flex_1().h_full())
+            .when(dialog, |view| view.max_h(px(560.)))
             .min_w_0()
-            .h_full()
             .bg(cx.theme().background)
             .child(
-                self.toolbar("management-toolbar", cx)
+                header
                     .px(px(16.))
                     .justify_between()
                     .border_b_1()

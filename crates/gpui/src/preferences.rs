@@ -99,6 +99,34 @@ pub(super) struct Appearance {
     pub message_font: Option<String>,
     pub message_size: u16,
     pub code_font: Option<String>,
+    /// Spacing of sidebar rows, section headers and menus.
+    pub sidebar_density: SidebarDensity,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum SidebarDensity {
+    Compact,
+    #[default]
+    Regular,
+    Comfortable,
+}
+impl SidebarDensity {
+    /// Row height in points for sidebar and panel lists.
+    pub fn row(self) -> f32 {
+        match self {
+            Self::Compact => 26.,
+            Self::Regular => 30.,
+            Self::Comfortable => 34.,
+        }
+    }
+    /// Extra space above each sidebar section.
+    pub fn section_gap(self) -> f32 {
+        match self {
+            Self::Compact => 8.,
+            Self::Regular => 14.,
+            Self::Comfortable => 18.,
+        }
+    }
 }
 impl Default for Appearance {
     fn default() -> Self {
@@ -111,6 +139,7 @@ impl Default for Appearance {
             message_font: None,
             message_size: 13,
             code_font: None,
+            sidebar_density: SidebarDensity::Regular,
         }
     }
 }

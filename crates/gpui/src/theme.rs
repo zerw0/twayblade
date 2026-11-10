@@ -295,8 +295,19 @@ pub(super) fn apply(cx: &mut App) {
 
 /// Product roles GPUI Kit's theme has no slot for. Source hex values stay here.
 pub(super) struct Palette {
+    /// Window title bar, a step off the window background (lighter in dark mode).
+    pub chrome: Hsla,
+    /// Space rail, a step darker than the sidebar.
+    pub rail: Hsla,
+    /// Selected sidebar row: a tint of the accent rather than a solid fill.
+    pub selection: Hsla,
+    /// Selected segment in a segmented control (a raised pill, as in macOS).
+    pub pill: Hsla,
+    /// Connection status dot.
+    pub online: Hsla,
+    /// Favourite star (a non-text icon: 3:1 is enough).
+    pub star: Hsla,
     pub field: Hsla,
-    pub pressed: Hsla,
     pub warning: Hsla,
     pub warning_background: Hsla,
     pub error: Hsla,
@@ -307,9 +318,19 @@ pub(super) fn palette(cx: &App) -> Palette {
     let dark = gpui_kit::component::ActiveTheme::theme(cx).is_dark();
     let pick =
         |light: u32, dark_value: u32| -> Hsla { rgb(if dark { dark_value } else { light }).into() };
+    let theme = gpui_kit::component::ActiveTheme::theme(cx);
+    let shift = |color: Hsla, amount: f32| Hsla {
+        l: (color.l + amount).clamp(0., 1.),
+        ..color
+    };
     Palette {
+        chrome: shift(theme.sidebar, if dark { 0.03 } else { -0.03 }),
+        rail: shift(theme.sidebar, if dark { -0.04 } else { -0.05 }),
+        selection: theme.primary.opacity(if dark { 0.18 } else { 0.12 }),
+        pill: pick(0xffffff, 0x56565c),
+        online: pick(0x248a3d, 0x30d158),
+        star: pick(0xb88700, 0xffd60a),
         field: gpui_kit::component::ActiveTheme::theme(cx).background,
-        pressed: gpui_kit::component::ActiveTheme::theme(cx).secondary,
         warning: pick(0x8a3f00, 0xffc285),
         warning_background: pick(0xfff1e0, 0x3a2a18),
         error: pick(0xc4281c, 0xff8a80),

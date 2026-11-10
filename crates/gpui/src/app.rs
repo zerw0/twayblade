@@ -29,7 +29,10 @@ gpui_kit::actions!(
         ToggleDetails,
         NewRoom,
         NewDirectMessage,
-        JoinSpace
+        JoinSpace,
+        ToggleSidebar,
+        NavigateBack,
+        NavigateForward
     ]
 );
 
@@ -72,6 +75,20 @@ pub(super) struct MatrixApp {
     pub options: Option<LoginOptions>,
     pub status: String,
     pub busy: bool,
+    /// The room list column; the space rail stays visible (⌃⌘S).
+    pub sidebar_open: bool,
+    /// Room navigation history for Back/Forward (⌘[ / ⌘]).
+    pub(super) history_back: Vec<String>,
+    pub(super) history_forward: Vec<String>,
+    navigating_history: bool,
+    /// Sidebar sections the user collapsed, by section key.
+    pub(super) collapsed_sections: std::collections::HashSet<&'static str>,
+    /// Selected tab of the room Info panel.
+    pub(super) info_tab: InfoTab,
+    /// The composer's current placeholder, so it is only reset on room change.
+    pub(super) composer_placeholder: SharedString,
+    /// A destructive member action waiting for its second click: (user, action).
+    pub(super) member_confirm: Option<(String, matrix_client_core::room_state::MemberAction)>,
     /// Per-group content fingerprints matching `groups`, for targeted re-measure.
     group_signatures: Vec<u64>,
     /// Latest timeline event and your latest message, derived once per snapshot.
@@ -320,6 +337,14 @@ impl MatrixApp {
             options: None,
             status: String::new(),
             busy: !preview,
+            sidebar_open: true,
+            history_back: Vec::new(),
+            history_forward: Vec::new(),
+            navigating_history: false,
+            collapsed_sections: Default::default(),
+            info_tab: InfoTab::About,
+            composer_placeholder: "Message".into(),
+            member_confirm: None,
             group_signatures: Vec::new(),
             latest_cache: Default::default(),
             avatars: Default::default(),
@@ -887,6 +912,15 @@ impl MatrixApp {
         self.emoji_picker = None;
         self.clear_attachment();
         self.reset_pagination();
+        if !std::mem::take(&mut self.navigating_history) {
+            if let Some(previous) = self.navigation.selected_room.clone() {
+                self.history_back.push(previous);
+                if self.history_back.len() > 100 {
+                    self.history_back.remove(0);
+                }
+            }
+            self.history_forward.clear();
+        }
         self.navigation.selected_room = Some(id.clone());
         self.notification_config();
         self.groups.clear();
@@ -1371,5 +1405,169 @@ impl MatrixApp {
     /// Your latest message in the main timeline (for the delivery label).
     pub(super) fn latest_own(&self) -> Option<String> {
         self.latest_ids().own.clone()
+    }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum InfoTab {
+    #[default]
+    About,
+    Members,
+    Files,
+}
+
+impl MatrixApp {
+    /// ⌘[ / ⌘]: move through visited rooms, skipping rooms that no longer exist.
+    pub(super) fn navigate_history(
+        &mut self,
+        back: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        loop {
+            let next = if back {
+                self.history_back.pop()
+            } else {
+                self.history_forward.pop()
+            };
+            let Some(next) = next else { return };
+            if !self.snapshot.rooms.iter().any(|room| room.id == next) {
+                continue;
+            }
+            if let Some(current) = self.navigation.selected_room.clone() {
+                if back {
+                    self.history_forward.push(current);
+                } else {
+                    self.history_back.push(current);
+                }
+            }
+            self.navigating_history = true;
+            self.select_room(next, window, cx);
+            return;
+        }
+    }
+
+    pub(super) fn set_favourite(
+        &mut self,
+        room: String,
+        favourite: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.preview {
+            if let Some(entry) = self
+                .snapshot
+                .rooms
+                .iter_mut()
+                .find(|entry| entry.id == room)
+            {
+                entry.favourite = favourite;
+            }
+            cx.notify();
+            return;
+        }
+        self.job(
+            window,
+            cx,
+            move |backend| backend.set_favourite(room, favourite),
+            |this, result, _, cx| {
+                if let Err(error) = result {
+                    this.status = error.to_string();
+                }
+                cx.notify();
+            },
+        );
+    }
+}
+
+impl MatrixApp {
+    /// Open (or create) a direct message with `user` and switch to it.
+    pub(super) fn message_user(&mut self, user: String, window: &Window, cx: &mut Context<Self>) {
+        if self.preview {
+            return;
+        }
+        let account = self.snapshot.account_instance;
+        self.job(
+            window,
+            cx,
+            move |backend| backend.space_action(account, 0, crate::backend::SpaceAction::Dm(user)),
+            move |this, result, window, cx| {
+                if this.snapshot.account_instance != account {
+                    return;
+                }
+                match result {
+                    Ok(crate::backend::SpaceOutcome::Room(id)) => {
+                        this.close_profile(cx);
+                        this.select_room(id, window, cx);
+                    }
+                    Ok(_) => {}
+                    Err(error) => this.status = error.to_string(),
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    /// Start emoji verification with another user; the flow shows in Settings › Security.
+    pub(super) fn verify_user(
+        &mut self,
+        user: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.preview {
+            return;
+        }
+        self.perform_security(crate::backend::SecurityAction::VerifyUser(user), window, cx);
+        self.open_settings(crate::settings::Section::Security, cx);
+    }
+
+    /// Ignore, kick, ban or (un)mute. Destructive ones need a second click.
+    pub(super) fn member_action(
+        &mut self,
+        user: String,
+        action: matrix_client_core::room_state::MemberAction,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        use matrix_client_core::room_state::MemberAction;
+        let destructive = matches!(
+            action,
+            MemberAction::Kick | MemberAction::Ban | MemberAction::Ignore
+        );
+        if destructive && self.member_confirm.as_ref() != Some(&(user.clone(), action)) {
+            self.member_confirm = Some((user, action));
+            cx.notify();
+            return;
+        }
+        self.member_confirm = None;
+        if self.preview {
+            cx.notify();
+            return;
+        }
+        let Some(room) = self.navigation.selected_room.clone() else {
+            return;
+        };
+        self.job(
+            window,
+            cx,
+            move |backend| backend.member_action(room, user, action),
+            move |this, result, _, cx| {
+                this.status = match result {
+                    Ok(()) => match action {
+                        MemberAction::Ignore => {
+                            "Ignored. Their messages are hidden everywhere.".into()
+                        }
+                        MemberAction::Unignore => "No longer ignored.".into(),
+                        MemberAction::Kick => "Removed from the room.".into(),
+                        MemberAction::Ban => "Banned from the room.".into(),
+                        MemberAction::Mute(true) => "Muted in this room.".into(),
+                        MemberAction::Mute(false) => "Unmuted in this room.".into(),
+                    },
+                    Err(error) => error.to_string(),
+                };
+                cx.notify();
+            },
+        );
     }
 }

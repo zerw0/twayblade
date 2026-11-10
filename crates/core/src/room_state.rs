@@ -19,6 +19,25 @@ pub struct Member {
     pub display_name: String,
     pub role: MemberRole,
     pub avatar: Option<String>,
+    /// What you may do to this member here, from the room's power levels.
+    pub can_kick: bool,
+    pub can_ban: bool,
+    /// You may change their power level (used for Mute/Unmute).
+    pub can_mute: bool,
+    /// Their power level is below the level needed to send messages.
+    pub muted: bool,
+}
+
+/// Actions on another member. Moderation ones are checked again by the server.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MemberAction {
+    /// Account-wide: hide everything they send, in every room (Matrix "ignore").
+    Ignore,
+    Unignore,
+    Kick,
+    Ban,
+    /// Drop their power level below the room's send level, or restore it.
+    Mute(bool),
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -37,6 +56,8 @@ pub enum RoomStateError {
     Members,
     #[error("typing_failed")]
     Typing,
+    #[error("moderation_failed")]
+    Moderation,
 }
 
 fn role(power: UserPowerLevel) -> MemberRole {
@@ -49,6 +70,8 @@ fn role(power: UserPowerLevel) -> MemberRole {
 }
 
 pub(crate) async fn room_members(room: Room) -> Result<Vec<Member>, RoomStateError> {
+    let own = room.own_user_id().to_owned();
+    let levels = room.power_levels().await.ok();
     let mut members: Vec<_> = room
         .members(RoomMemberships::JOIN)
         .await
@@ -63,6 +86,19 @@ pub(crate) async fn room_members(room: Room) -> Result<Vec<Member>, RoomStateErr
                 .unwrap_or_else(|| member.user_id().to_string()),
             role: role(member.power_level()),
             avatar: member.avatar_url().map(|url| url.to_string()),
+            can_kick: levels.as_ref().is_some_and(|levels| {
+                member.user_id() != own && levels.user_can_kick_user(&own, member.user_id())
+            }),
+            can_ban: levels.as_ref().is_some_and(|levels| {
+                member.user_id() != own && levels.user_can_ban_user(&own, member.user_id())
+            }),
+            can_mute: levels.as_ref().is_some_and(|levels| {
+                member.user_id() != own
+                    && levels.user_can_change_user_power_level(&own, member.user_id())
+            }),
+            muted: levels.as_ref().is_some_and(|levels| {
+                matches!(levels.for_user(member.user_id()), UserPowerLevel::Int(level) if level < levels.events_default)
+            }),
         })
         .collect();
     members
@@ -71,6 +107,49 @@ pub(crate) async fn room_members(room: Room) -> Result<Vec<Member>, RoomStateErr
 }
 
 impl Account {
+    pub async fn member_action(
+        &self,
+        room_id: &str,
+        user_id: &str,
+        action: MemberAction,
+    ) -> Result<(), RoomStateError> {
+        let user =
+            matrix_sdk::ruma::UserId::parse(user_id).map_err(|_| RoomStateError::Unavailable)?;
+        if matches!(action, MemberAction::Ignore | MemberAction::Unignore) {
+            let account = self.client.account();
+            return if action == MemberAction::Ignore {
+                account.ignore_user(&user).await
+            } else {
+                account.unignore_user(&user).await
+            }
+            .map_err(|_| RoomStateError::Moderation);
+        }
+        let room = RoomId::parse(room_id)
+            .ok()
+            .and_then(|id| self.client.get_room(&id))
+            .ok_or(RoomStateError::Unavailable)?;
+        match action {
+            MemberAction::Kick => room.kick_user(&user, None).await.map(|_| ()),
+            MemberAction::Ban => room.ban_user(&user, None).await.map(|_| ()),
+            MemberAction::Mute(mute) => {
+                let levels = room
+                    .power_levels()
+                    .await
+                    .map_err(|_| RoomStateError::Moderation)?;
+                let level = if mute {
+                    levels.events_default - int!(1)
+                } else {
+                    levels.users_default
+                };
+                room.update_power_levels(vec![(&user, level)])
+                    .await
+                    .map(|_| ())
+            }
+            MemberAction::Ignore | MemberAction::Unignore => unreachable!("handled above"),
+        }
+        .map_err(|_| RoomStateError::Moderation)
+    }
+
     pub async fn typing_notice(&self, room_id: &str, typing: bool) -> Result<(), RoomStateError> {
         let room = RoomId::parse(room_id)
             .ok()

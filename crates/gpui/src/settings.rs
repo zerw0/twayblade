@@ -2,7 +2,7 @@
 use crate::theme::scaled_px as px;
 use crate::{
     app::{MatrixApp, OpenSettings},
-    preferences::{ChatStyle, Density, Preferences, Scheme, Timestamps, Variant},
+    preferences::{ChatStyle, Density, Preferences, Scheme, SidebarDensity, Timestamps, Variant},
 };
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
@@ -799,6 +799,35 @@ impl MatrixApp {
                 )
             })
             .collect::<Vec<_>>();
+        let density = appearance.sidebar_density;
+        let sidebar_density = segmented(
+            [
+                (
+                    "sidebar-density-Compact",
+                    "Compact",
+                    density == SidebarDensity::Compact,
+                ),
+                (
+                    "sidebar-density-Regular",
+                    "Regular",
+                    density == SidebarDensity::Regular,
+                ),
+                (
+                    "sidebar-density-Comfortable",
+                    "Comfortable",
+                    density == SidebarDensity::Comfortable,
+                ),
+            ],
+            cx,
+            |this, index, window, cx| {
+                this.preferences.appearance.sidebar_density = [
+                    SidebarDensity::Compact,
+                    SidebarDensity::Regular,
+                    SidebarDensity::Comfortable,
+                ][index];
+                this.appearance_changed(window, cx);
+            },
+        );
         v_flex()
             .gap(px(18.))
             .child(group(
@@ -853,6 +882,7 @@ impl MatrixApp {
                         ),
                         cx,
                     ),
+                    form_row("Sidebar density", sidebar_density, cx),
                 ],
                 cx,
             ))
@@ -933,7 +963,7 @@ impl MatrixApp {
             .child(group(
                 [
                     form_row("Message style", style, cx),
-                    form_row("Density", density, cx),
+                    form_row("Message density", density, cx),
                     form_row("Timestamps", timestamps, cx),
                     form_row("Show avatars", avatars, cx),
                 ],
@@ -1135,7 +1165,7 @@ impl Render for SettingsWindow {
                 .child(
                     div()
                         .text_size(px(13.))
-                        .font_weight(FontWeight::BOLD)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .child(section.label()),
                 );
             let body = match section {
@@ -1292,6 +1322,7 @@ fn segmented<const N: usize>(
     cx: &mut Context<MatrixApp>,
     on_pick: impl Fn(&mut MatrixApp, usize, &mut Window, &mut Context<MatrixApp>) + Clone + 'static,
 ) -> Div {
+    let pill = crate::theme::palette(cx).pill;
     let mut control = h_flex()
         .p(px(2.))
         .gap(px(2.))
@@ -1299,18 +1330,21 @@ fn segmented<const N: usize>(
         .bg(cx.theme().secondary);
     for (index, (id, label, selected)) in options.into_iter().enumerate() {
         let on_pick = on_pick.clone();
-        let button = Button::new(id)
-            .xsmall()
-            .h(px(22.))
-            .px(px(10.))
-            .rounded(px(5.))
-            .label(label)
-            .on_click(cx.listener(move |this, _, window, cx| on_pick(this, index, window, cx)));
-        control = control.child(if selected {
-            button.primary()
-        } else {
-            button.ghost()
-        });
+        // Segments share the width evenly, so a stretched control never shows
+        // an empty trailing area that reads as a blank option.
+        control = control.child(
+            Button::new(id)
+                .ghost()
+                .xsmall()
+                .flex_1()
+                .h(px(22.))
+                .px(px(10.))
+                .rounded(px(5.))
+                .label(label)
+                .selected(selected)
+                .when(selected, |button| button.bg(pill).shadow_xs())
+                .on_click(cx.listener(move |this, _, window, cx| on_pick(this, index, window, cx))),
+        );
     }
     control
 }

@@ -125,6 +125,31 @@ selected room, drafts, scroll position and the open thread; no message action
 is hidden in any style. Preferences survive relaunch. Notification levels set
 here are reflected in Element for the same account.
 
+**M4b — chat polish (2–3 weeks).** From the redesign review (2026-11-11):
+- *Search.* ⌘K finds conversations today. Add message search: server-side
+  `/search` for unencrypted rooms, and a local index of decrypted events held
+  in the encrypted SDK store for encrypted rooms (never a plaintext index on
+  disk). Results open the message in context; filters for room, sender and
+  "has file".
+- *Room media and files.* The Info panel's Files tab lists attachments from the
+  loaded timeline only. Replace it with a paginated room gallery (images grid,
+  files list) fed by SDK back-pagination, with the image viewer stepping
+  through the gallery.
+- *Presence.* Change your own status (Online, Away, Invisible/Offline) and a
+  status message from the profile menu, and show presence dots on avatars, only
+  when the server has presence enabled. Never fake a status.
+- *Motion.* Fast, smooth transitions on GPUI's animation API: panels (Info,
+  thread, sidebar) slide and fade, popovers and dialogs fade and rise a few
+  pixels, room switches crossfade, hover/press are colour and surface steps.
+  150–250 ms, one exponential ease-out curve, exits faster than entrances;
+  never animate layout-driving size; respect the OS Reduce Motion setting.
+- *Typing indicator.* Replace the text line with an animated three-dot
+  indicator next to the typer's avatar (static dots and text under Reduce
+  Motion), keeping the accessible "Alex is typing" label.
+- *Formatting.* HTML message composition (bold, italic, code, links, lists,
+  quotes) with a formatting toolbar, sent as `formatted_body` with a plain
+  fallback.
+
 **M5 — calls (5–7 weeks).** Start with a macOS call-runtime spike, then the
 complete lifecycle and Linux/Windows. Exit: encrypted direct and group calls with
 Element on each OS, including denied permissions, device removal, network change
@@ -140,7 +165,9 @@ credentials and explicit authorization.
 - Message text is escaped and passed through Kit's Markdown renderer to get
   selectable text. Replace with a plain selectable-text element when available.
 - Release credential entry is separate from debug; release migration and
-  stable code signing (repeated Keychain prompts on dev builds) are M5 work.
+  Developer ID signing are M6 work. Development builds can now sign with a
+  stable local identity (`macos/create-dev-certificate.sh`), which stops the
+  repeated Keychain prompts.
 
 ## Next steps (in order)
 
@@ -159,8 +186,10 @@ Linux and Windows CI passed on `36f850a`; macOS CI was switched to `macos-15`
    appearance, chat styles, server notification rules and native delivery adapters.
    Notification OS permission/delivery/click/badge acceptance and Element comparison
    remain. Linux accent observation now retains its portal connection.
-5. **M5 calls.** Element Call runtime, direct and group calls.
-6. **M6 release.** Accessibility pass, packaging, signing, updates.
+5. **M4b chat polish.** Search, room media gallery, presence, motion, typing
+   indicator, formatting (see Milestones).
+6. **M5 calls.** Element Call runtime, direct and group calls.
+7. **M6 release.** Accessibility pass, packaging, signing, updates.
 
 ## Progress
 
@@ -373,6 +402,17 @@ Linux accent observation — Notifications Task 4 (2026-11-11):
 - One process worker owns the portal connection/runtime, subscribes to accent changes and caches RGB. Unsupported signals fall back to queries through the same proxy; a disconnected bus retries with backoff. ashpd's settings feature is explicit.
 - Locked fmt/strict all-feature Clippy and 97 workspace tests pass; actual portal and Linux notification source typechecked in a macOS harness (not a Linux build). Reviewed release `captures/notification-accent-{light,dark}.png` samples; no new Matrix-server check applies.
 - Operator checks: Linux portal accent transitions, missing-setting fallback, connection count and bus/portal restart. Linux/Windows builds and physical execution remain pending.
+
+Notifications review and Claude Design redesign (2026-11-11):
+- Review of Notifications Tasks 1–4 found no defects: own messages filtered in core, push rules applied by the SDK NotificationClient, bounded response queue. Open items unchanged (cold-launch activation; Linux/Windows runtime).
+- Window chrome: unified 40pt title bar (sidebar toggle, back/forward history with ⌘[ / ⌘], centred ⌘K search, connection dot, notifications, settings, own avatar). The connection shows text only when not connected.
+- Rail with Home first, selection bar and dashed join tile; sidebar with collapsible Favourites / Rooms / Direct messages sections, favourites via room tags (`m.favourite`), hash/lock icons, mention and unread badges, and a Compact / Regular / Comfortable density setting in Appearance. Create room, new DM and join space open as small dialogs.
+- Conversation header: room icon, name, favourite star, member and pinned counts, topic, encryption and Info toggle (⌥⌘I). Timeline: ruled day dividers, red "New messages", foreground sender names, thread link with icon, a hover action bar, "Read" with an icon; IRC always shows the time column. Composer: a bordered box with a "Write to # room" placeholder and an attach/emoji/send toolbar; the typing line sits below it.
+- Info panel with About (topic, Favourite/Mute/Copy link tiles, encryption, pinned and file counts, notification level, room ID), Members and Files (attachments from the loaded timeline) tabs.
+- Member actions in profiles: Message (opens or creates a DM), Verify (SDK user verification, flow in Settings › Security), Ignore (account-wide, confirm), and Mute in room, Remove and Ban gated by the room's power levels (confirm for destructive ones).
+- Emoji picker rebuilt as a standard picker: search, line-icon category bar, one virtualised grid with Frequently Used first, a name/shortcode footer, and a skin-tone popover for emoji that have tones (the chosen tone becomes the default).
+- Impeccable quieter pass: sentence-case section labels, no kicker labels, semibold (not bold) headings, lighter selection tint, line icons instead of emoji glyphs in chrome.
+- Locked fmt, strict all-feature Clippy and the workspace tests pass (68 GPUI tests, including new member-action and tone-popover tests). Offline preview captures reviewed. Not verified against a live server: favourites round-trip, member moderation, user verification with Element, DM creation from a profile.
 
 Not yet verified:
 - Physical GUI checks of logout, pagination, IME and VoiceOver.

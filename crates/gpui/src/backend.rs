@@ -227,6 +227,7 @@ pub(super) enum SecurityAction {
     Recover(Zeroizing<String>),
     Reset,
     Request(String),
+    VerifyUser(String),
     Accept,
     Confirm,
     Cancel(bool),
@@ -308,7 +309,7 @@ fn sync_status_text(status: SyncStatus) -> &'static str {
     match status {
         SyncStatus::Connecting => "Connecting…",
         SyncStatus::Syncing => "Syncing conversations…",
-        SyncStatus::Connected => "Connected · syncing",
+        SyncStatus::Connected => "Connected",
         SyncStatus::Offline => "Offline · reconnecting…",
         SyncStatus::Failed => "Synchronization failed · reconnect to retry",
         SyncStatus::Stopped => "Synchronization stopped",
@@ -561,6 +562,7 @@ impl Backend {
                 Recover(key) => security.recover(key).await?,
                 Reset => return security.reset_recovery().await.map(SecurityOutcome::RecoveryKey),
                 Request(device) => security.request_verification(device).await?,
+                VerifyUser(user) => security.request_user_verification(user).await?,
                 Accept => security.accept_verification().await?,
                 Confirm => security.confirm_verification().await?,
                 Cancel(mismatch) => security.cancel_verification(mismatch).await?,
@@ -955,6 +957,37 @@ impl Backend {
             .block_on(account.update_profile(update))
             .map_err(profile_failure)?;
         self.profile(account.user_id().to_string(), None)
+    }
+
+    pub(super) fn member_action(
+        &self,
+        room: String,
+        user: String,
+        action: matrix_client_core::room_state::MemberAction,
+    ) -> Result<(), ServiceError> {
+        let account = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?
+            .account
+            .clone()
+            .ok_or_else(|| failure("Sign in first."))?;
+        self.runtime
+            .block_on(account.member_action(&room, &user, action))
+            .map_err(|_| failure("That action failed. You may not have permission in this room."))
+    }
+
+    pub(super) fn set_favourite(&self, room: String, favourite: bool) -> Result<(), ServiceError> {
+        let account = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?
+            .account
+            .clone()
+            .ok_or_else(|| failure("Sign in first."))?;
+        self.runtime
+            .block_on(account.set_favourite(&room, favourite))
+            .map_err(|_| failure("Favourite could not be changed. Try again."))
     }
 
     /// Square avatar PNG for `mxc` at `size` physical pixels. Bounded in core.

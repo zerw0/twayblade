@@ -30,7 +30,20 @@ app="$repo_root/target/$profile/bundle/Matrix Client.app"
 mkdir -p "$app/Contents/MacOS"
 cp "target/$profile/matrix-client-gpui" "$app/Contents/MacOS/"
 cp macos/Info.plist "$app/Contents/Info.plist"
-"${apple_env[@]}" /usr/bin/codesign --force --deep --sign - "$app"
+# A stable identity keeps Keychain approval across rebuilds; ad-hoc signing
+# ("-") changes the signature every build. Create one with
+# macos/create-dev-certificate.sh, or set MATRIX_CLIENT_SIGN_IDENTITY.
+identity="${MATRIX_CLIENT_SIGN_IDENTITY:-}"
+if [[ -z "$identity" ]] && "${apple_env[@]}" /usr/bin/security find-identity -p codesigning 2>/dev/null \
+    | grep -q '"Matrix Client Development"'; then
+    identity="Matrix Client Development"
+fi
+if [[ -z "$identity" ]]; then
+    identity=-
+    printf 'Signing ad hoc: macOS will ask for Keychain access after each build.\n' >&2
+    printf 'Run macos/create-dev-certificate.sh once to stop that.\n' >&2
+fi
+"${apple_env[@]}" /usr/bin/codesign --force --deep --sign "$identity" "$app"
 printf 'Built %s\n' "$app"
 if [[ "$run" == true ]]; then
     # Bash 3.2 (macOS /bin/bash) treats an empty array as unset under `set -u`.
