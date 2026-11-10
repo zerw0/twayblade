@@ -5178,6 +5178,7 @@ dependencies = [
  "async-stream",
  "directories",
  "futures-util",
+ "imbl",
  "matrix-client-platform",
  "matrix-sdk",
  "matrix-sdk-ui",

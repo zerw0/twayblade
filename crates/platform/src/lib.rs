@@ -5,7 +5,11 @@ use zeroize::Zeroizing;
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 compile_error!("No credential backend is configured for this operating system");
 
-const SERVICE: &str = "matrix-client.development";
+const SERVICE: &str = if cfg!(debug_assertions) {
+    "matrix-client.development"
+} else {
+    "matrix-client"
+};
 const ACCOUNT: &str = "active-session-v1";
 
 #[derive(Debug, thiserror::Error)]
@@ -14,35 +18,59 @@ const ACCOUNT: &str = "active-session-v1";
 )]
 pub struct SecretStoreError;
 
-fn entry() -> Result<keyring::Entry, SecretStoreError> {
-    keyring::Entry::new(SERVICE, ACCOUNT).map_err(|_| SecretStoreError)
+/// A named OS credential slot. Cloning this handle never reads credentials.
+#[derive(Clone)]
+pub struct SessionStore {
+    service: String,
 }
 
-pub async fn load_session() -> Result<Option<Zeroizing<String>>, SecretStoreError> {
-    tokio::task::spawn_blocking(|| match entry()?.get_password() {
-        Ok(value) => Ok(Some(Zeroizing::new(value))),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(_) => Err(SecretStoreError),
-    })
-    .await
-    .map_err(|_| SecretStoreError)?
+impl Default for SessionStore {
+    fn default() -> Self {
+        Self::new(SERVICE)
+    }
 }
 
-pub async fn save_session(value: Zeroizing<String>) -> Result<(), SecretStoreError> {
-    tokio::task::spawn_blocking(move || {
-        entry()?
-            .set_password(value.as_str())
-            .map_err(|_| SecretStoreError)
-    })
-    .await
-    .map_err(|_| SecretStoreError)?
-}
+impl SessionStore {
+    pub fn new(service: &str) -> Self {
+        Self {
+            service: service.into(),
+        }
+    }
 
-pub async fn delete_session() -> Result<(), SecretStoreError> {
-    tokio::task::spawn_blocking(|| match entry()?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(_) => Err(SecretStoreError),
-    })
-    .await
-    .map_err(|_| SecretStoreError)?
+    fn entry(&self) -> Result<keyring::Entry, SecretStoreError> {
+        keyring::Entry::new(&self.service, ACCOUNT).map_err(|_| SecretStoreError)
+    }
+
+    pub async fn load(&self) -> Result<Option<Zeroizing<String>>, SecretStoreError> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || match store.entry()?.get_password() {
+            Ok(value) => Ok(Some(Zeroizing::new(value))),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(_) => Err(SecretStoreError),
+        })
+        .await
+        .map_err(|_| SecretStoreError)?
+    }
+
+    pub async fn save(&self, value: Zeroizing<String>) -> Result<(), SecretStoreError> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || {
+            store
+                .entry()?
+                .set_password(value.as_str())
+                .map_err(|_| SecretStoreError)
+        })
+        .await
+        .map_err(|_| SecretStoreError)?
+    }
+
+    pub async fn delete(&self) -> Result<(), SecretStoreError> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || match store.entry()?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(_) => Err(SecretStoreError),
+        })
+        .await
+        .map_err(|_| SecretStoreError)?
+    }
 }

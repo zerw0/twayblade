@@ -7,7 +7,7 @@ use matrix_sdk_ui::spaces::{SpaceFilter, SpaceService};
 
 use crate::auth::Account;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct SpaceSummary {
     pub id: String,
     pub name: String,

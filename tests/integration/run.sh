@@ -10,18 +10,26 @@ case "$matrix_endpoint" in
 esac
 compose=(docker --context "$matrix_context" compose -f tests/integration/compose.yaml)
 case "${1:-test}" in
-    up|test)
+    up|test|keychain|services)
         mkdir -p test-data/local/integration
         "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py generate
         "${compose[@]}" up -d --force-recreate --wait --wait-timeout 90
         "${compose[@]}" exec -T synapse python /bootstrap.py register
-        if [[ "${1:-test}" == test ]]; then
+        if [[ "${1:-test}" != up ]]; then
             # Keep encrypted fixture data for inspection; stop only our test service.
             trap '"${compose[@]}" stop' EXIT
-            cargo test --locked -p matrix-client-core encrypted_delivery_profile_and_same_device_store_restore -- --ignored --nocapture
+            if [[ "${1:-test}" == keychain ]]; then
+                cargo test --locked --workspace --all-features keychain_session_lifecycle_across_processes -- --ignored --nocapture
+            elif [[ "${1:-test}" == services ]]; then
+                for test_name in encrypted_delivery_profile_and_same_device_store_restore timeline_metadata_and_send_queue_actions members_typing_and_read_receipts pagination_preserves_message_identity room_list_service_tracks_recency_and_details; do
+                    cargo test --locked -p matrix-client-core --all-features "$test_name" -- --ignored --nocapture
+                done
+            else
+                cargo test --locked -p matrix-client-core encrypted_delivery_profile_and_same_device_store_restore -- --ignored --nocapture
+            fi
         fi
         ;;
     down) "${compose[@]}" down ;;
     status) "${compose[@]}" ps ;;
-    *) printf 'Usage: bash tests/integration/run.sh [up|test|down|status]\n' >&2; exit 1 ;;
+    *) printf 'Usage: bash tests/integration/run.sh [up|test|keychain|services|down|status]\n' >&2; exit 1 ;;
 esac

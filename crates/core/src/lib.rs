@@ -4,6 +4,7 @@
 pub mod auth;
 pub mod conversation;
 pub mod profile;
+pub mod room_state;
 pub mod rooms;
 pub mod spaces;
 
@@ -20,11 +21,11 @@ pub struct LoginDiscovery {
 
 #[derive(Debug, thiserror::Error)]
 pub enum DiscoveryError {
-    #[error("Enter a server name such as matrix.org, or an HTTPS homeserver URL.")]
+    #[error("discovery_invalid_homeserver")]
     InvalidHomeserver,
-    #[error("This server does not offer a secure (HTTPS) connection.")]
+    #[error("discovery_insecure_homeserver")]
     InsecureHomeserver,
-    #[error("Could not connect to this homeserver. Check its URL and network connection.")]
+    #[error("discovery_connection")]
     Connection,
 }
 

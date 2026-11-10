@@ -65,3 +65,48 @@ Docker is provided by your host; the project shell supplies Rust tooling.
 
 References: [Synapse Docker instructions](https://github.com/element-hq/synapse/blob/develop/docker/README.md),
 [Synapse shared-secret registration](https://element-hq.github.io/synapse/latest/admin_api/register_api.html).
+
+## OS Keychain lifecycle acceptance (macOS)
+
+With an unlocked login Keychain, run in the project shell:
+
+```sh
+MATRIX_TEST_DOCKER_CONTEXT=colima-matrixclient-test bash tests/integration/run.sh keychain
+```
+
+This invokes the normal authentication implementation with a unique test
+credential slot and local data root. The fixture CA is scoped to the test client;
+no host trust settings or application credentials are changed. Separate child
+processes log in, sync a room, send, restore the original device and cached
+history from Keychain, then invoke normal logout. Assertions check that failed
+sign-in and successful logout delete the scoped Keychain entry and that logout
+removes the SDK store. Only device/room IDs and paths are written as evidence;
+credentials stay in OS secret storage. This is automated application-service
+acceptance, combined with separately recorded operator GPUI checks; it is not
+physical UI automation or Element interoperability. The test is ignored in the
+ordinary suite. Release builds now use a credential service separate from debug
+builds; release signing and migration acceptance remain unverified.
+
+## Functional workspace service checks
+
+```sh
+MATRIX_TEST_DOCKER_CONTEXT=colima-matrixclient-test bash tests/integration/run.sh services
+```
+
+Starts the isolated fixture, runs the following checks sequentially, then stops
+only its container. Normal workspace tests skip these opt-in checks.
+
+- `encrypted_delivery_profile_and_same_device_store_restore`: SDK-to-SDK E2EE.
+- `timeline_metadata_and_send_queue_actions`: replies, reaction toggle, message
+  kinds, thread count, permission-induced failed echo, SDK retry/cancel.
+- `members_typing_and_read_receipts`: names/roles, typing start/stop, fully-read
+  separator and receipt propagation to another SDK client.
+- `pagination_preserves_message_identity`: 90 pre-sync historical messages,
+  pagination to history start, stable identities and no duplicates.
+- `room_list_service_tracks_recency_and_details`: SDK list order after activity,
+  name/topic refresh, membership removal and unique room identities.
+
+Run `keychain` separately for the macOS cross-process lifecycle. All service
+checks hard-reject a non-loopback fixture URL and revoke their generated sessions
+on success. Metadata/action checks use unencrypted rooms; media transfer and
+Element interoperability are outside these tests.

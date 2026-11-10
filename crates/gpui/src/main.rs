@@ -122,6 +122,9 @@ fn main() {
                         view.groups.clear();
                         view.status = "Offline sign-in preview".into();
                     }
+                    if args.iter().any(|arg| arg == "--preview-details") {
+                        view.details_open = true;
+                    }
                     if profile {
                         view.open_profile(
                             "@alex:preview.invalid".into(),

@@ -14,13 +14,21 @@ pub struct UserProfile {
     pub server_profile_available: bool,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ProfileError {
+    #[error("profile_invalid_user")]
+    InvalidUser,
+    #[error("profile_unavailable")]
+    Unavailable,
+}
+
 impl Account {
     pub async fn profile(
         &self,
         user_id: String,
         room_id: Option<String>,
-    ) -> Result<UserProfile, &'static str> {
-        let user = UserId::parse(&user_id).map_err(|_| "This user ID is not valid.")?;
+    ) -> Result<UserProfile, ProfileError> {
+        let user = UserId::parse(&user_id).map_err(|_| ProfileError::InvalidUser)?;
         let room = room_id
             .and_then(|id| RoomId::parse(id).ok())
             .and_then(|id| self.client.get_room(&id));
@@ -37,7 +45,7 @@ impl Account {
         .ok()
         .and_then(Result::ok);
         if profile.is_none() && member.is_none() {
-            return Err("This profile could not be loaded. Check your connection and try again.");
+            return Err(ProfileError::Unavailable);
         }
         let display_name = profile
             .as_ref()

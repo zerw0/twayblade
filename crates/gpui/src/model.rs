@@ -1,8 +1,11 @@
 use std::{collections::HashMap, ops::Range};
 
+use crate::backend::{Member, MemberRole, MembersState};
 use chrono::{Local, TimeZone};
 
-use crate::backend::{Message, MessageKind, Room, Snapshot, Space};
+use crate::backend::{
+    Attachment, DeliveryState, Message, MessageKind, Reaction, ReplyTarget, Room, Snapshot, Space,
+};
 
 #[derive(Default)]
 pub(super) struct Navigation {
@@ -18,13 +21,13 @@ impl Navigation {
                 .spaces
                 .iter()
                 .find(|space| &space.id == selected)
-                .is_some_and(|space| space.room_ids.iter().any(|room| room == id));
+                .is_some_and(|space| space.room_ids.contains(id));
         }
         snapshot.spaces_loaded
             && !snapshot
                 .spaces
                 .iter()
-                .any(|space| space.room_ids.iter().any(|room| room == id))
+                .any(|space| space.room_ids.contains(id))
     }
 
     pub fn reconcile(&mut self, snapshot: &Snapshot) -> bool {
@@ -46,11 +49,20 @@ impl Navigation {
 }
 
 pub(super) fn grouped(messages: &[Message]) -> Vec<Range<usize>> {
+    grouped_with_boundaries(messages, &Default::default())
+}
+
+pub(super) fn grouped_with_boundaries(
+    messages: &[Message],
+    boundaries: &std::collections::HashSet<String>,
+) -> Vec<Range<usize>> {
     let mut groups: Vec<Range<usize>> = Vec::new();
     for (ix, message) in messages.iter().enumerate() {
         let joins = ix > 0 && {
             let previous = &messages[ix - 1];
-            previous.sender == message.sender
+            !message.new_messages
+                && !boundaries.contains(&message.id)
+                && previous.sender == message.sender
                 && (0..300_000)
                     .contains(&message.timestamp_ms.saturating_sub(previous.timestamp_ms))
                 && Local
@@ -100,7 +112,7 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
             id: "design".into(),
             name: "Design team".into(),
             level: 0,
-            room_ids: vec!["general".into(), "research".into()],
+            room_ids: ["general".into(), "research".into()].into_iter().collect(),
         }],
         rooms: vec![
             Room {
@@ -145,6 +157,7 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
             let outgoing = ix / 3 % 2 == 1;
             Message {
                 id: format!("sample-{ix}"),
+                event_id: Some(format!("$sample-{ix}:preview.invalid")),
                 sender: if outgoing {
                     snapshot.user_id.clone()
                 } else {
@@ -154,7 +167,8 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
                 body: bodies[ix % bodies.len()].into(),
                 kind: MessageKind::Text,
                 timestamp_ms: 1_794_300_000_000 + ix as i64 * 30_000,
-                delivery: String::new(),
+                delivery: DeliveryState::Remote,
+                ..Default::default()
             }
         })
         .collect();
@@ -163,7 +177,109 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
         message.kind = MessageKind::Undecryptable;
         message.body.clear();
     }
+    {
+        if let Some(message) = snapshot.messages.get_mut(0) {
+            message.reactions = vec![
+                Reaction {
+                    key: "👍".into(),
+                    count: 3,
+                    mine: true,
+                },
+                Reaction {
+                    key: "🦀".into(),
+                    count: 2,
+                    mine: false,
+                },
+            ];
+            message.thread_replies = 4;
+        }
+        if let Some(message) = snapshot.messages.get_mut(1) {
+            message.reply = Some(ReplyTarget::Ready {
+                sender: "Alex".into(),
+                excerpt: "A single Rust interface for every desktop.".into(),
+            });
+            message.kind = MessageKind::Notice;
+        }
+        if let Some(message) = snapshot.messages.get_mut(3) {
+            message.kind = MessageKind::Emote;
+            message.body = "say hello".into();
+            message.new_messages = true;
+        }
+        if let Some(message) = snapshot.messages.get_mut(4) {
+            message.kind = MessageKind::Image;
+            message.attachment = Some(Attachment {
+                filename: "sample-mockup.png".into(),
+                size: Some(245_760),
+            });
+        }
+        if let Some(message) = snapshot.messages.get_mut(5) {
+            message.kind = MessageKind::File;
+            message.attachment = Some(Attachment {
+                filename: "sample-notes.pdf".into(),
+                size: Some(1_048_576),
+            });
+            message.delivery = DeliveryState::Failed;
+            message.can_retry = true;
+            message.event_id = None;
+        }
+    }
+    snapshot.members = vec![
+        Member {
+            user_id: "@alex:preview.invalid".into(),
+            display_name: "Alex".into(),
+            role: MemberRole::Admin,
+        },
+        Member {
+            user_id: snapshot.user_id.clone(),
+            display_name: "You".into(),
+            role: MemberRole::Moderator,
+        },
+        Member {
+            user_id: "@sam:preview.invalid".into(),
+            display_name: "Sam".into(),
+            role: MemberRole::Member,
+        },
+    ];
+    snapshot.members_state = MembersState::Ready;
+    snapshot.typing = vec!["@alex:preview.invalid".into()];
     snapshot
+}
+
+pub(super) fn typing_text(snapshot: &Snapshot) -> String {
+    let names: Vec<_> = snapshot
+        .typing
+        .iter()
+        .filter(|id| **id != snapshot.user_id)
+        .map(|id| {
+            snapshot
+                .members
+                .iter()
+                .find(|member| &member.user_id == id)
+                .map_or(id.as_str(), |member| member.display_name.as_str())
+        })
+        .collect();
+    match names.as_slice() {
+        [] => String::new(),
+        [name] => format!("{name} is typing…"),
+        [first, second] => format!("{first} and {second} are typing…"),
+        [first, ..] => format!("{first} and {} others are typing…", names.len() - 1),
+    }
+}
+
+pub(super) fn message_text(message: &Message) -> String {
+    if let Some(attachment) = &message.attachment {
+        let size = match attachment.size {
+            None => "size unknown".into(),
+            Some(size) if size < 1024 => format!("{size} B"),
+            Some(size) if size < 1_048_576 => format!("{:.0} KB", size as f64 / 1024.),
+            Some(size) => format!("{:.1} MB", size as f64 / 1_048_576.),
+        };
+        format!("{} · {size}", attachment.filename)
+    } else if message.kind == MessageKind::Emote {
+        format!("{} {}", message.display_name, message.body)
+    } else {
+        message.body.clone()
+    }
 }
 
 #[cfg(test)]
@@ -210,5 +326,29 @@ mod tests {
             plain_text("![a](https://example.org/a)\nx"),
             "\\!\\[a\\]\\(https\\:\\/\\/example\\.org\\/a\\)  \nx"
         );
+    }
+}
+
+#[cfg(test)]
+mod room_state_tests {
+    use super::*;
+    #[test]
+    fn typing_labels_resolve_members_and_do_not_include_our_own_user() {
+        let mut snapshot = preview(false, 6);
+        assert!(typing_text(&snapshot) == "Alex is typing…");
+        snapshot.typing = vec![snapshot.user_id.clone()];
+        assert!(typing_text(&snapshot).is_empty());
+        snapshot.typing = vec![
+            "@alex:preview.invalid".into(),
+            "@sam:preview.invalid".into(),
+        ];
+        assert!(typing_text(&snapshot) == "Alex and Sam are typing…");
+    }
+    #[test]
+    fn read_boundary_splits_a_sender_group_without_changing_message_ids() {
+        let mut snapshot = preview(false, 6);
+        snapshot.messages[1].new_messages = true;
+        assert!(grouped(&snapshot.messages)[0] == (0..1));
+        assert!(snapshot.messages[1].id == "sample-1");
     }
 }

@@ -16,6 +16,8 @@ backend graph constrains those versions. No web/JavaScript shell is used for cha
   coalesced presentation snapshots on a `watch` channel that the view awaits
   directly (no polling). Holds the single-instance lock. Tokens and SDK objects
   do not enter UI records.
+  Core room, space, profile, message and member projections are used directly;
+  the frontend maps typed core outcomes into display wording.
   Epoch/selection guards reject stale stream results. Blocking operations run on
   background workers; networking/storage never run in render.
 - `gpui/app.rs`: retained view state, commands, inputs, request guards and task
@@ -38,6 +40,13 @@ Kit's MessageScroller virtualizes variable-height sender groups. Incremental
 splices use stable group/message IDs and preserve the reading anchor; existing
 rows are remeasured after content updates. The 10,000-message fixture is a runtime
 smoke check, not a timing/memory benchmark or proof of all live pagination behavior.
+RoomListService adapters project incremental joined-room diffs in SDK recency
+order. Home/space membership filtering remains in the frontend model. Top-entry
+scroll notifications request SDK history; retained group boundaries preserve
+anchors when a prepend would otherwise merge into the existing first group.
+Typing uses SDK throttling, and receipts target an explicit event only when its
+row intersects the timeline clip in an active window.
+
 Plain message text is escaped before going through the selectable text renderer,
 preventing Markdown image syntax from initiating remote image loads.
 

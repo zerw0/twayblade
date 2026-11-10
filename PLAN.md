@@ -59,8 +59,9 @@ login token) in the system browser. Token refresh, revoked/expired session
 recovery. Exit: all flows pass against isolated servers, including cancellation,
 invalid callback and relaunch. Rotated credentials persist atomically.
 
-**M2 — encrypted messaging (5–7 weeks).** Message actions, attachments, emoji
-and reactions, verification, backup and recovery. Exit: interoperates with
+**M2 — encrypted messaging (5–7 weeks).** Verification, backup and recovery
+first; then attachments and the emoji picker (message actions and reactions
+are done). Exit: interoperates with
 Element in encrypted rooms; reconnect without duplicate sends; fresh-install
 recovery; missing-key and revoked-device behavior; no secrets or bodies in logs.
 
@@ -78,18 +79,25 @@ packaging, signing, updates. Exit: clean-machine install, upgrade with session
 retained, uninstall, notification activation. Signed artifacts need release
 credentials and explicit authorization.
 
-## Known technical debt (fix during M0/M1)
+## Known technical debt
 
-- `core` returns English UI strings (`&'static str` statuses and errors). Return
-  typed states/errors and map them to text in the frontend.
-- `gpui/backend.rs` mirrors core types field-by-field and blocks on its own Tokio
-  runtime from GPUI workers. Use core types directly.
-- The room list is rebuilt from `client.rooms()` on every change. Move to the
-  sync service's `RoomListService` (incremental, server-sorted) before large accounts.
 - Message text is escaped and passed through Kit's Markdown renderer to get
   selectable text. Replace with a plain selectable-text element when available.
-- The credential entry name `matrix-client.development` is hard-coded; give
-  release builds their own entry name.
+- Release credential entry is separate from debug; release migration and
+  stable code signing (repeated Keychain prompts on dev builds) are M5 work.
+
+## Next steps (in order)
+
+1. **Close M0: CI green on macOS, Linux and Windows.** Push a branch, read the
+   GitHub Actions results, fix platform build/test failures. No new features
+   until this passes.
+2. **M1: OAuth/OIDC first**, then legacy SSO, then token refresh and
+   revoked-session recovery. Servers using Matrix Authentication Service may not
+   offer password login at all, so this is on the critical path for real users.
+3. **M2 starts with verification and key recovery**, not attachments: without
+   cross-signing verification and backup restore, an existing account sees
+   history as "Unable to decrypt", which makes the client unusable for E2EE users.
+   Then attachments, then emoji picker.
 
 ## Progress
 
@@ -103,15 +111,28 @@ Done (macOS arm64, offline and isolated-server verification only):
   row, room header (avatar, topic, encryption lock), bubble timeline with day
   separators and undecryptable/deleted states, rounded composer, details panel
   (Cmd-I) and profile panel (Escape closes). Two-step sign-in (server, then
-  browser/password). Controls for unbuilt features are omitted, not faked.
+  implemented password options). Browser sign-in controls await M1; controls
+  for unbuilt features are omitted, not faked.
 - Home (rooms outside all spaces), room search, recency-sorted rooms, per-room
   drafts, pagination, plain-text send queue, read-only profiles.
 - Offline previews, incl. a 10,000-message virtualization smoke fixture.
 - Isolated Synapse fixture: SDK-to-SDK encrypted send/receive and same-device
   store reopen pass (`tests/integration/`).
 
+Functional workspace (2026-11-10, Codex; reviewed):
+- Local M0 path: operator-confirmed GPUI sign-in, sync, send and Keychain
+  restore; automated cross-process Keychain lifecycle incl. logout cleanup.
+- Timeline: replies, reactions (toggle), thread reply counts, emote/notice,
+  image/file/audio/video placeholders, failed-send retry/cancel.
+- Room state: members with Admin/Moderator roles, typing (in and out),
+  "New messages" separator, read receipts for the visible latest event.
+- Scroll-to-top pagination with stable reading anchor.
+- Debt cleared: typed core errors/statuses, core records used directly,
+  RoomListService-driven room list; separate release credential entry.
+- 26 unit/UI tests; six isolated-server checks (see STATUS.md).
+
 Not yet verified:
-- Live GPUI login → sync → send → relaunch → logout with Keychain.
+- Physical GUI checks of logout, pagination, IME and VoiceOver.
 - CI on any host; Linux and Windows builds and runs.
 - Element interoperability; IME, VoiceOver, keyboard focus; performance numbers.
 

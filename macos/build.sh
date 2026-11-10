@@ -10,11 +10,13 @@ apple_env=(/usr/bin/env -i "HOME=$HOME" "USER=${USER:-$(/usr/bin/id -un)}"
 apple_developer_dir="$("${apple_env[@]}" /usr/bin/xcode-select -p)"
 apple_env+=("DEVELOPER_DIR=$apple_developer_dir")
 run=false
+preview=false
 build=(cargo build --locked -p matrix-client-gpui)
 app_args=()
 for arg in "$@"; do
     case "$arg" in
         --run) run=true ;;
+        --preview|--preview-*) preview=true; app_args+=("$arg") ;;
         *) app_args+=("$arg") ;;
     esac
     if [[ "$arg" == --capture ]]; then build+=(--features capture); fi
@@ -28,5 +30,8 @@ cp macos/Info.plist "$app/Contents/Info.plist"
 printf 'Built %s\n' "$app"
 if [[ "$run" == true ]]; then
     # Bash 3.2 (macOS /bin/bash) treats an empty array as unset under `set -u`.
-    exec /usr/bin/open -n -W "$app" --args ${app_args[@]+"${app_args[@]}"}
+    # Connected launches reuse the existing instance; offline previews are independent.
+    open_args=(-W)
+    if [[ "$preview" == true ]]; then open_args+=(-n); fi
+    exec /usr/bin/open "${open_args[@]}" "$app" --args ${app_args[@]+"${app_args[@]}"}
 fi

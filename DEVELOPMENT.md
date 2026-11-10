@@ -49,6 +49,19 @@ when invoked inside Nix/direnv. The bundle is for local development. Transitive
 Nix library dependencies, clean-machine packaging, signing/notarization and
 minimum macOS-version acceptance remain release work.
 
+To reopen the existing bundle without rebuilding or signing it again:
+
+```sh
+open "target/debug/bundle/Matrix Client.app"
+```
+
+The build helper reuses a running instance for a normal launch. Offline previews
+launch separately. Development bundles use ad-hoc signing, whose designated
+requirement contains the binary hash; changing the binary can cause macOS to
+request Keychain access again. Use Always Allow for this app's session item to
+remember permission for the current build. Stable signing across builds remains
+packaging work; do not grant access to all applications.
+
 A normal launch restores the saved Keychain session. A second instance refuses
 to start. Use a dedicated test account for connected development. An unavailable keychain is an error; there is
 no plaintext credential fallback.
@@ -105,6 +118,7 @@ drafts, switch rooms and open sample profiles.
 cargo run --locked -p matrix-client-gpui -- --preview
 cargo run --locked -p matrix-client-gpui -- --preview-home
 cargo run --locked -p matrix-client-gpui -- --preview-profile
+cargo run --locked -p matrix-client-gpui -- --preview-details
 cargo run --locked -p matrix-client-gpui -- --preview-signin
 cargo run --locked -p matrix-client-gpui -- --preview-large
 ```

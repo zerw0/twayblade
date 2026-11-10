@@ -4,8 +4,9 @@
 
 use chrono::{Local, TimeZone};
 use gpui_kit::assets::IconName;
+use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{
-    bubble::{Bubble, BubbleVariant},
+    bubble::{Bubble, BubbleContent, BubbleVariant},
     button::{Button, ButtonVariants},
     input::{Input, Textarea},
     message::MessageAlignment,
@@ -18,7 +19,10 @@ use gpui_kit::*;
 
 use crate::{
     app::{CloseProfile, FindConversation, MatrixApp, ToggleDetails},
-    backend::{MessageKind, Room},
+    backend::{
+        DeliveryState, Member, MemberRole, MembersState, MessageKind, ReplyTarget, Room,
+        TimelineAction,
+    },
     model,
     theme::{self, Palette},
 };
@@ -222,29 +226,6 @@ impl MatrixApp {
                                 })),
                         ),
                 );
-                if options.browser {
-                    // OAuth/OIDC and legacy SSO arrive in M1; show that the server offers it.
-                    form = form.child(
-                        Button::new("browser-sign-in")
-                            .primary()
-                            .w_full()
-                            .label("Continue in browser")
-                            .icon(IconName::ExternalLink)
-                            .tooltip("Not available yet")
-                            .disabled(true),
-                    );
-                    if options.password {
-                        form = form.child(
-                            h_flex()
-                                .gap(px(10.))
-                                .text_size(px(11.5))
-                                .text_color(muted)
-                                .child(div().flex_1().h(px(1.)).bg(cx.theme().border))
-                                .child("or use a password")
-                                .child(div().flex_1().h(px(1.)).bg(cx.theme().border)),
-                        );
-                    }
-                }
                 if options.password {
                     let ready = !self.busy
                         && !self.username.read(cx).value().trim().is_empty()
@@ -267,11 +248,7 @@ impl MatrixApp {
                                 .child(self.field_label("Password"))
                                 .child(Input::new(&self.password).disabled(self.busy)),
                         )
-                        .child(if options.browser {
-                            sign_in.outline()
-                        } else {
-                            sign_in.primary()
-                        });
+                        .child(sign_in.primary());
                 }
             }
         }
@@ -612,6 +589,7 @@ impl MatrixApp {
                     .ghost()
                     .small()
                     .icon(IconName::UserRound)
+                    .accessibility_label("My profile")
                     .tooltip("My profile")
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_profile(user.clone(), "You".into(), window, cx)
@@ -622,6 +600,7 @@ impl MatrixApp {
                     .ghost()
                     .small()
                     .icon(IconName::LogOut)
+                    .accessibility_label("Sign out")
                     .tooltip("Sign out")
                     .disabled(self.preview || self.busy)
                     .on_click(cx.listener(|this, _, window, cx| this.logout(window, cx))),
@@ -661,11 +640,16 @@ impl MatrixApp {
         &self,
         message: &crate::backend::Message,
         outgoing: bool,
-        cx: &App,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = theme::palette(cx);
-        match message.kind {
-            MessageKind::Text => Bubble::new()
+        let bubble = match message.kind {
+            MessageKind::Text
+            | MessageKind::Emote
+            | MessageKind::Notice
+            | MessageKind::Image
+            | MessageKind::File => Bubble::new()
+                .max_w_full()
                 .alignment(if outgoing {
                     MessageAlignment::End
                 } else {
@@ -676,13 +660,55 @@ impl MatrixApp {
                 } else {
                     BubbleVariant::Secondary
                 })
-                .child(
-                    TextView::markdown(
-                        SharedString::from(format!("message-{}", message.id)),
-                        model::plain_text(&message.body),
+                .content(BubbleContent::new().child({
+                    let mut content = v_flex().min_w_0().gap(px(5.));
+                    if let Some(reply) = &message.reply {
+                        let (sender, excerpt) = match reply {
+                            ReplyTarget::Ready { sender, excerpt } => {
+                                (sender.as_str(), excerpt.as_str())
+                            }
+                            ReplyTarget::Pending => ("Reply", "Loading original message…"),
+                            ReplyTarget::Unavailable => ("Reply", "Original message unavailable"),
+                        };
+                        content = content.child(
+                            v_flex()
+                                .id(SharedString::from(format!("reply-{}", message.id)))
+                                .border_l_2()
+                                .border_color(if outgoing {
+                                    palette.on_avatar
+                                } else {
+                                    cx.theme().primary
+                                })
+                                .pl(px(8.))
+                                .text_size(px(11.))
+                                .gap(px(2.))
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(sender.to_owned()),
+                                )
+                                .child(
+                                    TextView::markdown(
+                                        SharedString::from(format!("reply-text-{}", message.id)),
+                                        model::plain_text(excerpt),
+                                    )
+                                    .selectable(true),
+                                )
+                                .test_support(),
+                        );
+                    }
+                    content.child(
+                        TextView::markdown(
+                            SharedString::from(format!("message-{}", message.id)),
+                            model::plain_text(&model::message_text(message)),
+                        )
+                        .selectable(true)
+                        .when(
+                            matches!(message.kind, MessageKind::Emote | MessageKind::Notice),
+                            |text| text.italic(),
+                        ),
                     )
-                    .selectable(true),
-                )
+                }))
                 .into_any_element(),
             MessageKind::Undecryptable => h_flex()
                 .gap(px(7.))
@@ -704,7 +730,150 @@ impl MatrixApp {
                 .italic()
                 .child("Message deleted")
                 .into_any_element(),
+        };
+        let mut row = v_flex()
+            .min_w_0()
+            .max_w_full()
+            .gap(px(4.))
+            .when(outgoing, |row| row.items_end())
+            .when(!outgoing, |row| row.items_start())
+            .child(bubble);
+        let pending = self.navigation.selected_room.as_ref().is_some_and(|room| {
+            self.pending_actions
+                .contains(&(room.clone(), message.id.clone()))
+        });
+        let disabled =
+            self.preview || pending || self.backend.is_none() || !self.snapshot.timeline_ready;
+        if !message.reactions.is_empty() {
+            let mut chips = h_flex().gap(px(4.)).flex_wrap();
+            for reaction in &message.reactions {
+                let id = message.id.clone();
+                let key = reaction.key.clone();
+                let action = if reaction.mine { "Remove" } else { "Add" };
+                chips = chips.child(
+                    Button::new(SharedString::from(format!("reaction-{}-{}", id, key)))
+                        .outline()
+                        .xsmall()
+                        .rounded(px(12.))
+                        .label(format!("{} {}", key, reaction.count))
+                        .selected(reaction.mine)
+                        .toggled(reaction.mine)
+                        .accessibility_label(format!(
+                            "{action} {} reaction, {} people",
+                            key, reaction.count
+                        ))
+                        .tooltip(format!("{action} {} reaction", key))
+                        .disabled(disabled)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.timeline_action(
+                                id.clone(),
+                                TimelineAction::React {
+                                    message: id.clone(),
+                                    key: key.clone(),
+                                },
+                                window,
+                                cx,
+                            )
+                        })),
+                );
+            }
+            row = row.child(chips);
         }
+        if message.thread_replies > 0 {
+            row = row.child(
+                div()
+                    .id(SharedString::from(format!("thread-{}", message.id)))
+                    .text_size(px(11.))
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format!(
+                        "{} {}",
+                        message.thread_replies,
+                        if message.thread_replies == 1 {
+                            "reply"
+                        } else {
+                            "replies"
+                        }
+                    ))
+                    .test_support(),
+            );
+        }
+        if message.delivery == DeliveryState::Failed {
+            let mut failure = h_flex()
+                .gap(px(4.))
+                .text_size(px(11.))
+                .text_color(palette.error)
+                .child("Send failed");
+            if message.can_retry {
+                for (label, retry) in [("Retry", true), ("Cancel", false)] {
+                    let id = message.id.clone();
+                    failure = failure.child(
+                        Button::new(SharedString::from(format!(
+                            "{}-{}",
+                            label.to_lowercase(),
+                            id
+                        )))
+                        .text()
+                        .xsmall()
+                        .label(label)
+                        .tooltip(format!("{label} failed message"))
+                        .disabled(disabled)
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                let action = if retry {
+                                    TimelineAction::Retry {
+                                        message: id.clone(),
+                                    }
+                                } else {
+                                    TimelineAction::Cancel {
+                                        message: id.clone(),
+                                    }
+                                };
+                                this.timeline_action(id.clone(), action, window, cx);
+                            },
+                        )),
+                    );
+                }
+            }
+            row = row.child(failure);
+        }
+        if message.event_id.is_some()
+            && self
+                .snapshot
+                .messages
+                .iter()
+                .rev()
+                .find(|item| item.event_id.is_some())
+                .map(|item| &item.id)
+                == Some(&message.id)
+            && let (Some(event_id), Some(room)) = (
+                message.event_id.clone(),
+                self.navigation.selected_room.clone(),
+            )
+        {
+            let weak = cx.weak_entity();
+            let account = self.snapshot.account_instance;
+            row = row.relative().child(
+                canvas(
+                    move |bounds, window, cx| {
+                        let visible = bounds.intersect(&window.content_mask().bounds);
+                        let visible = visible.size.width > px(1.) && visible.size.height > px(1.);
+                        window.defer(cx, move |window, cx| {
+                            let _ = weak.update(cx, |this, cx| {
+                                this.report_latest_visibility(
+                                    room, event_id, account, visible, window, cx,
+                                )
+                            });
+                        });
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            );
+        }
+        row.into_any_element()
     }
 
     fn message_group(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -741,10 +910,25 @@ impl MatrixApp {
                     .child(div().flex_1().h(px(1.)).bg(cx.theme().border)),
             );
         }
+        if first.new_messages {
+            group = group.child(
+                h_flex()
+                    .id(SharedString::from(format!("new-messages-{}", first.id)))
+                    .gap(px(10.))
+                    .text_size(px(11.))
+                    .text_color(cx.theme().primary)
+                    .child(div().flex_1().h(px(1.)).bg(cx.theme().primary))
+                    .child("New messages")
+                    .child(div().flex_1().h(px(1.)).bg(cx.theme().primary))
+                    .test_support(),
+            );
+        }
         let messages = &self.snapshot.messages[range];
         let last = messages.len().saturating_sub(1);
         if outgoing {
             let mut column = v_flex()
+                .w_full()
+                .min_w_0()
                 .ml_auto()
                 .max_w(px(BUBBLE_MAX_WIDTH))
                 .items_end()
@@ -758,25 +942,24 @@ impl MatrixApp {
                 );
             for (ix, message) in messages.iter().enumerate() {
                 column = column.child(self.message_body(message, true, cx));
-                // "Sent" is the normal case: show it once per group, problems on every row.
-                let show =
-                    !message.delivery.is_empty() && (ix == last || message.delivery != "Sent");
-                if show {
+                let label = match message.delivery {
+                    DeliveryState::Queued => "Sending…",
+                    DeliveryState::Sent if ix == last => "Sent",
+                    _ => "",
+                };
+                if !label.is_empty() {
                     column = column.child(
                         div()
                             .pr(px(4.))
                             .text_size(px(11.))
-                            .text_color(if message.delivery == "Send failed" {
-                                palette.error
-                            } else {
-                                muted
-                            })
-                            .child(message.delivery.clone()),
+                            .text_color(muted)
+                            .child(label),
                     );
                 }
             }
             return group
                 .child(h_flex().w_full().child(column))
+                .test_support()
                 .into_any_element();
         }
         let id = first.sender.clone();
@@ -787,6 +970,7 @@ impl MatrixApp {
             .p_0()
             .rounded(px(15.))
             .accessibility_label(format!("Open profile of {}", first.display_name))
+            .tooltip(format!("Open profile of {}", first.display_name))
             .child(avatar(
                 &theme::initials(&first.display_name),
                 theme::avatar_color(&first.sender),
@@ -800,6 +984,7 @@ impl MatrixApp {
                 move |this, _, window, cx| this.open_profile(id.clone(), name.clone(), window, cx)
             }));
         let mut column = v_flex()
+            .flex_1()
             .min_w_0()
             .max_w(px(BUBBLE_MAX_WIDTH))
             .gap(px(3.))
@@ -835,6 +1020,7 @@ impl MatrixApp {
                     .child(avatar_button)
                     .child(column),
             )
+            .test_support()
             .into_any_element()
     }
 
@@ -914,12 +1100,13 @@ impl MatrixApp {
                     .ghost()
                     .small()
                     .icon(IconName::ChevronsUp)
+                    .accessibility_label("Load earlier messages")
                     .tooltip(if self.paginating {
                         "Loading earlier messages…"
                     } else {
                         "Load earlier messages"
                     })
-                    .disabled(!ready || self.paginating)
+                    .disabled(!ready || self.paginating || self.pagination_exhausted)
                     .on_click(cx.listener(|this, _, window, cx| this.load_earlier(window, cx))),
             )
             .child(
@@ -927,6 +1114,7 @@ impl MatrixApp {
                     .ghost()
                     .small()
                     .icon(IconName::PanelRight)
+                    .accessibility_label("Room details")
                     .tooltip("Room details")
                     .selected(details_shown)
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_details(cx))),
@@ -973,11 +1161,23 @@ impl MatrixApp {
             .filter(|text| !text.is_empty())
             .cloned()
             .collect();
+        let typing = model::typing_text(&self.snapshot);
         let composer = v_flex()
             .px(px(20.))
             .pb(px(14.))
             .pt(px(6.))
             .gap(px(4.))
+            .when(!typing.is_empty(), |composer| {
+                composer.child(
+                    div()
+                        .id("typing-notice")
+                        .pl(px(14.))
+                        .text_size(px(11.5))
+                        .text_color(muted)
+                        .child(typing)
+                        .test_support(),
+                )
+            })
             .children(notices.into_iter().map(|text| {
                 div()
                     .pl(px(14.))
@@ -1017,6 +1217,7 @@ impl MatrixApp {
                             .small()
                             .rounded(px(15.))
                             .icon(IconName::ArrowUp)
+                            .accessibility_label("Send message")
                             .tooltip("Send message · Return")
                             .disabled(!ready || empty || self.sending.contains(&room.id))
                             .on_click(cx.listener(|this, _, window, cx| this.send(window, cx))),
@@ -1065,9 +1266,67 @@ impl MatrixApp {
                     .ghost()
                     .small()
                     .icon(IconName::X)
+                    .accessibility_label("Close panel")
                     .tooltip("Close · Escape")
                     .on_click(cx.listener(|this, _, _, cx| this.dismiss_panel(cx))),
             )
+    }
+
+    fn member_row(&self, member: &Member, cx: &Context<Self>) -> AnyElement {
+        let id = member.user_id.clone();
+        let name = member.display_name.clone();
+        let role = match member.role {
+            MemberRole::Admin => "Admin",
+            MemberRole::Moderator => "Moderator",
+            MemberRole::Member => "",
+        };
+        let labels = v_flex()
+            .flex_1()
+            .min_w_0()
+            .text_left()
+            .child(
+                h_flex()
+                    .gap(px(6.))
+                    .child(div().truncate().child(name.clone()))
+                    .when(!role.is_empty(), |row| {
+                        row.child(
+                            div()
+                                .text_size(px(10.))
+                                .text_color(cx.theme().muted_foreground)
+                                .child(role),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .text_size(px(10.))
+                    .text_color(cx.theme().muted_foreground)
+                    .truncate()
+                    .child(id.clone()),
+            );
+        let content = h_flex()
+            .w_full()
+            .gap(px(8.))
+            .child(avatar(
+                &theme::initials(&name),
+                theme::avatar_color(&id),
+                26.,
+                13.,
+                &theme::palette(cx),
+            ))
+            .child(labels);
+        Button::new(SharedString::from(format!("member-{id}")))
+            .ghost()
+            .w_full()
+            .h(px(52.))
+            .px(px(6.))
+            .accessibility_label(format!("Open profile of {name} {role}"))
+            .tooltip(format!("Open profile of {name}"))
+            .child(content)
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.open_profile(id.clone(), name.clone(), window, cx)
+            }))
+            .into_any_element()
     }
 
     fn details_view(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1091,7 +1350,7 @@ impl MatrixApp {
                     div()
                         .text_size(px(12.))
                         .text_color(muted)
-                        .child("Messages and files"),
+                        .child("Enabled for this room"),
                 )
         } else {
             h_flex()
@@ -1132,6 +1391,40 @@ impl MatrixApp {
                                 .text_center()
                                 .child(topic),
                         )
+                    }),
+            )
+            .child(
+                v_flex()
+                    .px(px(12.))
+                    .py(px(12.))
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(format!("Members ({})", self.snapshot.members.len())),
+                    )
+                    .child(match self.snapshot.members_state {
+                        MembersState::Loading => div()
+                            .text_color(muted)
+                            .child("Loading members…")
+                            .into_any_element(),
+                        MembersState::Failed => div()
+                            .text_color(muted)
+                            .child("Members could not be loaded.")
+                            .into_any_element(),
+                        MembersState::Ready => uniform_list(
+                            "members",
+                            self.snapshot.members.len(),
+                            cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                                range
+                                    .filter_map(|ix| this.snapshot.members.get(ix))
+                                    .map(|member| this.member_row(member, cx))
+                                    .collect::<Vec<_>>()
+                            }),
+                        )
+                        .h(px(260.))
+                        .w_full()
+                        .into_any_element(),
                     }),
             )
             .child(

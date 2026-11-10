@@ -12,7 +12,7 @@ use gpui_kit::component::{
 use gpui_kit::*;
 
 use crate::{
-    backend::{Backend, LoginOptions, Profile, Snapshot},
+    backend::{Backend, LoginOptions, Profile, Snapshot, TimelineAction},
     model::{self, Navigation},
 };
 
@@ -45,7 +45,16 @@ pub(super) struct MatrixApp {
     pub status: String,
     pub busy: bool,
     pub paginating: bool,
+    pub pagination_exhausted: bool,
+    pub(super) pagination_request: u64,
+    was_at_top: bool,
+    group_boundaries: HashSet<String>,
     pub sending: HashSet<String>,
+    pub pending_actions: HashSet<(String, String)>,
+    pub latest_visible: Option<(String, String)>,
+    receipt_pending: Option<(String, String)>,
+    last_receipt: Option<(String, String)>,
+    receipt_retry_after: std::time::Instant,
     pub profile: Option<ProfilePage>,
     /// Room details panel; the profile view replaces it while open.
     pub details_open: bool,
@@ -109,6 +118,12 @@ impl MatrixApp {
                 },
             ));
         }
+        subscriptions.push(cx.observe_in(&scroller, window, |this, _, window, cx| {
+            this.maybe_load_earlier(window, cx);
+            this.latest_visible = None;
+            cx.notify();
+        }));
+        subscriptions.push(cx.observe_window_activation(window, |_, _, cx| cx.notify()));
         subscriptions.push(cx.observe_window_appearance(window, |_, window, cx| {
             Theme::sync_system_appearance(Some(window), cx);
             crate::theme::apply(cx);
@@ -133,7 +148,16 @@ impl MatrixApp {
             status: String::new(),
             busy: !preview,
             paginating: false,
+            pagination_exhausted: false,
+            pagination_request: 0,
+            was_at_top: false,
+            group_boundaries: HashSet::new(),
             sending: HashSet::new(),
+            pending_actions: HashSet::new(),
+            latest_visible: None,
+            receipt_pending: None,
+            last_receipt: None,
+            receipt_retry_after: std::time::Instant::now(),
             profile: None,
             details_open: false,
             preview,
@@ -167,7 +191,11 @@ impl MatrixApp {
                 match result {
                     Ok((snapshot, backend)) => {
                         this.backend = Some(backend.clone());
-                        this.status = "Sign in to your homeserver.".into();
+                        this.status = if snapshot.user_id.is_empty() {
+                            "Sign in to your homeserver.".into()
+                        } else {
+                            String::new()
+                        };
                         this.apply(snapshot, window, cx);
                         let mut updates = backend.subscribe();
                         // Deliver anything published since `snapshot()`; stale revisions are ignored.
@@ -216,15 +244,29 @@ impl MatrixApp {
         .detach();
     }
 
-    fn apply(&mut self, mut snapshot: Snapshot, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn apply(
+        &mut self,
+        mut snapshot: Snapshot,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.started && snapshot.revision <= self.snapshot.revision {
             return;
         }
         self.started = true;
-        if self.snapshot.user_id != snapshot.user_id {
+        if self.snapshot.user_id != snapshot.user_id
+            || self.snapshot.account_instance != snapshot.account_instance
+        {
+            // Status from sign-in or a previous account must not enter this workspace.
+            self.status.clear();
+            self.reset_pagination();
             self.navigation = Navigation::default();
             self.composers.clear();
             self.sending.clear();
+            self.pending_actions.clear();
+            self.latest_visible = None;
+            self.receipt_pending = None;
+            self.last_receipt = None;
             self.close_profile(cx);
             self.composer
                 .update(cx, |state, cx| state.set_value("", window, cx));
@@ -235,8 +277,26 @@ impl MatrixApp {
         if self.navigation.selected_room.as_deref().unwrap_or_default() != snapshot.selected_room {
             snapshot.messages.clear();
             snapshot.timeline_ready = false;
+            snapshot.members.clear();
+            snapshot.members_state = crate::backend::MembersState::Loading;
+            snapshot.typing.clear();
         }
-        let groups = model::grouped(&snapshot.messages);
+        if snapshot.selected_room == self.snapshot.selected_room {
+            if let Some(first) = self.snapshot.messages.first()
+                && snapshot
+                    .messages
+                    .iter()
+                    .position(|message| message.id == first.id)
+                    .is_some_and(|index| index > 0)
+            {
+                self.group_boundaries.insert(first.id.clone());
+            }
+            self.group_boundaries
+                .retain(|id| snapshot.messages.iter().any(|message| &message.id == id));
+        } else {
+            self.group_boundaries.clear();
+        }
+        let groups = model::grouped_with_boundaries(&snapshot.messages, &self.group_boundaries);
         let old_ids: Vec<_> = self
             .groups
             .iter()
@@ -353,6 +413,7 @@ impl MatrixApp {
         self.search
             .update(cx, |state, cx| state.set_value("", window, cx));
         if self.navigation.reconcile(&self.snapshot) {
+            self.reset_pagination();
             self.groups.clear();
             self.snapshot.messages.clear();
             self.scroller.update(cx, |state, cx| state.reset(0, cx));
@@ -365,10 +426,17 @@ impl MatrixApp {
         if self.navigation.selected_room.as_ref() == Some(&id) {
             return;
         }
+        self.reset_pagination();
         self.navigation.selected_room = Some(id.clone());
         self.groups.clear();
         self.snapshot.messages.clear();
         self.snapshot.timeline_ready = false;
+        self.latest_visible = None;
+        if !self.preview {
+            self.snapshot.members.clear();
+            self.snapshot.members_state = crate::backend::MembersState::Loading;
+            self.snapshot.typing.clear();
+        }
         self.activate_composer(id.clone(), window, cx);
         self.scroller.update(cx, |state, cx| state.reset(0, cx));
         if self.preview {
@@ -407,6 +475,15 @@ impl MatrixApp {
                         this.navigation
                             .drafts
                             .insert(target.clone(), state.read(cx).value().to_string());
+                        if !this.preview
+                            && this.navigation.selected_room.as_ref() == Some(&target)
+                            && let Some(backend) = &this.backend
+                        {
+                            backend.set_typing(
+                                target.clone(),
+                                !state.read(cx).value().trim().is_empty(),
+                            );
+                        }
                     }
                     InputEvent::PressEnter { shift: false, .. }
                         if this.navigation.selected_room.as_ref() == Some(&target) =>
@@ -465,6 +542,9 @@ impl MatrixApp {
         if body.trim().is_empty() || self.sending.contains(&room) {
             return;
         }
+        if let Some(backend) = &self.backend {
+            backend.set_typing(room.clone(), false);
+        }
         self.sending.insert(room.clone());
         let account = self.snapshot.user_id.clone();
         let sent_body = body.clone();
@@ -494,22 +574,155 @@ impl MatrixApp {
         cx.notify();
     }
 
+    pub fn report_latest_visibility(
+        &mut self,
+        room: String,
+        event_id: String,
+        account: u128,
+        visible: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.snapshot.account_instance != account
+            || self.navigation.selected_room.as_ref() != Some(&room)
+            || self
+                .snapshot
+                .messages
+                .iter()
+                .rev()
+                .find_map(|message| message.event_id.as_ref())
+                != Some(&event_id)
+        {
+            return;
+        }
+        let key = (room.clone(), event_id.clone());
+        self.latest_visible = visible.then(|| key.clone());
+        if self.preview
+            || !visible
+            || !window.is_window_active()
+            || self.backend.is_none()
+            || !self.snapshot.timeline_ready
+            || self.receipt_pending.is_some()
+            || self.last_receipt.as_ref() == Some(&key)
+            || std::time::Instant::now() < self.receipt_retry_after
+        {
+            return;
+        }
+        self.receipt_pending = Some(key.clone());
+        self.job(
+            window,
+            cx,
+            move |backend| {
+                backend.timeline_action(room, account, TimelineAction::Read { event_id })
+            },
+            move |this, result, _, _| {
+                if this.snapshot.account_instance != account
+                    || this.receipt_pending.as_ref() != Some(&key)
+                {
+                    return;
+                }
+                this.receipt_pending = None;
+                if result.is_ok() {
+                    this.last_receipt = Some(key);
+                } else {
+                    this.receipt_retry_after =
+                        std::time::Instant::now() + std::time::Duration::from_secs(10);
+                }
+            },
+        );
+    }
+
+    pub fn timeline_action(
+        &mut self,
+        id: String,
+        action: TimelineAction,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.preview || !self.snapshot.timeline_ready {
+            return;
+        }
+        let Some(room) = self.navigation.selected_room.clone() else {
+            return;
+        };
+        let pending = (room.clone(), id);
+        if !self.pending_actions.insert(pending.clone()) {
+            return;
+        }
+        let account_instance = self.snapshot.account_instance;
+        self.job(
+            window,
+            cx,
+            move |backend| backend.timeline_action(room, account_instance, action),
+            move |this, result, _, _| {
+                if this.snapshot.account_instance != account_instance {
+                    return;
+                }
+                this.pending_actions.remove(&pending);
+                if this.navigation.selected_room.as_ref() == Some(&pending.0) {
+                    match result {
+                        Ok(()) => this.status.clear(),
+                        Err(error) => this.status = error.to_string(),
+                    }
+                }
+            },
+        );
+        cx.notify();
+    }
+
+    fn reset_pagination(&mut self) {
+        self.pagination_request = self.pagination_request.wrapping_add(1);
+        self.paginating = false;
+        self.pagination_exhausted = false;
+        self.was_at_top = false;
+        self.group_boundaries.clear();
+    }
+
+    fn maybe_load_earlier(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let state = self.scroller.read(cx);
+        let top = state.logical_scroll_top();
+        let at_top = state.is_scrolled_up() && top.item_ix == 0 && top.offset_in_item <= px(1.);
+        let entered = at_top && !self.was_at_top;
+        self.was_at_top = at_top;
+        if entered {
+            self.load_earlier(window, cx);
+        }
+    }
+
     pub fn load_earlier(&mut self, window: &Window, cx: &mut Context<Self>) {
-        if self.preview || self.paginating || !self.snapshot.timeline_ready {
+        if self.preview
+            || self.backend.is_none()
+            || self.paginating
+            || self.pagination_exhausted
+            || !self.snapshot.timeline_ready
+        {
             return;
         }
         let Some(room) = self.navigation.selected_room.clone() else {
             return;
         };
         self.paginating = true;
+        self.pagination_request = self.pagination_request.wrapping_add(1);
+        let request = self.pagination_request;
+        let account = self.snapshot.account_instance;
+        let target = room.clone();
         self.job(
             window,
             cx,
-            move |backend| backend.load_earlier(room),
-            |this, result, _, _| {
+            move |backend| backend.load_earlier(room, account),
+            move |this, result, _, _| {
+                if this.pagination_request != request
+                    || this.snapshot.account_instance != account
+                    || this.navigation.selected_room.as_ref() != Some(&target)
+                {
+                    return;
+                }
                 this.paginating = false;
                 match result {
-                    Ok(true) => this.status = "Beginning of conversation".into(),
+                    Ok(true) => {
+                        this.pagination_exhausted = true;
+                        this.status = "Beginning of conversation".into();
+                    }
                     Ok(false) => {}
                     Err(error) => this.status = error.to_string(),
                 }

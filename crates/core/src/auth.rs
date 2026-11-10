@@ -32,6 +32,7 @@ pub struct Account {
     instance_id: Uuid,
     remotely_revoked: Arc<AtomicBool>,
     store_path: PathBuf,
+    session_store: secrets::SessionStore,
 }
 
 impl std::fmt::Debug for Account {
@@ -45,13 +46,14 @@ impl Account {
         self.instance_id.as_u128()
     }
 
-    fn new(client: Client, store_path: PathBuf) -> Self {
+    fn new(client: Client, store_path: PathBuf, session_store: secrets::SessionStore) -> Self {
         Self {
             client,
             selected_room: tokio::sync::watch::channel(None).0,
             instance_id: Uuid::new_v4(),
             remotely_revoked: Arc::new(AtomicBool::new(false)),
             store_path,
+            session_store,
         }
     }
 
@@ -72,7 +74,8 @@ impl Account {
                 .map_err(|_| AuthError::Logout)?;
             self.remotely_revoked.store(true, Ordering::SeqCst);
         }
-        secrets::delete_session()
+        self.session_store
+            .delete()
             .await
             .map_err(|_| AuthError::Storage)?;
         // The revoked device's keys and cached history have no further use.
@@ -88,21 +91,17 @@ impl std::hash::Hash for Account {
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
-    #[error(
-        "Secure session storage could not be opened. Unlock your OS credential store and retry."
-    )]
+    #[error("auth_storage")]
     Storage,
-    #[error("The saved session could not be restored. It has been retained for recovery.")]
+    #[error("auth_restore")]
     Restore,
-    #[error("Sign-in failed. Check your credentials, homeserver and connection.")]
+    #[error("auth_login")]
     Login,
-    #[error(
-        "Sign-out could not be completed. The session has been retained; retry when connected."
-    )]
+    #[error("auth_logout")]
     Logout,
-    #[error("A saved session already exists. Restart to restore it before signing in again.")]
+    #[error("auth_existing_session")]
     ExistingSession,
-    #[error("Matrix Client is already running. Close the other window first.")]
+    #[error("auth_already_running")]
     AlreadyRunning,
 }
 
@@ -122,19 +121,36 @@ pub fn lock_instance() -> Result<InstanceLock, AuthError> {
     }
 }
 
-async fn save(record: &SavedSession) -> Result<(), AuthError> {
-    let value = Zeroizing::new(serde_json::to_string(record).map_err(|_| AuthError::Storage)?);
-    secrets::save_session(value)
-        .await
-        .map_err(|_| AuthError::Storage)
+// Internal scope keeps test credentials/stores separate from the user's account.
+// Only tests can supply a custom certificate or data directory.
+struct AuthContext {
+    session_store: secrets::SessionStore,
+    data_dir: PathBuf,
+    root_certificate: Option<matrix_sdk::reqwest::Certificate>,
 }
 
-fn store_path(store_id: Uuid) -> Result<PathBuf, AuthError> {
-    let dirs = ProjectDirs::from("", "MatrixClient", "MatrixClient").ok_or(AuthError::Storage)?;
-    Ok(dirs
-        .data_local_dir()
-        .join("sessions")
-        .join(store_id.to_string()))
+impl AuthContext {
+    fn application() -> Result<Self, AuthError> {
+        let dirs =
+            ProjectDirs::from("", "MatrixClient", "MatrixClient").ok_or(AuthError::Storage)?;
+        Ok(Self {
+            session_store: secrets::SessionStore::default(),
+            data_dir: dirs.data_local_dir().to_owned(),
+            root_certificate: None,
+        })
+    }
+
+    fn store_path(&self, store_id: Uuid) -> PathBuf {
+        self.data_dir.join("sessions").join(store_id.to_string())
+    }
+
+    async fn save(&self, record: &SavedSession) -> Result<(), AuthError> {
+        let value = Zeroizing::new(serde_json::to_string(record).map_err(|_| AuthError::Storage)?);
+        self.session_store
+            .save(value)
+            .await
+            .map_err(|_| AuthError::Storage)
+    }
 }
 
 async fn remove_store(path: &std::path::Path) -> Result<(), AuthError> {
@@ -145,23 +161,33 @@ async fn remove_store(path: &std::path::Path) -> Result<(), AuthError> {
     }
 }
 
-async fn client(record: &SavedSession) -> Result<(Client, PathBuf), AuthError> {
+async fn client(
+    context: &AuthContext,
+    record: &SavedSession,
+) -> Result<(Client, PathBuf), AuthError> {
     validate_homeserver(&record.homeserver).map_err(|_| AuthError::Restore)?;
-    let path = store_path(record.store_id)?;
+    let path = context.store_path(record.store_id);
     tokio::fs::create_dir_all(&path)
         .await
         .map_err(|_| AuthError::Storage)?;
-    let client = Client::builder()
+    let mut builder = Client::builder()
         .homeserver_url(&record.homeserver)
-        .sqlite_store(&path, Some(&record.passphrase))
-        .build()
-        .await
-        .map_err(|_| AuthError::Storage)?;
+        .sqlite_store(&path, Some(&record.passphrase));
+    if let Some(certificate) = &context.root_certificate {
+        builder = builder.add_root_certificates(vec![certificate.clone()]);
+    }
+    let client = builder.build().await.map_err(|_| AuthError::Storage)?;
     Ok((client, path))
 }
 
 pub async fn restore() -> Result<Option<Account>, AuthError> {
-    let Some(value) = secrets::load_session()
+    restore_in(&AuthContext::application()?).await
+}
+
+async fn restore_in(context: &AuthContext) -> Result<Option<Account>, AuthError> {
+    let Some(value) = context
+        .session_store
+        .load()
         .await
         .map_err(|_| AuthError::Storage)?
     else {
@@ -172,16 +198,29 @@ pub async fn restore() -> Result<Option<Account>, AuthError> {
         // A pre-login checkpoint contains no account credentials.
         return Ok(None);
     };
-    let (client, path) = client(&record).await?;
+    let (client, path) = client(context, &record).await?;
     client
         .matrix_auth()
         .restore_session(session, Default::default())
         .await
         .map_err(|_| AuthError::Restore)?;
-    Ok(Some(Account::new(client, path)))
+    Ok(Some(Account::new(
+        client,
+        path,
+        context.session_store.clone(),
+    )))
 }
 
 pub async fn login_password(
+    homeserver: String,
+    username: String,
+    password: Zeroizing<String>,
+) -> Result<Account, AuthError> {
+    login_password_in(&AuthContext::application()?, homeserver, username, password).await
+}
+
+async fn login_password_in(
+    context: &AuthContext,
     homeserver: String,
     username: String,
     password: Zeroizing<String>,
@@ -190,7 +229,9 @@ pub async fn login_password(
     if username.trim().is_empty() || password.is_empty() {
         return Err(AuthError::Login);
     }
-    if let Some(value) = secrets::load_session()
+    if let Some(value) = context
+        .session_store
+        .load()
         .await
         .map_err(|_| AuthError::Storage)?
     {
@@ -200,7 +241,7 @@ pub async fn login_password(
             return Err(AuthError::ExistingSession);
         }
         // An interrupted earlier sign-in left an empty, never-logged-in store.
-        remove_store(&store_path(previous.store_id)?).await?;
+        remove_store(&context.store_path(previous.store_id)).await?;
     }
     let mut record = SavedSession {
         homeserver: homeserver.to_string(),
@@ -209,8 +250,8 @@ pub async fn login_password(
         session: None,
     };
     // Prove secure storage works before transmitting the password or creating a device.
-    save(&record).await?;
-    let (client, path) = client(&record).await?;
+    context.save(&record).await?;
+    let (client, path) = client(context, &record).await?;
     let login = client
         .matrix_auth()
         .login_username(username.trim(), &password)
@@ -220,17 +261,17 @@ pub async fn login_password(
     let Some(session) = session else {
         // No device exists; discard the checkpoint and its empty store.
         drop(client);
-        let _ = secrets::delete_session().await;
+        let _ = context.session_store.delete().await;
         let _ = remove_store(&path).await;
         return Err(AuthError::Login);
     };
     record.session = Some(session);
-    if let Err(error) = save(&record).await {
+    if let Err(error) = context.save(&record).await {
         // Best effort revocation if secure persistence failed after server login.
         let _ = client.matrix_auth().logout().await;
         return Err(error);
     }
-    Ok(Account::new(client, path))
+    Ok(Account::new(client, path, context.session_store.clone()))
 }
 
 #[cfg(test)]
