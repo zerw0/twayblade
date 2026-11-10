@@ -44,7 +44,7 @@ case "${1:-test}" in
             cargo test --locked -p matrix-client-core --all-features oauth_keychain_lifecycle_across_processes -- --ignored --nocapture
         fi
         ;;
-    up|test|keychain|services|security|media|threads|spaces|viewer|notifications|notification-delivery)
+    up|test|keychain|services|security|media|threads|spaces|viewer|search|notifications|notification-delivery)
         mkdir -p test-data/local/integration
         "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py generate
         if [[ "${1:-test}" == spaces ]]; then
@@ -55,7 +55,10 @@ case "${1:-test}" in
         if [[ "${1:-test}" != up ]]; then
             # Keep encrypted fixture data for inspection; stop only our test service.
             trap '"${compose[@]}" stop' EXIT
-            if [[ "${1:-test}" == notification-delivery ]]; then
+            if [[ "${1:-test}" == search ]]; then
+                "${compose[@]}" exec -T synapse python /bootstrap.py register-security
+                cargo test --locked -p matrix-client-core --all-features search_server_cached_encryption_pagination_and_event_context -- --ignored --nocapture
+            elif [[ "${1:-test}" == notification-delivery ]]; then
                 cargo test --locked -p matrix-client-core --all-features encrypted_notification_delivery_and_private_preview -- --ignored --nocapture
             elif [[ "${1:-test}" == notifications ]]; then
                 cargo test --locked -p matrix-client-core --all-features notification_rules_round_trip_and_second_client_changes -- --ignored --nocapture
@@ -86,5 +89,5 @@ case "${1:-test}" in
         ;;
     down) "${compose[@]}" down ;;
     status) "${compose[@]}" ps ;;
-    *) printf 'Usage: bash tests/integration/run.sh [up|test|keychain|services|oauth|sso|recovery|security|media|threads|spaces|viewer|notifications|notification-delivery|down|status]\n' >&2; exit 1 ;;
+    *) printf 'Usage: bash tests/integration/run.sh [up|test|keychain|services|oauth|sso|recovery|security|media|threads|spaces|viewer|search|notifications|notification-delivery|down|status]\n' >&2; exit 1 ;;
 esac

@@ -9,6 +9,7 @@ pub mod notifications;
 pub mod profile;
 pub mod room_state;
 pub mod rooms;
+pub mod search;
 pub mod security;
 pub mod space_actions;
 pub mod spaces;

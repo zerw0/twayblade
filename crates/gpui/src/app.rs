@@ -904,9 +904,18 @@ impl MatrixApp {
     }
 
     pub fn select_room(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_room_target(id, None, window, cx);
+    }
+    fn select_room_target(
+        &mut self,
+        id: String,
+        event: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.management = None;
         cx.notify();
-        if self.navigation.selected_room.as_ref() == Some(&id) {
+        if event.is_none() && self.navigation.selected_room.as_ref() == Some(&id) {
             return;
         }
         self.emoji_picker = None;
@@ -938,7 +947,7 @@ impl MatrixApp {
             self.snapshot.selected_room = id.clone();
             self.snapshot.timeline_ready = true;
         }
-        self.queue_selection(Some(id), window, cx);
+        self.queue_selection_focus(Some(id), event, window, cx);
         cx.notify();
     }
 
@@ -999,6 +1008,15 @@ impl MatrixApp {
     }
 
     fn queue_selection(&mut self, room: Option<String>, window: &Window, cx: &Context<Self>) {
+        self.queue_selection_focus(room, None, window, cx);
+    }
+    fn queue_selection_focus(
+        &mut self,
+        room: Option<String>,
+        event: Option<String>,
+        window: &Window,
+        cx: &Context<Self>,
+    ) {
         self.thread = None;
         self.management = None;
         if self.preview {
@@ -1016,7 +1034,10 @@ impl MatrixApp {
             let result = cx
                 .background_spawn(async move {
                     match room {
-                        Some(room) => backend.select_room(room),
+                        Some(room) => match event {
+                            Some(event) => backend.open_event(room, event),
+                            None => backend.select_room(room),
+                        },
                         None => backend.clear_selection(),
                     }
                 })
@@ -1701,5 +1722,35 @@ impl MatrixApp {
         let mut seen = std::collections::HashSet::new();
         entries.retain(|e| seen.insert(e.message.event_id.clone()));
         entries
+    }
+}
+
+#[allow(dead_code, reason = "Message search UI action contracts")]
+impl MatrixApp {
+    pub fn search_messages(
+        &mut self,
+        query: matrix_client_core::search::SearchQuery,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(backend) = &self.backend
+            && let Err(error) = backend.search(query)
+        {
+            self.status = error.to_string();
+            cx.notify();
+        }
+        let _ = window;
+    }
+    pub fn search_more(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.job(window, cx, |b| b.search_more(), |_, _, _, _| {});
+    }
+    pub fn open_event(
+        &mut self,
+        room: String,
+        event: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_room_target(room, Some(event), window, cx);
     }
 }

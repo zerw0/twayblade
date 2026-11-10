@@ -17,6 +17,8 @@ use tokio::{runtime::Runtime, sync::watch, task::JoinHandle};
 use zeroize::Zeroizing;
 mod media;
 pub(super) use media::MediaState;
+mod search;
+pub(super) use search::SearchState;
 mod notifications;
 pub(super) use notifications::NotificationConfig;
 
@@ -46,6 +48,8 @@ pub(super) struct Snapshot {
     pub(super) selected_room: String,
     pub(super) messages: Vec<Message>,
     pub(super) media: MediaState,
+    pub(super) search: SearchState,
+    pub(super) focused_event: Option<String>,
     pub(super) thread: Option<ThreadSnapshot>,
     pub(super) timeline_ready: bool,
     pub(super) members: Vec<Member>,
@@ -103,6 +107,8 @@ struct State {
     timeline_task: Option<JoinHandle<()>>,
     media_task: Option<JoinHandle<()>>,
     media_request: u64,
+    search_task: Option<JoinHandle<()>>,
+    search_request: u64,
     thread_task: Option<JoinHandle<()>>,
     thread_conversation: Option<Conversation>,
     thread_request: u64,
@@ -116,6 +122,7 @@ struct State {
 impl State {
     fn stop(&mut self) {
         self.cancel_media();
+        self.cancel_search();
         self.security = None;
         self.directory = None;
         self.leave_plan = None;
@@ -603,6 +610,16 @@ impl Backend {
     }
 
     pub(super) fn select_room(&self, room_id: String) -> Result<(), ServiceError> {
+        self.select_room_focus(room_id, None)
+    }
+    pub(super) fn open_event(&self, room: String, event: String) -> Result<(), ServiceError> {
+        self.select_room_focus(room, Some(event))
+    }
+    fn select_room_focus(
+        &self,
+        room_id: String,
+        target: Option<String>,
+    ) -> Result<(), ServiceError> {
         let mut state = self
             .state
             .lock()
@@ -628,6 +645,7 @@ impl Backend {
         let epoch = state.epoch;
         account.select_room(Some(&room_id));
         publish(&self.updates, |snapshot| {
+            snapshot.focused_event = None;
             snapshot.media = MediaState::default();
             snapshot.selected_room = room_id.clone();
             snapshot.messages.clear();
@@ -641,7 +659,10 @@ impl Backend {
         let shared = self.state.clone();
         let updates = self.updates.clone();
         state.timeline_task = Some(self.runtime.spawn(async move {
-            let stream = account.conversation_updates(room_id, selection);
+            let stream: std::pin::Pin<Box<dyn futures_util::Stream<Item = matrix_client_core::conversation::ConversationSnapshot> + Send>> = match target.clone() {
+                Some(event) => Box::pin(account.event_updates(room_id, event, selection)),
+                None => Box::pin(account.conversation_updates(room_id, selection)),
+            };
             tokio::pin!(stream);
             let mut thumbnails = std::collections::HashMap::<String, Arc<Vec<u8>>>::new();
             let mut attempted = std::collections::HashSet::new();
@@ -672,6 +693,7 @@ impl Backend {
                         publish(&updates, |view| {
                             view.timeline_ready = state.conversation.is_some();
                             view.timeline_status = timeline_status_text(snapshot.status).into();
+                            view.focused_event = target.as_ref().filter(|id| snapshot.messages.iter().any(|m| m.event_id.as_ref() == Some(id))).cloned();
                             view.messages = snapshot.messages;
                             view.members = snapshot.members;
                             view.members_state = snapshot.members_state;
@@ -1065,6 +1087,7 @@ impl Backend {
             account.select_room(None);
         }
         publish(&self.updates, |snapshot| {
+            snapshot.focused_event = None;
             snapshot.media = MediaState::default();
             snapshot.selected_room.clear();
             snapshot.messages.clear();

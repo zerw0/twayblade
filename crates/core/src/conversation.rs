@@ -512,7 +512,7 @@ impl Account {
         room_id: String,
         generation: u64,
     ) -> impl Stream<Item = ConversationSnapshot> + Send + 'static + use<> {
-        self.focused_updates(room_id, generation, None)
+        self.focused_updates(room_id, generation, None, None)
     }
 
     pub fn thread_updates(
@@ -521,7 +521,16 @@ impl Account {
         root: String,
         generation: u64,
     ) -> impl Stream<Item = ConversationSnapshot> + Send + 'static + use<> {
-        self.focused_updates(room_id, generation, Some(root))
+        self.focused_updates(room_id, generation, Some(root), None)
+    }
+
+    pub fn event_updates(
+        &self,
+        room_id: String,
+        event: String,
+        generation: u64,
+    ) -> impl Stream<Item = ConversationSnapshot> + Send + 'static + use<> {
+        self.focused_updates(room_id, generation, None, Some(event))
     }
 
     fn focused_updates(
@@ -529,6 +538,7 @@ impl Account {
         room_id: String,
         generation: u64,
         root: Option<String>,
+        target: Option<String>,
     ) -> impl Stream<Item = ConversationSnapshot> + Send + 'static + use<> {
         let account = self.clone();
         async_stream::stream! {
@@ -544,13 +554,16 @@ impl Account {
                 snapshot.status = TimelineStatus::Unavailable;
                 yield snapshot; return;
             };
-            let focus = match root.as_deref() {
+            let focus = if let Some(target) = &target {
+                let Ok(target) = matrix_sdk::ruma::EventId::parse(target) else { snapshot.status = TimelineStatus::Unavailable; yield snapshot; return; };
+                TimelineFocus::Event { target, num_context_events: 30, thread_mode: matrix_sdk_ui::timeline::TimelineEventFocusThreadMode::Automatic { hide_threaded_events: false } }
+            } else { match root.as_deref() {
                 Some(root) => match matrix_sdk::ruma::EventId::parse(root) {
                     Ok(root_event_id) => TimelineFocus::Thread { root_event_id },
                     Err(_) => { snapshot.status = TimelineStatus::Unavailable; yield snapshot; return; }
                 },
                 None => TimelineFocus::Live { hide_threaded_events: true },
-            };
+            }};
             let timeline = match room.timeline_builder().with_focus(focus).track_read_marker_and_receipts(TimelineReadReceiptTracking::MessageLikeEvents).build().await {
                 Ok(timeline) => Arc::new(timeline),
                 Err(_) => {
@@ -604,8 +617,8 @@ impl Account {
             // is suspended at a yield. JoinSet also aborts it on selection/account drop.
             let mut initial_page = tokio::task::JoinSet::new();
             let initial_timeline = timeline.clone();
-            initial_page.spawn(async move { initial_timeline.paginate_backwards(30).await });
-            let mut initial_pending = true;
+            if target.is_none() { initial_page.spawn(async move { initial_timeline.paginate_backwards(30).await }); }
+            let mut initial_pending = target.is_none();
             let (_typing_guard, mut typing) = room.subscribe_to_typing_notifications();
             let mut room_updates = room.subscribe_to_updates();
             let mut cache_updates = account.client.event_cache().subscribe_to_room_generic_updates();
