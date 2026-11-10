@@ -5,7 +5,13 @@ use matrix_sdk::{
     ruma::{
         RoomId, RoomOrAliasId, UserId,
         api::client::room::create_room,
-        events::{InitialStateEvent, StateEventType, room::encryption::RoomEncryptionEventContent},
+        events::{
+            InitialStateEvent, StateEventType,
+            room::{
+                encryption::RoomEncryptionEventContent,
+                join_rules::{AllowRule, RoomJoinRulesEventContent},
+            },
+        },
         room::JoinRuleSummary,
     },
 };
@@ -323,6 +329,16 @@ impl Account {
         request.name = Some(draft.name.trim().into());
         request.topic = (!draft.topic.trim().is_empty()).then(|| draft.topic.trim().into());
         request.preset = Some(create_room::v3::RoomPreset::PrivateChat);
+        if let Some(parent) = &parent {
+            // Like Element's "visible to space members": anyone in the parent
+            // space can join, instead of an invite-only room nobody can enter.
+            request.initial_state.push(
+                InitialStateEvent::with_empty_state_key(RoomJoinRulesEventContent::restricted(
+                    vec![AllowRule::room_membership(parent.clone())],
+                ))
+                .to_raw_any(),
+            );
+        }
         if draft.encrypted {
             request.initial_state.push(
                 InitialStateEvent::with_empty_state_key(

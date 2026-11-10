@@ -1826,6 +1826,19 @@ async fn spaces_hierarchy_invites_creation_restricted_join_and_selective_leave()
         .unwrap_or_else(|error| panic!("Encrypted child creation failed: {error}"));
     let child_id = checked(matrix_sdk::ruma::RoomId::parse(&encrypted), "child ID");
     let child = alice.client.get_room(&child_id).expect("created child");
+    // Rooms created in a space must be joinable by its members, not invite-only.
+    checked(
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while !matches!(
+                child.join_rule(),
+                Some(matrix_sdk::ruma::events::room::join_rules::JoinRule::Restricted(_))
+            ) {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await,
+        "space child uses a restricted join rule",
+    );
     checked(
         child
             .invite_user_by_id(bob.client.user_id().expect("Bob"))
