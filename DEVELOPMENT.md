@@ -2,13 +2,12 @@
 
 The primary frontend is **GPUI + GPUI Kit**, shared across macOS, Linux and
 Windows, with Matrix services in Rust. macOS remains the primary UX platform.
-The earlier SwiftUI/Iced clients are retained reference implementations.
 See [PLAN.md](PLAN.md) and [acceptance evidence](docs/compatibility/STATUS.md).
 
 ## Get the source
 
-Install Git and Rust using [rustup](https://rustup.rs/). The declared minimum is
-Rust 1.96; local verification uses 1.99. Minimum-version acceptance is pending.
+Install Git and Rust using [rustup](https://rustup.rs/). The minimum is Rust 1.99,
+the version that is built and tested.
 
 ```sh
 rustup component add rustfmt clippy
@@ -31,7 +30,6 @@ Homebrew users can install the auxiliary tools with `brew install pkg-config cma
 Check `xcode-select -p`; if tools are absent, use `xcode-select --install` or
 install/select full Xcode. The current Kit runtime-shader configuration built and
 ran with the installed Command Line Tools; other configurations may need Xcode.
-The primary GPUI frontend does not compile SwiftUI or generate Swift bindings.
 
 Run from a logged-in graphical session:
 
@@ -51,9 +49,8 @@ when invoked inside Nix/direnv. The bundle is for local development. Transitive
 Nix library dependencies, clean-machine packaging, signing/notarization and
 minimum macOS-version acceptance remain release work.
 
-A normal launch restores the shared development Keychain session. Close the other
-frontends first: concurrent-instance protection is pending. Use a dedicated test
-account for connected development. An unavailable keychain is an error; there is
+A normal launch restores the saved Keychain session. A second instance refuses
+to start. Use a dedicated test account for connected development. An unavailable keychain is an error; there is
 no plaintext credential fallback.
 
 ## Linux
@@ -183,20 +180,6 @@ then run `direnv allow`. It contains only `use flake`. Nix packages do not confi
 the host GPU, desktop, user DBus session or keyring; non-NixOS graphics integration
 may need host-specific setup. Apple signing tools are isolated from Nix SDK settings.
 
-## Reference frontends
-
-Retained for comparison during migration:
-
-```sh
-cargo run --locked -p matrix-client-desktop -- --preview-conversation
-# macOS only, with a compatible Apple Swift/SDK installation:
-bash macos/build-swiftui-reference.sh --run --preview
-```
-
-SwiftUI reference output remains `macos/build/Matrix Client.app`; it uses generated
-UniFFI bindings. Its local SDK workaround and XCTest limitations are recorded in
-`docs/compatibility/STATUS.md`. The GPUI app does not depend on that bridge.
-
 ## AI design tooling
 
 UI work uses the user-requested [UI/UX Pro Max skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill)
@@ -210,12 +193,12 @@ GPUI Kit APIs. Do not apply web landing-page output to the desktop app.
 
 ## Local state and troubleshooting
 
-All frontends currently use credential service `matrix-client.development`,
-account `active-session-v1`. SDK directories come from ProjectDirs with
-`("", "MatrixClient", "MatrixClient")`, under `sessions/<UUID>`. The session and
-store passphrase stay in the OS credential store; passwords are not saved.
-Logout revokes the remote session and removes the credential record; encrypted
-stores remain. Interrupted/revoked-session recovery remains incomplete.
+The app uses credential service `matrix-client.development`, account
+`active-session-v1`. SDK stores live under ProjectDirs
+`("", "MatrixClient", "MatrixClient")` in `sessions/<UUID>`, next to the
+`instance.lock` file. The session and store passphrase stay in the OS credential
+store; passwords are not saved. Logout revokes the device, then removes the
+credential record and its store. Revoked-session recovery remains incomplete.
 
 `.gitignore` excludes local credentials, SDK databases, test state, build outputs,
 AI folders and installed skills. AGENTS.md, PLAN.md and product docs remain tracked.

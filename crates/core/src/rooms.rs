@@ -14,6 +14,12 @@ pub struct RoomSummary {
     pub name: String,
     pub unread: u64,
     pub is_space: bool,
+    pub topic: Option<String>,
+    /// Only `true` once the SDK has confirmed `m.room.encryption`.
+    pub encrypted: bool,
+    pub direct: bool,
+    /// Server-provided activity ordering (sliding sync `bump_stamp`).
+    pub recency: u64,
 }
 
 #[derive(Clone)]
@@ -42,7 +48,12 @@ impl Account {
             .rooms()
             .into_iter()
             .filter(|room| room.state() == RoomState::Joined)
-            .map(|room| RoomSummary {
+            .map(|room| {
+                let recency = room.recency_stamp().map(u64::from).unwrap_or(0);
+                (recency, room)
+            })
+            .map(|(recency, room)| RoomSummary {
+                recency,
                 id: room.room_id().to_string(),
                 name: room
                     .cached_display_name()
@@ -51,9 +62,19 @@ impl Account {
                     .unwrap_or_else(|| "Conversation".into()),
                 unread: room.unread_notification_counts().notification_count,
                 is_space: room.is_space(),
+                topic: room.topic().filter(|topic| !topic.trim().is_empty()),
+                encrypted: room.encryption_state().is_encrypted(),
+                direct: room.direct_targets_length() > 0,
             })
             .collect();
-        rooms.sort_by_cached_key(|room| (room.name.to_lowercase(), room.id.clone()));
+        // Most recently active first, like every chat client; name/ID break ties.
+        rooms.sort_by_cached_key(|room| {
+            (
+                std::cmp::Reverse(room.recency),
+                room.name.to_lowercase(),
+                room.id.clone(),
+            )
+        });
         RoomSnapshot {
             account_instance: self.instance_id(),
             rooms,

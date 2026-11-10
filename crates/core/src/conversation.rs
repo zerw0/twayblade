@@ -6,13 +6,23 @@ use matrix_sdk::ruma::{RoomId, events::room::message::RoomMessageEventContent};
 use matrix_sdk_ui::timeline::{EventSendState, RoomExt, Timeline, TimelineDetails, TimelineItem};
 use std::sync::Arc;
 
+/// What a timeline row represents. The frontend owns the wording.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MessageKind {
+    Text,
+    Undecryptable,
+    Redacted,
+}
+
 #[derive(Clone)]
 pub struct MessageRow {
     pub id: String,
     pub sender: String,
     pub display_name: Option<String>,
     pub timestamp_ms: i64,
+    /// Empty unless `kind` is `Text`.
     pub body: String,
+    pub kind: MessageKind,
     pub delivery: &'static str,
 }
 
@@ -59,13 +69,12 @@ fn rows<'a>(items: impl Iterator<Item = &'a Arc<TimelineItem>>) -> Vec<MessageRo
         .filter_map(|item| {
             let event = item.as_event()?;
             let content = event.content();
-            let body = if let Some(message) = content.as_message() {
-                message.body().to_owned()
+            let (kind, body) = if let Some(message) = content.as_message() {
+                (MessageKind::Text, message.body().to_owned())
             } else if content.is_unable_to_decrypt() {
-                "Unable to decrypt this message. Device verification or recovery may be needed."
-                    .into()
+                (MessageKind::Undecryptable, String::new())
             } else if content.is_redacted() {
-                "Message removed".into()
+                (MessageKind::Redacted, String::new())
             } else {
                 return None;
             };
@@ -90,6 +99,7 @@ fn rows<'a>(items: impl Iterator<Item = &'a Arc<TimelineItem>>) -> Vec<MessageRo
                 },
                 timestamp_ms: u64::from(event.timestamp().get()) as i64,
                 body,
+                kind,
                 delivery,
             })
         })

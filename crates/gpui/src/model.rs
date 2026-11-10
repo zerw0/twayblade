@@ -2,7 +2,7 @@ use std::{collections::HashMap, ops::Range};
 
 use chrono::{Local, TimeZone};
 
-use crate::backend::{Message, Room, Snapshot, Space};
+use crate::backend::{Message, MessageKind, Room, Snapshot, Space};
 
 #[derive(Default)]
 pub(super) struct Navigation {
@@ -107,16 +107,27 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
                 id: "general".into(),
                 name: "General".into(),
                 unread: 3,
-                is_space: false,
+                topic: Some("Day-to-day design talk".into()),
+                encrypted: true,
+                ..Default::default()
             },
             Room {
                 id: "research".into(),
                 name: "Research".into(),
+                encrypted: true,
                 ..Default::default()
             },
             Room {
                 id: "notes".into(),
                 name: "Personal notes".into(),
+                ..Default::default()
+            },
+            Room {
+                id: "alex".into(),
+                name: "Alex".into(),
+                unread: 2,
+                encrypted: true,
+                direct: true,
                 ..Default::default()
             },
         ],
@@ -141,11 +152,17 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
                 },
                 display_name: if outgoing { "You" } else { "Alex" }.into(),
                 body: bodies[ix % bodies.len()].into(),
+                kind: MessageKind::Text,
                 timestamp_ms: 1_794_300_000_000 + ix as i64 * 30_000,
                 delivery: String::new(),
             }
         })
         .collect();
+    // Show the missing-key state in the sample conversation.
+    if let Some(message) = snapshot.messages.get_mut(2) {
+        message.kind = MessageKind::Undecryptable;
+        message.body.clear();
+    }
     snapshot
 }
 

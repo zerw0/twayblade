@@ -9,7 +9,7 @@ mod tests;
 mod theme;
 mod workspace;
 
-use app::{CloseProfile, FindConversation, MatrixApp, Quit};
+use app::{CloseProfile, FindConversation, MatrixApp, Quit, ToggleDetails};
 use gpui_kit::component::Theme;
 use gpui_kit::*;
 
@@ -57,6 +57,15 @@ fn main() {
                     Some("MatrixClient"),
                 ),
                 KeyBinding::new("escape", CloseProfile, Some("MatrixClient")),
+                KeyBinding::new(
+                    if cfg!(target_os = "macos") {
+                        "cmd-i"
+                    } else {
+                        "ctrl-i"
+                    },
+                    ToggleDetails,
+                    Some("MatrixClient"),
+                ),
             ]);
             cx.on_action(|_: &Quit, cx| cx.quit());
             use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
@@ -79,6 +88,11 @@ fn main() {
                         MenuItem::Separator,
                         MenuItem::action("Find Conversation", FindConversation),
                     ],
+                    disabled: false,
+                },
+                Menu {
+                    name: "View".into(),
+                    items: vec![MenuItem::action("Room Details", ToggleDetails)],
                     disabled: false,
                 },
             ]);

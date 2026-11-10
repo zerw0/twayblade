@@ -1,13 +1,14 @@
 //! Background application services for the GPUI frontend. No FFI dependency.
 
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use futures_util::StreamExt;
 use matrix_client_core::{
     auth::{self, Account},
     conversation::Conversation,
 };
+
+pub(super) use matrix_client_core::conversation::MessageKind;
 use tokio::{runtime::Runtime, sync::watch, task::JoinHandle};
 use zeroize::Zeroizing;
 
@@ -17,6 +18,9 @@ pub(super) struct Room {
     pub(super) name: String,
     pub(super) unread: u64,
     pub(super) is_space: bool,
+    pub(super) topic: Option<String>,
+    pub(super) encrypted: bool,
+    pub(super) direct: bool,
 }
 
 #[derive(Clone, Default)]
@@ -27,12 +31,13 @@ pub(super) struct Space {
     pub(super) room_ids: Vec<String>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(super) struct Message {
     pub(super) id: String,
     pub(super) sender: String,
     pub(super) display_name: String,
     pub(super) body: String,
+    pub(super) kind: MessageKind,
     pub(super) timestamp_ms: i64,
     pub(super) delivery: String,
 }
@@ -41,7 +46,6 @@ pub(super) struct Message {
 pub(super) struct Profile {
     pub(super) user_id: String,
     pub(super) display_name: String,
-    pub(super) room_name: Option<String>,
     pub(super) room_display_name: Option<String>,
     pub(super) server_profile_available: bool,
 }
@@ -103,10 +107,10 @@ impl State {
 }
 
 pub(super) struct Backend {
+    _instance: Option<auth::InstanceLock>,
     runtime: Runtime,
     state: Arc<Mutex<State>>,
     updates: watch::Sender<Snapshot>,
-    receiver: Mutex<watch::Receiver<Snapshot>>,
     // Serialize lifecycle changes. GPUI invokes operations only on background workers.
     lifecycle: Mutex<()>,
 }
@@ -120,12 +124,16 @@ fn publish(sender: &watch::Sender<Snapshot>, update: impl FnOnce(&mut Snapshot))
 
 impl Backend {
     pub(super) fn new() -> Result<Arc<Self>, ServiceError> {
+        Self::with_lock(Some(auth::lock_instance().map_err(failure)?))
+    }
+
+    fn with_lock(instance: Option<auth::InstanceLock>) -> Result<Arc<Self>, ServiceError> {
         let runtime = Runtime::new().map_err(|_| failure("Background runtime could not start."))?;
-        let (updates, receiver) = watch::channel(Snapshot::default());
+        let (updates, _) = watch::channel(Snapshot::default());
         Ok(Arc::new(Self {
+            _instance: instance,
             runtime,
             updates,
-            receiver: Mutex::new(receiver),
             state: Arc::new(Mutex::new(State::default())),
             lifecycle: Mutex::new(()),
         }))
@@ -185,18 +193,10 @@ impl Backend {
         self.updates.borrow().clone()
     }
 
-    /// Bounded long-poll on a background worker.
-    /// watch coalesces updates, so there is no unbounded event queue.
-    pub(super) fn next_snapshot(&self) -> Result<Snapshot, ServiceError> {
-        let mut receiver = self
-            .receiver
-            .lock()
-            .map_err(|_| failure("Updates are unavailable."))?;
-        self.runtime.block_on(async {
-            let _ = tokio::time::timeout(Duration::from_secs(1), receiver.changed()).await;
-        });
-        let snapshot = receiver.borrow_and_update().clone();
-        Ok(snapshot)
+    /// watch coalesces updates, so there is no unbounded event queue. Its
+    /// receiver is executor-agnostic and can be awaited on the UI thread.
+    pub(super) fn subscribe(&self) -> watch::Receiver<Snapshot> {
+        self.updates.subscribe()
     }
 
     pub(super) fn select_room(&self, room_id: String) -> Result<(), ServiceError> {
@@ -248,6 +248,7 @@ impl Backend {
                                 .unwrap_or_else(|| message.sender.clone()),
                             sender: message.sender,
                             body: message.body,
+                            kind: message.kind,
                             timestamp_ms: message.timestamp_ms,
                             delivery: message.delivery.into(),
                         })
@@ -284,7 +285,6 @@ impl Backend {
         Ok(Profile {
             user_id: profile.user_id,
             display_name: profile.display_name,
-            room_name: profile.room_name,
             room_display_name: profile.room_display_name,
             server_profile_available: profile.server_profile_available,
         })
@@ -424,6 +424,9 @@ impl Backend {
                             name: room.name,
                             unread: room.unread,
                             is_space: room.is_space,
+                            topic: room.topic,
+                            encrypted: room.encrypted,
+                            direct: room.direct,
                         })
                         .collect();
                 });
@@ -474,7 +477,8 @@ mod tests {
 
     #[test]
     fn unauthenticated_commands_do_not_create_or_publish_account_state() {
-        let client = Backend::new().unwrap();
+        // No instance lock: unit tests must not touch the user data directory.
+        let client = Backend::with_lock(None).unwrap();
         assert!(client.select_room("!room:example.org".into()).is_err());
         assert!(
             client

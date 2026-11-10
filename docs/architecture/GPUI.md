@@ -1,8 +1,7 @@
 # Shared GPUI frontend
 
-The user approved GPUI + GPUI Kit on 2026-11-10, replacing the SwiftUI-on-Mac /
-Iced-on-Linux-and-Windows strategy. `matrix-client-gpui` is the primary executable;
-the previous frontends remain reference implementations while acceptance continues.
+GPUI + GPUI Kit is the only frontend (decided 2026-11-10). It replaced the
+SwiftUI-on-Mac / Iced-on-Linux-and-Windows split; those frontends were deleted.
 
 GPUI Kit 0.9.1 is pinned. It supplies the matching GPUI snapshot, controls, semantic
 themes, icons, text input, selectable text and virtual message scrolling. Cargo.lock
@@ -14,7 +13,9 @@ backend graph constrains those versions. No web/JavaScript shell is used for cha
 - `core`: SDK clients, authentication, encrypted stores, sync, spaces, profiles and
   timelines. This remains independent of GPUI.
 - `gpui/backend.rs`: background runtime, account/selection task lifecycle and
-  coalesced presentation snapshots. Tokens and SDK objects do not enter UI records.
+  coalesced presentation snapshots on a `watch` channel that the view awaits
+  directly (no polling). Holds the single-instance lock. Tokens and SDK objects
+  do not enter UI records.
   Epoch/selection guards reject stale stream results. Blocking operations run on
   background workers; networking/storage never run in render.
 - `gpui/app.rs`: retained view state, commands, inputs, request guards and task
@@ -67,8 +68,8 @@ exercise actual controls and Unicode draft persistence. Physical IME/VoiceOver,
 keyboard/focus completeness, light/dark transitions, live account flows, Linux /
 Windows execution and call-window/media integration remain pending.
 
-The GPUI client uses the same development OS credential entry as the references.
-Do not run two connected clients against that store concurrently. Release packaging
+A lock file prevents two instances from sharing the credential entry and store.
+Release packaging
 must remove local Nix runtime dependencies and add the usual signing/notarization
 and clean-machine acceptance. Element Call remains a separate restricted runtime.
 

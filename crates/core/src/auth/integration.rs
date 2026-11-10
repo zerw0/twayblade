@@ -134,8 +134,8 @@ async fn encrypted_delivery_profile_and_same_device_store_restore() {
             .await,
         "set test profile",
     );
-    let alice = Account::new(alice_client);
-    let bob = Account::new(bob_client);
+    let alice = Account::new(alice_client, run.join("alice"));
+    let bob = Account::new(bob_client, run.join("bob"));
     let alice_sync = sync(&alice);
     let bob_sync = sync(&bob);
     let device = bob.client.device_id().expect("test device").to_owned();
@@ -239,7 +239,7 @@ async fn encrypted_delivery_profile_and_same_device_store_restore() {
         restored_client.device_id() == Some(device.as_ref()),
         "Device identity changed after restore"
     );
-    let restored = Account::new(restored_client);
+    let restored = Account::new(restored_client, run.join("bob"));
     let restored_sync = sync(&restored);
     wait_for_room(&restored, &room_id).await;
     wait_for_message(&restored, room_id.to_string(), &body).await;

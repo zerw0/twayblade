@@ -1,3 +1,8 @@
+//! Signed-in workspace and sign-in window, laid out after the approved mockup:
+//! space rail → conversations sidebar → conversation → optional details panel.
+//! Controls whose feature does not exist yet are omitted rather than faked.
+
+use chrono::{Local, TimeZone};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     bubble::{Bubble, BubbleVariant},
@@ -12,533 +17,1134 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 use crate::{
-    app::{CloseProfile, FindConversation, MatrixApp},
+    app::{CloseProfile, FindConversation, MatrixApp, ToggleDetails},
+    backend::{MessageKind, Room},
     model,
+    theme::{self, Palette},
 };
 
+const RAIL_WIDTH: f32 = 64.;
+const SIDEBAR_WIDTH: f32 = 264.;
+const DETAILS_WIDTH: f32 = 280.;
+const BUBBLE_MAX_WIDTH: f32 = 560.;
+
+/// One space-rail tile. `space: None` is Home.
+struct RailTile {
+    space: Option<String>,
+    name: String,
+    content: AnyElement,
+    fill: Option<Hsla>,
+    selected: bool,
+    unread: u64,
+}
+
+fn avatar(label: &str, fill: Hsla, size: f32, radius: f32, palette: &Palette) -> Div {
+    div()
+        .flex_none()
+        .size(px(size))
+        .rounded(px(radius))
+        .bg(fill)
+        .text_color(palette.on_avatar)
+        .text_size(px((size * 0.4).max(10.)))
+        .font_weight(FontWeight::BOLD)
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(label.to_owned())
+}
+
+fn room_avatar(room: &Room, size: f32, palette: &Palette) -> Div {
+    let radius = if room.direct { size / 2. } else { size * 0.27 };
+    avatar(
+        &theme::initials(&room.name),
+        theme::avatar_color(&room.id),
+        size,
+        radius,
+        palette,
+    )
+}
+
+fn badge(count: u64, cx: &App) -> Div {
+    div()
+        .flex_none()
+        .min_w(px(18.))
+        .h(px(18.))
+        .px(px(5.))
+        .rounded(px(9.))
+        .bg(cx.theme().primary)
+        .text_color(cx.theme().primary_foreground)
+        .text_size(px(11.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(if count > 99 {
+            "99+".to_owned()
+        } else {
+            count.to_string()
+        })
+}
+
+fn time_label(timestamp_ms: i64) -> String {
+    Local
+        .timestamp_millis_opt(timestamp_ms)
+        .single()
+        .map(|time| time.format("%H:%M").to_string())
+        .unwrap_or_default()
+}
+
+fn day_label(timestamp_ms: i64) -> String {
+    let Some(date) = Local
+        .timestamp_millis_opt(timestamp_ms)
+        .single()
+        .map(|time| time.date_naive())
+    else {
+        return String::new();
+    };
+    let today = Local::now().date_naive();
+    if date == today {
+        "Today".into()
+    } else if today.pred_opt() == Some(date) {
+        "Yesterday".into()
+    } else {
+        date.format("%A, %-d %B %Y").to_string()
+    }
+}
+
+fn day_of(timestamp_ms: i64) -> Option<chrono::NaiveDate> {
+    Local
+        .timestamp_millis_opt(timestamp_ms)
+        .single()
+        .map(|time| time.date_naive())
+}
+
+fn secret_store_name() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "macOS Keychain"
+    } else if cfg!(target_os = "windows") {
+        "Windows Credential Manager"
+    } else {
+        "system keyring"
+    }
+}
+
 impl MatrixApp {
+    fn field_label(&self, text: &'static str) -> Div {
+        div()
+            .text_size(px(12.))
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(text)
+    }
+
     fn sign_in_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut form = v_flex()
-            .w_80()
-            .gap_4()
-            .child(
-                Icon::new(IconName::MessagesSquare)
-                    .size_10()
-                    .text_color(cx.theme().primary),
-            )
-            .child(
-                div()
-                    .text_2xl()
-                    .font_weight(FontWeight::BOLD)
-                    .child("Welcome to Matrix"),
-            )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("Your conversations. Your server."),
-            );
-        if self.options.is_none() {
-            form = form
+        let muted = cx.theme().muted_foreground;
+        let subtitle = match &self.options {
+            None => "Enter the server that hosts your Matrix account.".to_owned(),
+            Some(options) => format!("Choose how to sign in to {}.", options.homeserver),
+        };
+        let mut form = v_flex().w(px(360.)).gap(px(14.)).child(
+            v_flex()
+                .items_center()
+                .gap(px(10.))
+                .pb(px(8.))
                 .child(
                     div()
-                        .text_sm()
-                        .font_weight(FontWeight::MEDIUM)
-                        .child("Homeserver"),
+                        .size(px(56.))
+                        .rounded(px(14.))
+                        .bg(cx.theme().primary)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            Icon::new(IconName::MessagesSquare)
+                                .size(px(28.))
+                                .text_color(cx.theme().primary_foreground),
+                        ),
                 )
-                .child(Input::new(&self.homeserver).disabled(self.busy))
                 .child(
-                    Button::new("discover")
-                        .primary()
-                        .label("Continue")
-                        .disabled(self.busy || self.backend.is_none())
-                        .on_click(cx.listener(|this, _, window, cx| this.discover(window, cx))),
-                );
-        } else {
-            form = form.child(
-                h_flex()
-                    .justify_between()
-                    .gap_2()
+                    div()
+                        .text_size(px(22.))
+                        .font_weight(FontWeight::BOLD)
+                        .child("Sign in"),
+                )
+                .child(div().text_color(muted).text_center().child(subtitle)),
+        );
+        match &self.options {
+            None => {
+                form = form
                     .child(
-                        div()
-                            .text_sm()
-                            .truncate()
-                            .child(self.homeserver.read(cx).value()),
+                        v_flex()
+                            .gap(px(6.))
+                            .child(self.field_label("Server"))
+                            .child(Input::new(&self.homeserver).disabled(self.busy))
+                            .child(div().text_size(px(11.5)).text_color(muted).child(
+                                "The part after the colon in your Matrix ID, such as matrix.org.",
+                            )),
                     )
                     .child(
-                        Button::new("change-server")
-                            .ghost()
-                            .small()
-                            .label("Change")
-                            .disabled(self.busy)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.options = None;
-                                this.password
-                                    .update(cx, |state, cx| state.set_value("", window, cx));
-                                cx.notify();
-                            })),
-                    ),
-            );
-            if self
-                .options
-                .as_ref()
-                .is_some_and(|options| options.password)
-            {
-                form = form
-                    .child(div().text_sm().child("Username"))
-                    .child(Input::new(&self.username).disabled(self.busy))
-                    .child(div().text_sm().child("Password"))
-                    .child(Input::new(&self.password).disabled(self.busy))
-                    .child(
-                        Button::new("sign-in")
+                        Button::new("discover")
                             .primary()
-                            .label("Sign in")
-                            .disabled(
-                                self.busy
-                                    || self.username.read(cx).value().trim().is_empty()
-                                    || self.password.read(cx).value().is_empty(),
-                            )
-                            .on_click(cx.listener(|this, _, window, cx| this.sign_in(window, cx))),
+                            .w_full()
+                            .label("Continue")
+                            .disabled(self.busy || self.backend.is_none())
+                            .on_click(cx.listener(|this, _, window, cx| this.discover(window, cx))),
                     );
             }
+            Some(options) => {
+                form = form.child(
+                    h_flex()
+                        .h(px(32.))
+                        .pl(px(10.))
+                        .pr(px(4.))
+                        .gap(px(8.))
+                        .rounded(px(8.))
+                        .bg(cx.theme().secondary)
+                        .child(Icon::new(IconName::Lock).small().text_color(muted))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(options.homeserver.clone()),
+                        )
+                        .child(
+                            Button::new("change-server")
+                                .ghost()
+                                .xsmall()
+                                .label("Change")
+                                .disabled(self.busy)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.options = None;
+                                    this.password
+                                        .update(cx, |state, cx| state.set_value("", window, cx));
+                                    cx.notify();
+                                })),
+                        ),
+                );
+                if options.browser {
+                    // OAuth/OIDC and legacy SSO arrive in M1; show that the server offers it.
+                    form = form.child(
+                        Button::new("browser-sign-in")
+                            .primary()
+                            .w_full()
+                            .label("Continue in browser")
+                            .icon(IconName::ExternalLink)
+                            .tooltip("Not available yet")
+                            .disabled(true),
+                    );
+                    if options.password {
+                        form = form.child(
+                            h_flex()
+                                .gap(px(10.))
+                                .text_size(px(11.5))
+                                .text_color(muted)
+                                .child(div().flex_1().h(px(1.)).bg(cx.theme().border))
+                                .child("or use a password")
+                                .child(div().flex_1().h(px(1.)).bg(cx.theme().border)),
+                        );
+                    }
+                }
+                if options.password {
+                    let ready = !self.busy
+                        && !self.username.read(cx).value().trim().is_empty()
+                        && !self.password.read(cx).value().is_empty();
+                    let sign_in = Button::new("sign-in")
+                        .w_full()
+                        .label("Sign in")
+                        .disabled(!ready)
+                        .on_click(cx.listener(|this, _, window, cx| this.sign_in(window, cx)));
+                    form = form
+                        .child(
+                            v_flex()
+                                .gap(px(6.))
+                                .child(self.field_label("Username"))
+                                .child(Input::new(&self.username).disabled(self.busy)),
+                        )
+                        .child(
+                            v_flex()
+                                .gap(px(6.))
+                                .child(self.field_label("Password"))
+                                .child(Input::new(&self.password).disabled(self.busy)),
+                        )
+                        .child(if options.browser {
+                            sign_in.outline()
+                        } else {
+                            sign_in.primary()
+                        });
+                }
+            }
         }
-        if self.busy {
-            form = form.child(div().text_sm().child("Working…"));
+        let status = if self.busy && self.status.is_empty() {
+            "Working…".to_owned()
+        } else {
+            self.status.clone()
+        };
+        if !status.is_empty() {
+            form = form.child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(muted)
+                    .text_center()
+                    .child(status),
+            );
         }
         form = form.child(
             div()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child(self.status.clone()),
+                .pt(px(8.))
+                .text_size(px(11.5))
+                .text_color(muted)
+                .text_center()
+                .child(format!(
+                    "Your password is sent only to your server. Matrix Client keeps your session in the {}.",
+                    secret_store_name()
+                )),
         );
         v_flex()
+            .id("sign-in")
             .size_full()
             .items_center()
-            .justify_center()
-            .p_6()
+            .pt(px(72.))
+            .px_6()
+            .overflow_y_scroll()
             .child(form)
             .into_any_element()
     }
 
-    fn navigation_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        let selected = self.navigation.selected_space.as_ref();
+    fn rail_tile(&self, tile: RailTile, cx: &mut Context<Self>) -> AnyElement {
+        let RailTile {
+            space,
+            name,
+            content,
+            fill,
+            selected,
+            unread,
+        } = tile;
+        let palette = theme::palette(cx);
+        let (bg, fg) = match fill {
+            Some(fill) => (fill, palette.on_avatar),
+            None if selected => (cx.theme().primary, cx.theme().primary_foreground),
+            None => (palette.pressed, cx.theme().foreground),
+        };
+        let element_id = SharedString::from(match &space {
+            Some(id) => format!("space-{id}"),
+            None => "home".to_owned(),
+        });
+        let radius = if selected { 12. } else { 20. };
+        let tooltip = if unread > 0 {
+            format!("{name} · {unread} unread")
+        } else {
+            name.clone()
+        };
+        h_flex()
+            .relative()
+            .w(px(RAIL_WIDTH))
+            .justify_center()
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .w(px(4.))
+                    .h(px(if selected { 28. } else { 0. }))
+                    .rounded_r(px(3.))
+                    .bg(cx.theme().foreground),
+            )
+            .child(
+                div()
+                    .relative()
+                    .size(px(40.))
+                    .child(
+                        Button::new(element_id)
+                            .ghost()
+                            .size(px(40.))
+                            .p_0()
+                            .rounded(px(radius))
+                            .accessibility_label(name)
+                            .tooltip(tooltip)
+                            .child(
+                                div()
+                                    .size(px(40.))
+                                    .rounded(px(radius))
+                                    .bg(bg)
+                                    .text_color(fg)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(content),
+                            )
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.select_space(space.clone(), window, cx)
+                            })),
+                    )
+                    .when(unread > 0 && !selected, |tile| {
+                        tile.child(
+                            div()
+                                .absolute()
+                                .right(px(-5.))
+                                .bottom(px(-5.))
+                                .border_2()
+                                .border_color(palette.rail)
+                                .rounded(px(11.))
+                                .child(badge(unread, cx)),
+                        )
+                    }),
+            )
+            .into_any_element()
+    }
+
+    fn rail_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        let palette = theme::palette(cx);
+        let selected = self.navigation.selected_space.clone();
+        let in_any_space = |id: &str| {
+            self.snapshot
+                .spaces
+                .iter()
+                .any(|space| space.room_ids.iter().any(|room| room == id))
+        };
+        let home_unread = self
+            .snapshot
+            .rooms
+            .iter()
+            .filter(|room| !room.is_space && !in_any_space(&room.id))
+            .fold(0u64, |sum, room| sum.saturating_add(room.unread));
         let mut rail = v_flex()
-            .w_12()
+            .id("space-rail")
+            .w(px(RAIL_WIDTH))
             .h_full()
             .flex_none()
-            .gap_3()
-            .py_4()
-            .px_2()
-            .bg(cx.theme().sidebar)
-            .child(
-                Button::new("home")
-                    .ghost()
-                    .icon(IconName::House)
-                    .tooltip("Home")
-                    .selected(selected.is_none())
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.select_space(None, window, cx)),
-                    ),
-            );
-        for space in &self.snapshot.spaces {
-            let id = space.id.clone();
+            .items_center()
+            .gap(px(10.))
+            .py(px(12.))
+            .bg(palette.rail)
+            .border_r_1()
+            .border_color(cx.theme().border)
+            .overflow_y_scroll();
+        rail = rail.child(self.rail_tile(
+            RailTile {
+                space: None,
+                name: "Home".into(),
+                content: Icon::new(IconName::House).into_any_element(),
+                fill: None,
+                selected: selected.is_none(),
+                unread: if self.snapshot.spaces_loaded {
+                    home_unread
+                } else {
+                    0
+                },
+            },
+            cx,
+        ));
+        if !self.snapshot.spaces.is_empty() {
+            rail = rail.child(div().w(px(28.)).h(px(1.)).bg(cx.theme().border));
+        }
+        for space in self.snapshot.spaces.clone() {
             let unread = self
                 .snapshot
                 .rooms
                 .iter()
                 .filter(|room| !room.is_space && space.room_ids.contains(&room.id))
                 .fold(0u64, |sum, room| sum.saturating_add(room.unread));
-            let label = format!(
-                "{}{}",
-                if space.level > 0 { "↳" } else { "" },
-                space.name.chars().next().unwrap_or('?').to_uppercase()
-            );
-            rail = rail.child(
-                Button::new(SharedString::from(format!("space-{}", space.id)))
-                    .ghost()
-                    .label(label)
-                    .tooltip(if unread > 0 {
-                        format!("{} · {unread} unread", space.name)
-                    } else {
-                        space.name.clone()
-                    })
-                    .selected(selected == Some(&space.id))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.select_space(Some(id.clone()), window, cx)
-                    })),
-            );
+            let label = div()
+                .text_size(px(13.))
+                .font_weight(FontWeight::BOLD)
+                .child(theme::initials(&space.name))
+                .into_any_element();
+            let name = if space.level > 0 {
+                format!("{} (subspace)", space.name)
+            } else {
+                space.name.clone()
+            };
+            rail = rail.child(self.rail_tile(
+                RailTile {
+                    fill: Some(theme::avatar_color(&space.id)),
+                    selected: selected.as_ref() == Some(&space.id),
+                    space: Some(space.id.clone()),
+                    name,
+                    content: label,
+                    unread,
+                },
+                cx,
+            ));
         }
+        rail.into_any_element()
+    }
+
+    fn room_row(&self, room: &Room, cx: &mut Context<Self>) -> AnyElement {
+        let palette = theme::palette(cx);
+        let selected = self.navigation.selected_room.as_ref() == Some(&room.id);
+        let id = room.id.clone();
+        let unread = room.unread > 0 && !selected;
+        Button::new(SharedString::from(format!("room-{}", room.id)))
+            .ghost()
+            .w_full()
+            .h(px(32.))
+            .px(px(8.))
+            .rounded(px(7.))
+            .selected(selected)
+            .accessibility_label(if room.unread > 0 {
+                format!("{}, {} unread", room.name, room.unread)
+            } else {
+                room.name.clone()
+            })
+            .child(
+                h_flex()
+                    .w_full()
+                    .gap(px(9.))
+                    .child(room_avatar(room, 22., &palette))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_left()
+                            .when(unread, |name| name.font_weight(FontWeight::SEMIBOLD))
+                            .child(room.name.clone()),
+                    )
+                    .when(unread, |row| row.child(badge(room.unread, cx))),
+            )
+            .on_click(
+                cx.listener(move |this, _, window, cx| this.select_room(id.clone(), window, cx)),
+            )
+            .into_any_element()
+    }
+
+    fn sidebar_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        let palette = theme::palette(cx);
+        let muted = cx.theme().muted_foreground;
+        let selected = self.navigation.selected_space.as_ref();
         let title = self
             .snapshot
             .spaces
             .iter()
             .find(|space| Some(&space.id) == selected)
-            .map(|space| space.name.as_str())
-            .unwrap_or("Home");
+            .map(|space| space.name.clone())
+            .unwrap_or_else(|| "Home".into());
         let query = self.search.read(cx).value().to_lowercase();
-        let mut rooms = v_flex()
+        let visible: Vec<Room> = self
+            .snapshot
+            .rooms
+            .iter()
+            .filter(|room| {
+                !room.is_space
+                    && self.navigation.room_visible(&room.id, &self.snapshot)
+                    && room.name.to_lowercase().contains(&query)
+            })
+            .cloned()
+            .collect();
+        let mut list = v_flex()
             .id("room-list")
-            .gap_1()
-            .p_2()
-            .overflow_y_scroll()
             .flex_1()
-            .min_h_0();
-        let mut count = 0;
-        for room in &self.snapshot.rooms {
-            if room.is_space
-                || !self.navigation.room_visible(&room.id, &self.snapshot)
-                || !room.name.to_lowercase().contains(&query)
-            {
+            .min_h_0()
+            .px(px(8.))
+            .pb(px(8.))
+            .gap(px(14.))
+            .overflow_y_scroll();
+        for (heading, direct) in [("Rooms", false), ("Direct messages", true)] {
+            let rooms: Vec<_> = visible
+                .iter()
+                .filter(|room| room.direct == direct)
+                .collect();
+            if rooms.is_empty() {
                 continue;
             }
-            count += 1;
-            let id = room.id.clone();
-            let mut label = h_flex()
-                .w_full()
-                .gap_2()
-                .child(Icon::new(IconName::Hash).small())
-                .child(div().flex_1().min_w_0().truncate().child(room.name.clone()));
-            if room.unread > 0 {
-                label = label.child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(room.unread.to_string()),
-                );
-            }
-            rooms = rooms.child(
-                Button::new(SharedString::from(format!("room-{}", room.id)))
-                    .ghost()
-                    .w_full()
-                    .selected(self.navigation.selected_room.as_ref() == Some(&room.id))
-                    .child(label)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.select_room(id.clone(), window, cx)
-                    })),
-            );
-        }
-        if count == 0 {
-            rooms = rooms.child(
+            let mut section = v_flex().gap(px(1.)).child(
                 div()
-                    .p_3()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(if self.snapshot.spaces_loaded {
-                        "No conversations here yet"
+                    .px(px(8.))
+                    .pb(px(4.))
+                    .text_size(px(11.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(muted)
+                    .child(heading),
+            );
+            for room in rooms {
+                section = section.child(self.room_row(room, cx));
+            }
+            list = list.child(section);
+        }
+        if visible.is_empty() {
+            list = list.child(
+                div()
+                    .p(px(8.))
+                    .text_color(muted)
+                    .child(if !query.is_empty() {
+                        "No conversations match your search."
+                    } else if self.snapshot.spaces_loaded {
+                        "No conversations here yet."
                     } else {
                         "Organizing your rooms…"
                     }),
             );
         }
         let user = self.snapshot.user_id.clone();
-        let sidebar = v_flex()
-            .w_64()
+        let account = h_flex()
+            .px(px(12.))
+            .py(px(10.))
+            .gap(px(9.))
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .child(avatar(
+                &theme::initials(&user),
+                theme::avatar_color(&user),
+                28.,
+                14.,
+                &palette,
+            ))
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .truncate()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(user.clone()),
+                    )
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(px(11.))
+                            .text_color(muted)
+                            .child(self.snapshot.sync_status.clone()),
+                    ),
+            )
+            .child(
+                Button::new("my-profile")
+                    .ghost()
+                    .small()
+                    .icon(IconName::UserRound)
+                    .tooltip("My profile")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_profile(user.clone(), "You".into(), window, cx)
+                    })),
+            )
+            .child(
+                Button::new("logout")
+                    .ghost()
+                    .small()
+                    .icon(IconName::LogOut)
+                    .tooltip("Sign out")
+                    .disabled(self.preview || self.busy)
+                    .on_click(cx.listener(|this, _, window, cx| this.logout(window, cx))),
+            );
+        v_flex()
+            .w(px(SIDEBAR_WIDTH))
             .h_full()
             .flex_none()
             .bg(cx.theme().sidebar)
             .border_r_1()
             .border_color(cx.theme().border)
             .child(
-                div()
-                    .px_4()
-                    .pt_4()
-                    .pb_3()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(title.to_owned()),
-            )
-            .child(div().px_3().pb_3().child(Input::new(&self.search).small()))
-            .child(
-                div()
-                    .px_4()
-                    .pb_2()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("Conversations"),
-            )
-            .child(rooms)
-            .child(
                 v_flex()
-                    .p_3()
-                    .gap_2()
-                    .border_t_1()
-                    .border_color(cx.theme().border)
+                    .px(px(14.))
+                    .pt(px(14.))
+                    .pb(px(10.))
+                    .gap(px(10.))
                     .child(
                         div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(self.snapshot.sync_status.clone()),
+                            .text_size(px(15.))
+                            .font_weight(FontWeight::BOLD)
+                            .truncate()
+                            .child(title),
                     )
                     .child(
-                        h_flex()
-                            .justify_between()
-                            .gap_1()
-                            .child(
-                                Button::new("my-profile")
-                                    .ghost()
-                                    .small()
-                                    .icon(IconName::UserRound)
-                                    .label(if self.preview {
-                                        "Offline preview"
-                                    } else {
-                                        "My profile…"
-                                    })
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.open_profile(user.clone(), "You".into(), window, cx)
-                                    })),
-                            )
-                            .child(
-                                Button::new("logout")
-                                    .ghost()
-                                    .small()
-                                    .icon(IconName::LogOut)
-                                    .tooltip("Sign out")
-                                    .disabled(self.preview || self.busy)
-                                    .on_click(
-                                        cx.listener(|this, _, window, cx| this.logout(window, cx)),
-                                    ),
-                            ),
+                        Input::new(&self.search)
+                            .small()
+                            .prefix(Icon::new(IconName::Search).small().text_color(muted)),
                     ),
-            );
-        h_flex()
-            .h_full()
-            .flex_none()
-            .items_stretch()
-            .child(rail)
-            .child(sidebar)
+            )
+            .child(list)
+            .child(account)
             .into_any_element()
     }
 
+    fn message_body(
+        &self,
+        message: &crate::backend::Message,
+        outgoing: bool,
+        cx: &App,
+    ) -> AnyElement {
+        let palette = theme::palette(cx);
+        match message.kind {
+            MessageKind::Text => Bubble::new()
+                .alignment(if outgoing {
+                    MessageAlignment::End
+                } else {
+                    MessageAlignment::Start
+                })
+                .with_variant(if outgoing {
+                    BubbleVariant::Filled
+                } else {
+                    BubbleVariant::Secondary
+                })
+                .child(
+                    TextView::markdown(
+                        SharedString::from(format!("message-{}", message.id)),
+                        model::plain_text(&message.body),
+                    )
+                    .selectable(true),
+                )
+                .into_any_element(),
+            MessageKind::Undecryptable => h_flex()
+                .gap(px(7.))
+                .px(px(12.))
+                .py(px(7.))
+                .rounded(px(16.))
+                .bg(palette.warning_background)
+                .text_color(palette.warning)
+                .child(Icon::new(IconName::Lock).small())
+                .child("Unable to decrypt this message.")
+                .into_any_element(),
+            MessageKind::Redacted => div()
+                .px(px(12.))
+                .py(px(7.))
+                .rounded(px(16.))
+                .border_1()
+                .border_color(cx.theme().border)
+                .text_color(cx.theme().muted_foreground)
+                .italic()
+                .child("Message deleted")
+                .into_any_element(),
+        }
+    }
+
     fn message_group(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
-        let Some(range) = self.groups.get(ix) else {
+        let Some(range) = self.groups.get(ix).cloned() else {
             return div().into_any_element();
         };
-        let first = &self.snapshot.messages[range.start];
+        let palette = theme::palette(cx);
+        let muted = cx.theme().muted_foreground;
+        let first = self.snapshot.messages[range.start].clone();
         let outgoing = first.sender == self.snapshot.user_id;
-        let id = first.sender.clone();
-        let name = first.display_name.clone();
-        let mut content = v_flex().min_w_0().gap_1().child(
-            h_flex()
-                .gap_2()
-                .when(outgoing, |row| row.justify_end())
-                .child(
-                    Button::new(SharedString::from(format!("sender-{}", first.id)))
-                        .ghost()
-                        .xsmall()
-                        .label(name.clone())
-                        .tooltip("View profile")
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.open_profile(id.clone(), name.clone(), window, cx)
-                        })),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(
-                            chrono::DateTime::from_timestamp_millis(first.timestamp_ms)
-                                .map(|time| {
-                                    time.with_timezone(&chrono::Local)
-                                        .format("%H:%M")
-                                        .to_string()
-                                })
-                                .unwrap_or_default(),
-                        ),
-                ),
-        );
-        for message in &self.snapshot.messages[range.clone()] {
-            content = content.child(
-                Bubble::new()
-                    .alignment(if outgoing {
-                        MessageAlignment::End
-                    } else {
-                        MessageAlignment::Start
-                    })
-                    .with_variant(if outgoing {
-                        BubbleVariant::Filled
-                    } else {
-                        BubbleVariant::Secondary
-                    })
-                    .child(
-                        TextView::markdown(
-                            SharedString::from(format!("message-{}", message.id)),
-                            model::plain_text(&message.body),
-                        )
-                        .selectable(true),
-                    ),
-            );
-            if !message.delivery.is_empty() {
-                content = content.child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(message.delivery.clone()),
-                );
-            }
-        }
-        let mut row = h_flex()
+        let new_day = ix == 0
+            || self
+                .groups
+                .get(ix - 1)
+                .map(|previous| self.snapshot.messages[previous.start].timestamp_ms)
+                .map(day_of)
+                != Some(day_of(first.timestamp_ms));
+        let mut group = v_flex()
             .id(SharedString::from(format!("group-{}", first.id)))
             .w_full()
-            .items_start()
-            .gap_2()
-            .px_4()
-            .py_2();
-        if !outgoing {
-            let id = first.sender.clone();
-            let name = first.display_name.clone();
-            row = row.child(
-                Button::new(SharedString::from(format!("avatar-{}", first.id)))
-                    .ghost()
-                    .small()
-                    .label(
-                        first
-                            .display_name
-                            .chars()
-                            .next()
-                            .unwrap_or('?')
-                            .to_uppercase()
-                            .to_string(),
-                    )
-                    .tooltip("View profile")
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.open_profile(id.clone(), name.clone(), window, cx)
-                    })),
+            .px(px(20.))
+            .py(px(6.))
+            .gap(px(10.));
+        if new_day {
+            group = group.child(
+                h_flex()
+                    .gap(px(10.))
+                    .pt(px(6.))
+                    .text_size(px(11.5))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(muted)
+                    .child(div().flex_1().h(px(1.)).bg(cx.theme().border))
+                    .child(day_label(first.timestamp_ms))
+                    .child(div().flex_1().h(px(1.)).bg(cx.theme().border)),
             );
         }
-        row = row.child(content.flex_1());
-        row.into_any_element()
+        let messages = &self.snapshot.messages[range];
+        let last = messages.len().saturating_sub(1);
+        if outgoing {
+            let mut column = v_flex()
+                .ml_auto()
+                .max_w(px(BUBBLE_MAX_WIDTH))
+                .items_end()
+                .gap(px(3.))
+                .child(
+                    div()
+                        .pr(px(4.))
+                        .text_size(px(11.))
+                        .text_color(muted)
+                        .child(time_label(first.timestamp_ms)),
+                );
+            for (ix, message) in messages.iter().enumerate() {
+                column = column.child(self.message_body(message, true, cx));
+                // "Sent" is the normal case: show it once per group, problems on every row.
+                let show =
+                    !message.delivery.is_empty() && (ix == last || message.delivery != "Sent");
+                if show {
+                    column = column.child(
+                        div()
+                            .pr(px(4.))
+                            .text_size(px(11.))
+                            .text_color(if message.delivery == "Send failed" {
+                                palette.error
+                            } else {
+                                muted
+                            })
+                            .child(message.delivery.clone()),
+                    );
+                }
+            }
+            return group
+                .child(h_flex().w_full().child(column))
+                .into_any_element();
+        }
+        let id = first.sender.clone();
+        let name = first.display_name.clone();
+        let avatar_button = Button::new(SharedString::from(format!("avatar-{}", first.id)))
+            .ghost()
+            .size(px(30.))
+            .p_0()
+            .rounded(px(15.))
+            .accessibility_label(format!("Open profile of {}", first.display_name))
+            .child(avatar(
+                &theme::initials(&first.display_name),
+                theme::avatar_color(&first.sender),
+                30.,
+                15.,
+                &palette,
+            ))
+            .on_click(cx.listener({
+                let id = id.clone();
+                let name = name.clone();
+                move |this, _, window, cx| this.open_profile(id.clone(), name.clone(), window, cx)
+            }));
+        let mut column = v_flex()
+            .min_w_0()
+            .max_w(px(BUBBLE_MAX_WIDTH))
+            .gap(px(3.))
+            .child(
+                h_flex()
+                    .gap(px(8.))
+                    .child(
+                        Button::new(SharedString::from(format!("sender-{}", first.id)))
+                            .text()
+                            .xsmall()
+                            .label(name.clone())
+                            .tooltip(first.sender.clone())
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_profile(id.clone(), name.clone(), window, cx)
+                            })),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(muted)
+                            .child(time_label(first.timestamp_ms)),
+                    ),
+            );
+        for message in messages {
+            column = column.child(self.message_body(message, false, cx));
+        }
+        group
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_start()
+                    .gap(px(10.))
+                    .child(avatar_button)
+                    .child(column),
+            )
+            .into_any_element()
     }
 
     fn conversation_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        let palette = theme::palette(cx);
+        let muted = cx.theme().muted_foreground;
         let room = self
             .snapshot
             .rooms
             .iter()
-            .find(|room| self.navigation.selected_room.as_ref() == Some(&room.id));
+            .find(|room| self.navigation.selected_room.as_ref() == Some(&room.id))
+            .cloned();
         let Some(room) = room else {
             return v_flex()
                 .flex_1()
                 .h_full()
                 .items_center()
                 .justify_center()
-                .gap_3()
+                .gap(px(8.))
+                .bg(cx.theme().background)
                 .child(
                     Icon::new(IconName::MessagesSquare)
-                        .size_10()
-                        .text_color(cx.theme().muted_foreground),
+                        .size(px(36.))
+                        .text_color(muted),
                 )
                 .child(
                     div()
-                        .text_lg()
-                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_size(px(15.))
+                        .font_weight(FontWeight::BOLD)
                         .child("Choose a conversation"),
                 )
                 .child(
                     div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
+                        .text_color(muted)
                         .child("Select a room from the sidebar."),
                 )
                 .into_any_element();
         };
-        let weak = cx.weak_entity();
-        let history = MessageScroller::new("messages", self.scroller.clone(), move |ix, _, cx| {
-            weak.update(cx, |this, cx| this.message_group(ix, cx))
-                .unwrap_or_else(|_| div().into_any_element())
-        })
-        .flex_1()
-        .min_h_0()
-        .with_jump_button_label("Jump to latest");
         let ready = self.snapshot.timeline_ready && !self.preview && !self.busy;
         let editable = !self.busy && (self.preview || self.snapshot.timeline_ready);
         let empty = self.composer.read(cx).value().trim().is_empty();
+        let details_shown = self.details_open || self.profile.is_some();
+
+        let mut title = h_flex().gap(px(6.)).child(
+            div()
+                .text_size(px(14.))
+                .font_weight(FontWeight::BOLD)
+                .truncate()
+                .child(room.name.clone()),
+        );
+        if room.encrypted {
+            title = title.child(Icon::new(IconName::Lock).xsmall().text_color(muted));
+        }
+        let header = h_flex()
+            .h(px(52.))
+            .flex_none()
+            .pl(px(16.))
+            .pr(px(12.))
+            .gap(px(10.))
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .child(room_avatar(&room, 28., &palette))
+            .child(v_flex().flex_1().min_w_0().child(title).when_some(
+                room.topic.clone(),
+                |column, topic| {
+                    column.child(
+                        div()
+                            .text_size(px(11.5))
+                            .text_color(muted)
+                            .truncate()
+                            .child(topic),
+                    )
+                },
+            ))
+            .child(
+                Button::new("earlier")
+                    .ghost()
+                    .small()
+                    .icon(IconName::ChevronsUp)
+                    .tooltip(if self.paginating {
+                        "Loading earlier messages…"
+                    } else {
+                        "Load earlier messages"
+                    })
+                    .disabled(!ready || self.paginating)
+                    .on_click(cx.listener(|this, _, window, cx| this.load_earlier(window, cx))),
+            )
+            .child(
+                Button::new("details")
+                    .ghost()
+                    .small()
+                    .icon(IconName::PanelRight)
+                    .tooltip("Room details")
+                    .selected(details_shown)
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_details(cx))),
+            );
+
+        let body = if self.groups.is_empty() {
+            v_flex()
+                .flex_1()
+                .min_h_0()
+                .items_center()
+                .justify_center()
+                .gap(px(6.))
+                .child(room_avatar(&room, 56., &palette))
+                .child(
+                    div()
+                        .text_size(px(15.))
+                        .font_weight(FontWeight::BOLD)
+                        .child(room.name.clone()),
+                )
+                .child(
+                    div()
+                        .text_color(muted)
+                        .child(if self.snapshot.timeline_ready {
+                            "No messages yet."
+                        } else {
+                            "Loading conversation…"
+                        }),
+                )
+                .into_any_element()
+        } else {
+            let weak = cx.weak_entity();
+            MessageScroller::new("messages", self.scroller.clone(), move |ix, _, cx| {
+                weak.update(cx, |this, cx| this.message_group(ix, cx))
+                    .unwrap_or_else(|_| div().into_any_element())
+            })
+            .flex_1()
+            .min_h_0()
+            .with_jump_button_label("Jump to latest")
+            .into_any_element()
+        };
+
+        let notices: Vec<String> = [&self.status, &self.snapshot.timeline_status]
+            .into_iter()
+            .filter(|text| !text.is_empty())
+            .cloned()
+            .collect();
+        let composer = v_flex()
+            .px(px(20.))
+            .pb(px(14.))
+            .pt(px(6.))
+            .gap(px(4.))
+            .children(notices.into_iter().map(|text| {
+                div()
+                    .pl(px(14.))
+                    .text_size(px(11.5))
+                    .text_color(muted)
+                    .child(text)
+            }))
+            .child(
+                h_flex()
+                    .items_end()
+                    .gap(px(6.))
+                    .py(px(5.))
+                    .pl(px(12.))
+                    .pr(px(5.))
+                    .rounded(px(20.))
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(palette.field)
+                    .child(
+                        div()
+                            .id("composer-panel")
+                            .flex_1()
+                            .min_w_0()
+                            .py(px(2.))
+                            .child(
+                                Textarea::new(&self.composer)
+                                    .accessibility_id("composer")
+                                    .appearance(false)
+                                    .w_full()
+                                    .disabled(!editable)
+                                    .aria_label("Message"),
+                            ),
+                    )
+                    .child(
+                        Button::new("send")
+                            .primary()
+                            .small()
+                            .rounded(px(15.))
+                            .icon(IconName::ArrowUp)
+                            .tooltip("Send message · Return")
+                            .disabled(!ready || empty || self.sending.contains(&room.id))
+                            .on_click(cx.listener(|this, _, window, cx| this.send(window, cx))),
+                    ),
+            );
+
         v_flex()
             .flex_1()
             .min_w_0()
             .h_full()
             .bg(cx.theme().background)
+            .child(header)
+            .child(body)
+            .child(composer)
+            .into_any_element()
+    }
+
+    fn panel(&self, cx: &App) -> Stateful<Div> {
+        v_flex()
+            .id("details-panel")
+            .w(px(DETAILS_WIDTH))
+            .h_full()
+            .flex_none()
+            .bg(cx.theme().background)
+            .border_l_1()
+            .border_color(cx.theme().border)
+            .overflow_y_scroll()
+    }
+
+    fn panel_header(
+        &self,
+        title: &'static str,
+        close: &'static str,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        h_flex()
+            .h(px(52.))
+            .flex_none()
+            .px(px(16.))
+            .justify_between()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .child(div().font_weight(FontWeight::BOLD).child(title))
             .child(
-                h_flex()
-                    .px_4()
-                    .py_3()
-                    .gap_3()
+                Button::new(close)
+                    .ghost()
+                    .small()
+                    .icon(IconName::X)
+                    .tooltip("Close · Escape")
+                    .on_click(cx.listener(|this, _, _, cx| this.dismiss_panel(cx))),
+            )
+    }
+
+    fn details_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        let palette = theme::palette(cx);
+        let muted = cx.theme().muted_foreground;
+        let Some(room) = self
+            .snapshot
+            .rooms
+            .iter()
+            .find(|room| self.navigation.selected_room.as_ref() == Some(&room.id))
+            .cloned()
+        else {
+            return div().into_any_element();
+        };
+        let encryption = if room.encrypted {
+            h_flex()
+                .gap(px(8.))
+                .child(Icon::new(IconName::Lock).small())
+                .child(div().flex_1().child("Encrypted"))
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(muted)
+                        .child("Messages and files"),
+                )
+        } else {
+            h_flex()
+                .gap(px(8.))
+                .px(px(10.))
+                .py(px(8.))
+                .rounded(px(8.))
+                .bg(palette.warning_background)
+                .text_color(palette.warning)
+                .text_size(px(12.))
+                .child(Icon::new(IconName::TriangleAlert).small())
+                .child("Not encrypted. Your server can read these messages.")
+        };
+        let id = room.id.clone();
+        self.panel(cx)
+            .child(self.panel_header("Details", "close-details", cx))
+            .child(
+                v_flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .px(px(16.))
+                    .py(px(20.))
                     .border_b_1()
                     .border_color(cx.theme().border)
-                    .child(Icon::new(IconName::Hash).text_color(cx.theme().primary))
+                    .child(room_avatar(&room, 64., &palette))
                     .child(
                         div()
-                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_size(px(15.))
+                            .font_weight(FontWeight::BOLD)
+                            .text_center()
                             .child(room.name.clone()),
                     )
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("earlier")
-                            .ghost()
-                            .small()
-                            .label(if self.paginating {
-                                "Loading…"
-                            } else {
-                                "Load earlier"
-                            })
-                            .disabled(!ready || self.paginating)
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.load_earlier(window, cx)),
-                            ),
-                    ),
+                    .when_some(room.topic.clone(), |column, topic| {
+                        column.child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(muted)
+                                .text_center()
+                                .child(topic),
+                        )
+                    }),
             )
-            .when(self.groups.is_empty(), |view| {
-                view.child(
-                    div()
-                        .p_4()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(if self.snapshot.timeline_ready {
-                            "No messages to display yet"
-                        } else {
-                            "Loading conversation…"
-                        }),
-                )
-            })
-            .child(history)
-            .when(!self.status.is_empty(), |view| {
-                view.child(
-                    div()
-                        .px_4()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(self.status.clone()),
-                )
-            })
-            .when(!self.snapshot.timeline_status.is_empty(), |view| {
-                view.child(
-                    div()
-                        .px_4()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(self.snapshot.timeline_status.clone()),
-                )
-            })
             .child(
-                h_flex()
-                    .items_end()
-                    .gap_2()
-                    .p_3()
-                    .child(
-                        div().id("composer-panel").flex_1().min_w_0().child(
-                            Textarea::new(&self.composer)
-                                .accessibility_id("composer")
-                                .w_full()
-                                .disabled(!editable)
-                                .aria_label("Message"),
-                        ),
-                    )
-                    .child(
-                        Button::new("send")
-                            .primary()
-                            .icon(IconName::ArrowUp)
-                            .tooltip("Send message · Enter")
-                            .disabled(!ready || empty || self.sending.contains(&room.id))
-                            .on_click(cx.listener(|this, _, window, cx| this.send(window, cx))),
-                    ),
+                v_flex().p(px(16.)).gap(px(12.)).child(encryption).child(
+                    Button::new("copy-room-id")
+                        .ghost()
+                        .small()
+                        .icon(IconName::Copy)
+                        .label("Copy room ID")
+                        .on_click(move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(id.clone()))
+                        }),
+                ),
             )
             .into_any_element()
     }
@@ -547,46 +1153,39 @@ impl MatrixApp {
         let Some(page) = &self.profile else {
             return div().into_any_element();
         };
+        let palette = theme::palette(cx);
+        let muted = cx.theme().muted_foreground;
         let profile_id = page
             .profile
             .as_ref()
-            .map(|profile| profile.user_id.as_str())
-            .unwrap_or(&page.id);
+            .map(|profile| profile.user_id.clone())
+            .unwrap_or_else(|| page.id.clone());
         let name = page
             .profile
             .as_ref()
-            .map(|profile| profile.display_name.as_str())
-            .unwrap_or(&page.name);
-        let mut profile = v_flex()
-            .w_72()
-            .h_full()
-            .flex_none()
-            .p_4()
-            .gap_4()
-            .bg(cx.theme().sidebar)
-            .border_l_1()
-            .border_color(cx.theme().border)
-            .child(
-                h_flex()
-                    .justify_between()
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Profile"))
-                    .child(
-                        Button::new("close-profile")
-                            .ghost()
-                            .small()
-                            .icon(IconName::X)
-                            .tooltip("Close profile · Escape")
-                            .on_click(cx.listener(|this, _, _, cx| this.close_profile(cx))),
-                    ),
-            )
+            .map(|profile| profile.display_name.clone())
+            .unwrap_or_else(|| page.name.clone());
+        let mut body = v_flex()
+            .items_center()
+            .gap(px(6.))
+            .px(px(16.))
+            .py(px(20.))
+            .child(avatar(
+                &theme::initials(&name),
+                theme::avatar_color(&profile_id),
+                64.,
+                32.,
+                &palette,
+            ))
             .child(
                 div()
-                    .text_2xl()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(name.to_owned()),
+                    .text_size(px(17.))
+                    .font_weight(FontWeight::BOLD)
+                    .text_center()
+                    .child(name.clone()),
             )
             .child(
-                TextView::markdown("profile-user-id", model::plain_text(profile_id))
+                TextView::markdown("profile-user-id", model::plain_text(&profile_id))
                     .selectable(true),
             )
             .child(
@@ -601,26 +1200,22 @@ impl MatrixApp {
                     }),
             );
         if page.loading {
-            profile = profile.child(div().text_sm().child("Loading profile…"));
+            body = body.child(div().text_color(muted).child("Loading profile…"));
         }
         if let Some(info) = &page.profile {
-            if let Some(room) = &info.room_name {
-                profile = profile.child(div().text_sm().child(format!("Conversation: {room}")));
-            }
             if let Some(room_name) = &info.room_display_name
                 && room_name != &info.display_name
             {
-                profile = profile.child(
+                body = body.child(
                     div()
-                        .text_sm()
+                        .text_color(muted)
                         .child(format!("Name in this room: {room_name}")),
                 );
             }
             if !info.server_profile_available {
-                profile = profile.child(
+                body = body.child(
                     div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
+                        .text_color(muted)
                         .child("Showing the saved conversation profile."),
                 );
             }
@@ -628,10 +1223,11 @@ impl MatrixApp {
         if !page.error.is_empty() {
             let id = page.id.clone();
             let name = page.name.clone();
-            profile = profile
-                .child(div().text_sm().child(page.error.clone()))
+            body = body
+                .child(div().text_color(palette.error).child(page.error.clone()))
                 .child(
                     Button::new("retry-profile")
+                        .small()
                         .label("Try again")
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.open_profile(id.clone(), name.clone(), window, cx)
@@ -639,42 +1235,48 @@ impl MatrixApp {
                 );
         }
         if self.preview {
-            profile = profile.child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("Offline sample profile"),
-            );
+            body = body.child(div().text_color(muted).child("Offline sample profile"));
         }
-        profile.into_any_element()
+        self.panel(cx)
+            .child(self.panel_header("Profile", "close-profile", cx))
+            .child(body)
+            .into_any_element()
     }
 }
 
 impl Render for MatrixApp {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let content = if self.snapshot.user_id.is_empty() {
+            self.sign_in_view(cx)
+        } else {
+            let panel = if self.profile.is_some() {
+                Some(self.profile_view(cx))
+            } else if self.details_open && self.navigation.selected_room.is_some() {
+                Some(self.details_view(cx))
+            } else {
+                None
+            };
+            h_flex()
+                .size_full()
+                .items_stretch()
+                .child(self.rail_view(cx))
+                .child(self.sidebar_view(cx))
+                .child(self.conversation_view(cx))
+                .children(panel)
+                .into_any_element()
+        };
         v_flex()
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
-            .text_sm()
+            .text_size(px(13.))
             .track_focus(&self.focus)
             .key_context("MatrixClient")
             .on_action(cx.listener(|this, _: &FindConversation, window, cx| {
                 this.search.update(cx, |state, cx| state.focus(window, cx))
             }))
-            .on_action(cx.listener(|this, _: &CloseProfile, _, cx| this.close_profile(cx)))
-            .child(if self.snapshot.user_id.is_empty() {
-                self.sign_in_view(cx)
-            } else {
-                h_flex()
-                    .size_full()
-                    .items_stretch()
-                    .child(self.navigation_view(cx))
-                    .child(self.conversation_view(cx))
-                    .when(self.profile.is_some(), |view| {
-                        view.child(self.profile_view(cx))
-                    })
-                    .into_any_element()
-            })
+            .on_action(cx.listener(|this, _: &CloseProfile, _, cx| this.dismiss_panel(cx)))
+            .on_action(cx.listener(|this, _: &ToggleDetails, _, cx| this.toggle_details(cx)))
+            .child(content)
     }
 }

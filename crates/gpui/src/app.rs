@@ -16,7 +16,10 @@ use crate::{
     model::{self, Navigation},
 };
 
-gpui_kit::actions!(matrix_client, [Quit, FindConversation, CloseProfile]);
+gpui_kit::actions!(
+    matrix_client,
+    [Quit, FindConversation, CloseProfile, ToggleDetails]
+);
 
 pub(super) struct ProfilePage {
     pub id: String,
@@ -44,6 +47,8 @@ pub(super) struct MatrixApp {
     pub paginating: bool,
     pub sending: HashSet<String>,
     pub profile: Option<ProfilePage>,
+    /// Room details panel; the profile view replaces it while open.
+    pub details_open: bool,
     pub preview: bool,
     pub backend: Option<Arc<Backend>>,
     profile_request: u64,
@@ -62,8 +67,8 @@ impl MatrixApp {
     ) -> Self {
         let homeserver = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("https://matrix.example.org")
-                .default_value("https://matrix.org")
+                .placeholder("matrix.example.org")
+                .default_value("matrix.org")
         });
         let username =
             cx.new(|cx| InputState::new(window, cx).placeholder("Username or Matrix ID"));
@@ -130,6 +135,7 @@ impl MatrixApp {
             paginating: false,
             sending: HashSet::new(),
             profile: None,
+            details_open: false,
             preview,
             backend: None,
             profile_request: 0,
@@ -163,24 +169,18 @@ impl MatrixApp {
                         this.backend = Some(backend.clone());
                         this.status = "Sign in to your homeserver.".into();
                         this.apply(snapshot, window, cx);
+                        let mut updates = backend.subscribe();
+                        // Deliver anything published since `snapshot()`; stale revisions are ignored.
+                        updates.mark_changed();
                         cx.spawn_in(window, async move |view, cx| {
-                            loop {
-                                let backend = backend.clone();
-                                let result = cx
-                                    .background_spawn(async move { backend.next_snapshot() })
-                                    .await;
-                                let failed = result.is_err();
+                            // Wakes only on a published change; ends with the view or backend.
+                            while updates.changed().await.is_ok() {
+                                let snapshot = updates.borrow_and_update().clone();
                                 if view
-                                    .update_in(cx, |this, window, cx| match result {
-                                        Ok(snapshot) => this.apply(snapshot, window, cx),
-                                        Err(_) => {
-                                            this.status =
-                                                "Updates stopped. Restart to reconnect.".into();
-                                            cx.notify();
-                                        }
+                                    .update_in(cx, |this, window, cx| {
+                                        this.apply(snapshot, window, cx)
                                     })
                                     .is_err()
-                                    || failed
                                 {
                                     break;
                                 }
@@ -557,6 +557,26 @@ impl MatrixApp {
             },
         );
         cx.notify();
+    }
+
+    pub fn toggle_details(&mut self, cx: &mut Context<Self>) {
+        if self.profile.is_some() {
+            self.close_profile(cx);
+            self.details_open = true;
+        } else {
+            self.details_open = !self.details_open;
+        }
+        cx.notify();
+    }
+
+    /// Escape: close the profile first, then the details panel.
+    pub fn dismiss_panel(&mut self, cx: &mut Context<Self>) {
+        if self.profile.is_some() {
+            self.close_profile(cx);
+        } else if self.details_open {
+            self.details_open = false;
+            cx.notify();
+        }
     }
 
     pub fn close_profile(&mut self, cx: &mut Context<Self>) {

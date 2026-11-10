@@ -47,7 +47,7 @@ accepted on Windows.
 - Revoking the generated test sessions on successful completion.
 
 This is **SDK/application-service integration**, not Element interoperability or
-SwiftUI interaction acceptance. Restoration here retains the SDK session in test
+UI interaction acceptance. Restoration here retains the SDK session in test
 memory: it does not test OS Keychain persistence, a separate process restart,
 crash recovery or the normal `auth::restore()` path. It does not exercise browser
 SSO, verification/cross-signing, backup recovery, attachments, or calls. Failed

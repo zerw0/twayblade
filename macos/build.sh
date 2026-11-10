@@ -9,19 +9,24 @@ apple_env=(/usr/bin/env -i "HOME=$HOME" "USER=${USER:-$(/usr/bin/id -un)}"
     "TMPDIR=${TMPDIR:-/tmp}" 'PATH=/usr/bin:/bin:/usr/sbin:/sbin')
 apple_developer_dir="$("${apple_env[@]}" /usr/bin/xcode-select -p)"
 apple_env+=("DEVELOPER_DIR=$apple_developer_dir")
-features=()
+run=false
+build=(cargo build --locked -p matrix-client-gpui)
+app_args=()
 for arg in "$@"; do
-    if [[ "$arg" == --capture ]]; then features=(--features capture); fi
+    case "$arg" in
+        --run) run=true ;;
+        *) app_args+=("$arg") ;;
+    esac
+    if [[ "$arg" == --capture ]]; then build+=(--features capture); fi
 done
-cargo build --locked -p matrix-client-gpui "${features[@]}"
+"${build[@]}"
 app="$repo_root/target/debug/bundle/Matrix Client.app"
 mkdir -p "$app/Contents/MacOS"
 cp target/debug/matrix-client-gpui "$app/Contents/MacOS/"
 cp macos/Info.plist "$app/Contents/Info.plist"
-"${apple_env[@]}" /usr/libexec/PlistBuddy -c 'Set :CFBundleExecutable matrix-client-gpui' "$app/Contents/Info.plist"
 "${apple_env[@]}" /usr/bin/codesign --force --deep --sign - "$app"
 printf 'Built %s\n' "$app"
-if [[ "${1:-}" == --run ]]; then
-    shift
-    exec /usr/bin/open -n -W "$app" --args "$@"
+if [[ "$run" == true ]]; then
+    # Bash 3.2 (macOS /bin/bash) treats an empty array as unset under `set -u`.
+    exec /usr/bin/open -n -W "$app" --args ${app_args[@]+"${app_args[@]}"}
 fi

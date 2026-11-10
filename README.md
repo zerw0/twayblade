@@ -1,19 +1,17 @@
 # Matrix Client
 
 A native Rust Matrix desktop client using **GPUI + GPUI Kit** for one shared
-macOS/Linux/Windows frontend. macOS is the primary UX platform. The earlier
-SwiftUI and Iced frontends remain available as references during migration.
+macOS/Linux/Windows frontend. macOS is the primary UX platform.
 
-The current prototype connects homeserver discovery, password sign-in, OS-backed
+The current prototype connects server-name (`.well-known`) discovery, password sign-in, OS-backed
 sessions, encrypted SDK stores, room/space navigation, timelines, pagination and
 plain-text sending to the shared Rust core. Consecutive messages share sender
 headers; sender names open readonly profiles. Room-owned composers preserve drafts
 and editing state across navigation. Home excludes rooms belonging to spaces.
 
-OAuth/legacy SSO, verification/recovery, attachments, emoji/sticker pickers,
-threads, Element Call and release packaging remain planned. Chat styles
-(Element-like, IRC, minimal, bubbles) and selectable color schemes are also in the
-plan; only the current bubble presentation and adaptive product theme exist.
+OAuth/legacy SSO, verification/recovery, attachments, emoji/reactions, threads,
+Element Call and release packaging remain planned. Stickers and alternative
+timeline styles/palettes are deferred past 1.0.
 
 ## Run
 
@@ -38,9 +36,8 @@ cargo run --locked -p matrix-client-gpui -- --preview-profile
 cargo run --locked -p matrix-client-gpui -- --preview-large
 ```
 
-A normal launch restores the shared development account. Close other frontend
-instances first; concurrent-instance protection is pending. Use dedicated test
-accounts. Native sliding sync is currently required.
+A normal launch restores the saved account. Only one instance can run at a
+time. Use dedicated test accounts. The homeserver must support native sliding sync.
 
 The GPUI app builds/runs locally on macOS arm64, and offline captures/interaction
 tests pass. A separate isolated Synapse test passed encrypted SDK/application
