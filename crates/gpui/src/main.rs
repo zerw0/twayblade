@@ -3,6 +3,7 @@ extern crate gpui_kit as gpui;
 
 mod app;
 mod attachments;
+mod avatars;
 mod backend;
 mod emoji;
 mod model;

@@ -11,20 +11,24 @@ apple_developer_dir="$("${apple_env[@]}" /usr/bin/xcode-select -p)"
 apple_env+=("DEVELOPER_DIR=$apple_developer_dir")
 run=false
 preview=false
+profile=debug
 build=(cargo build --locked -p matrix-client-gpui)
 app_args=()
 for arg in "$@"; do
     case "$arg" in
         --run) run=true ;;
+        # Optimised build for everyday use; debug builds are for development.
+        --release) profile=release ;;
         --preview|--preview-*) preview=true; app_args+=("$arg") ;;
         *) app_args+=("$arg") ;;
     esac
     if [[ "$arg" == --capture ]]; then build+=(--features capture); fi
 done
+if [[ "$profile" == release ]]; then build+=(--release); fi
 "${build[@]}"
-app="$repo_root/target/debug/bundle/Matrix Client.app"
+app="$repo_root/target/$profile/bundle/Matrix Client.app"
 mkdir -p "$app/Contents/MacOS"
-cp target/debug/matrix-client-gpui "$app/Contents/MacOS/"
+cp "target/$profile/matrix-client-gpui" "$app/Contents/MacOS/"
 cp macos/Info.plist "$app/Contents/Info.plist"
 "${apple_env[@]}" /usr/bin/codesign --force --deep --sign - "$app"
 printf 'Built %s\n' "$app"

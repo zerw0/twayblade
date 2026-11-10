@@ -18,6 +18,7 @@ pub struct Member {
     pub user_id: String,
     pub display_name: String,
     pub role: MemberRole,
+    pub avatar: Option<String>,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -61,6 +62,7 @@ pub(crate) async fn room_members(room: Room) -> Result<Vec<Member>, RoomStateErr
                 .map(str::to_owned)
                 .unwrap_or_else(|| member.user_id().to_string()),
             role: role(member.power_level()),
+            avatar: member.avatar_url().map(|url| url.to_string()),
         })
         .collect();
     members

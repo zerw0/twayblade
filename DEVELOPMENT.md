@@ -41,7 +41,12 @@ Or build and launch an ad-hoc signed development app:
 
 ```sh
 bash macos/build.sh --run
+# Optimised build for everyday use (output in target/release/bundle):
+bash macos/build.sh --release --run
 ```
+
+Release builds use a separate credential entry from debug builds, so sign in
+once per build type.
 
 Output: `target/debug/bundle/Matrix Client.app`. The script uses Cargo from the
 current shell and resolves Apple signing tools in a clean environment, including

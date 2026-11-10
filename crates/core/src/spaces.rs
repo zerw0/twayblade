@@ -12,6 +12,7 @@ pub struct SpaceSummary {
     pub id: String,
     pub name: String,
     pub level: u8,
+    pub avatar: Option<String>,
     pub can_add_rooms: bool,
     pub room_ids: HashSet<String>,
 }
@@ -63,6 +64,7 @@ fn summaries(
                 room_ids: descendants(&id, &edges),
                 can_add_rooms: editable.contains(&id),
                 id,
+                avatar: filter.space_room.avatar_url.map(|url| url.to_string()),
                 name: filter.space_room.display_name,
                 level: filter.level,
             }

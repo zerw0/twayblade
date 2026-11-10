@@ -66,6 +66,13 @@ pub(super) struct MatrixApp {
     pub options: Option<LoginOptions>,
     pub status: String,
     pub busy: bool,
+    /// Per-group content fingerprints matching `groups`, for targeted re-measure.
+    group_signatures: Vec<u64>,
+    /// Latest timeline event and your latest message, derived once per snapshot.
+    latest_cache: std::cell::RefCell<Option<LatestIds>>,
+    pub(super) avatars: crate::avatars::AvatarCache,
+    /// The signed-in user's avatar URL, fetched once per account.
+    pub own_avatar: Option<String>,
     /// Pressed inside a toolbar row; the next mouse move starts a window drag.
     pub window_drag: bool,
     /// The security reminder strip was dismissed for this session.
@@ -297,6 +304,10 @@ impl MatrixApp {
             options: None,
             status: String::new(),
             busy: !preview,
+            group_signatures: Vec::new(),
+            latest_cache: Default::default(),
+            avatars: Default::default(),
+            own_avatar: None,
             window_drag: false,
             security_notice_dismissed: false,
             oauth_cancel: None,
@@ -445,6 +456,24 @@ impl MatrixApp {
         if self.snapshot.user_id != snapshot.user_id
             || self.snapshot.account_instance != snapshot.account_instance
         {
+            self.own_avatar = None;
+            if !snapshot.user_id.is_empty()
+                && let Some(backend) = self.backend.clone()
+            {
+                let account = snapshot.account_instance;
+                cx.spawn(async move |this, cx| {
+                    let url = cx
+                        .background_spawn(async move { backend.own_avatar_url() })
+                        .await;
+                    let _ = this.update(cx, |this, cx| {
+                        if this.snapshot.account_instance == account {
+                            this.own_avatar = url;
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
             self.account_name = None;
             self.account_edit_busy = false;
             self.emoji_picker = None;
@@ -525,18 +554,39 @@ impl MatrixApp {
             .zip(new_ids[prefix..].iter().rev())
             .take_while(|(old, new)| old == new)
             .count();
+        let signatures: Vec<u64> = groups
+            .iter()
+            .map(|group| model::group_signature(&snapshot.messages, group.clone()))
+            .collect();
+        let old_signatures = std::mem::take(&mut self.group_signatures);
+        let inserted = new_ids.len() - prefix - suffix;
         self.scroller.update(cx, |state, cx| {
             if state.item_count() == 0 {
                 state.reset(groups.len(), cx);
-            } else {
-                state.splice(
-                    prefix..old_ids.len() - suffix,
-                    new_ids.len() - prefix - suffix,
-                    cx,
-                );
+                return;
+            }
+            state.splice(prefix..old_ids.len() - suffix, inserted, cx);
+            if old_signatures.len() != old_ids.len() {
+                // No fingerprints for the old groups (snapshot set directly):
+                // keep the anchor, measure everything once.
                 state.remeasure(cx);
+                return;
+            }
+            // Re-measure only surviving groups whose content changed; inserted
+            // groups are measured on first layout.
+            let mut changed = |new_ix: usize, old_ix: usize| {
+                if old_signatures.get(old_ix) != signatures.get(new_ix) {
+                    state.remeasure_items(new_ix..new_ix + 1, cx);
+                }
+            };
+            for ix in 0..prefix {
+                changed(ix, ix);
+            }
+            for k in 0..suffix {
+                changed(new_ids.len() - suffix + k, old_ids.len() - suffix + k);
             }
         });
+        self.group_signatures = signatures;
         self.update_thread(snapshot.thread.as_ref(), cx);
         self.groups = groups;
         self.snapshot = snapshot;
@@ -1201,5 +1251,55 @@ impl Drop for MatrixApp {
         if let Some(backend) = &self.backend {
             backend.stop();
         }
+    }
+}
+
+/// Cache key: snapshot revision, message count and last message ID, so direct
+/// snapshot edits (previews, tests) can never serve stale values.
+struct LatestIds {
+    key: (u64, usize, Option<String>),
+    event: Option<String>,
+    own: Option<String>,
+}
+
+impl MatrixApp {
+    fn latest_ids(&self) -> std::cell::Ref<'_, LatestIds> {
+        let messages = &self.snapshot.messages;
+        let key = (
+            self.snapshot.revision,
+            messages.len(),
+            messages.last().map(|message| message.id.clone()),
+        );
+        let stale = self
+            .latest_cache
+            .borrow()
+            .as_ref()
+            .is_none_or(|cached| cached.key != key);
+        if stale {
+            let event = messages
+                .iter()
+                .rev()
+                .find(|message| message.event_id.is_some())
+                .map(|message| message.id.clone());
+            let own = messages
+                .iter()
+                .rev()
+                .find(|message| message.sender == self.snapshot.user_id)
+                .map(|message| message.id.clone());
+            *self.latest_cache.borrow_mut() = Some(LatestIds { key, event, own });
+        }
+        std::cell::Ref::map(self.latest_cache.borrow(), |cached| {
+            cached.as_ref().expect("latest ids computed")
+        })
+    }
+
+    /// The main timeline's latest event ID (for read receipts).
+    pub(super) fn latest_event(&self) -> Option<String> {
+        self.latest_ids().event.clone()
+    }
+
+    /// Your latest message in the main timeline (for the delivery label).
+    pub(super) fn latest_own(&self) -> Option<String> {
+        self.latest_ids().own.clone()
     }
 }

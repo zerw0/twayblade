@@ -19,6 +19,8 @@ pub struct RoomSummary {
     /// Only `true` once the SDK has confirmed `m.room.encryption`.
     pub encrypted: bool,
     pub direct: bool,
+    /// `mxc://` avatar, if the room has one.
+    pub avatar: Option<String>,
     /// Server-provided activity ordering (sliding sync `bump_stamp`).
     pub recency: u64,
 }
@@ -56,6 +58,7 @@ fn summary(room: Room) -> RoomSummary {
         topic: room.topic().filter(|topic| !topic.trim().is_empty()),
         encrypted: room.encryption_state().is_encrypted(),
         direct: room.direct_targets_length() > 0,
+        avatar: room.avatar_url().map(|url| url.to_string()),
     }
 }
 

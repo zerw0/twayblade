@@ -2,6 +2,7 @@
 #![recursion_limit = "256"]
 
 pub mod auth;
+pub mod avatars;
 pub mod conversation;
 pub mod profile;
 pub mod room_state;

@@ -948,6 +948,25 @@ impl Backend {
         self.profile(account.user_id().to_string(), None)
     }
 
+    /// Square avatar PNG for `mxc` at `size` physical pixels. Bounded in core.
+    pub(super) fn avatar(&self, mxc: String, size: u32) -> Result<Vec<u8>, ServiceError> {
+        let account = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?
+            .account
+            .clone()
+            .ok_or_else(|| failure("Sign in first."))?;
+        self.runtime
+            .block_on(account.avatar_thumbnail(mxc, size))
+            .map_err(|_| failure("Avatar unavailable."))
+    }
+
+    pub(super) fn own_avatar_url(&self) -> Option<String> {
+        let account = self.state.lock().ok()?.account.clone()?;
+        self.runtime.block_on(account.own_avatar_url())
+    }
+
     pub(super) fn profile(
         &self,
         user_id: String,

@@ -112,6 +112,7 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
             id: "design".into(),
             name: "Design team".into(),
             level: 0,
+            avatar: None,
             can_add_rooms: true,
             room_ids: ["general".into(), "research".into()].into_iter().collect(),
         }],
@@ -232,16 +233,19 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
             user_id: "@alex:preview.invalid".into(),
             display_name: "Alex".into(),
             role: MemberRole::Admin,
+            avatar: None,
         },
         Member {
             user_id: snapshot.user_id.clone(),
             display_name: "You".into(),
             role: MemberRole::Moderator,
+            avatar: None,
         },
         Member {
             user_id: "@sam:preview.invalid".into(),
             display_name: "Sam".into(),
             role: MemberRole::Member,
+            avatar: None,
         },
     ];
     snapshot.members_state = MembersState::Ready;
@@ -355,4 +359,55 @@ mod room_state_tests {
         assert!(grouped(&snapshot.messages)[0] == (0..1));
         assert!(snapshot.messages[1].id == "sample-1");
     }
+}
+
+/// A fingerprint of everything that can change a message group's rendered
+/// height. Only groups whose fingerprint changes are re-measured, so typing
+/// notices, receipts and sync ticks don't re-layout the whole history.
+pub(super) fn group_signature(messages: &[Message], range: std::ops::Range<usize>) -> u64 {
+    use matrix_client_core::conversation::ReplyTarget;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    // The previous message decides time markers above the group.
+    range
+        .start
+        .checked_sub(1)
+        .and_then(|ix| messages.get(ix))
+        .map(|previous| (previous.timestamp_ms, &previous.sender))
+        .hash(&mut hasher);
+    for message in &messages[range] {
+        message.id.hash(&mut hasher);
+        message.display_name.hash(&mut hasher);
+        message.body.hash(&mut hasher);
+        std::mem::discriminant(&message.kind).hash(&mut hasher);
+        std::mem::discriminant(&message.delivery).hash(&mut hasher);
+        message.edited.hash(&mut hasher);
+        message.new_messages.hash(&mut hasher);
+        message.thread_replies.hash(&mut hasher);
+        message.thread_unread.hash(&mut hasher);
+        message.read_by.len().hash(&mut hasher);
+        message.can_retry.hash(&mut hasher);
+        message.upload_percent.hash(&mut hasher);
+        message.sender_avatar.is_some().hash(&mut hasher);
+        for reaction in &message.reactions {
+            (&reaction.key, reaction.count, reaction.mine).hash(&mut hasher);
+        }
+        match &message.reply {
+            Some(ReplyTarget::Ready { sender, excerpt }) => {
+                (1u8, sender, excerpt).hash(&mut hasher)
+            }
+            Some(ReplyTarget::Pending) => 2u8.hash(&mut hasher),
+            Some(ReplyTarget::Unavailable) => 3u8.hash(&mut hasher),
+            None => 0u8.hash(&mut hasher),
+        }
+        if let Some(attachment) = &message.attachment {
+            (
+                &attachment.filename,
+                attachment.size,
+                attachment.preview_png.is_some(),
+            )
+                .hash(&mut hasher);
+        }
+    }
+    hasher.finish()
 }

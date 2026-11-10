@@ -11,27 +11,57 @@ pub(super) enum AttachmentSource {
 }
 
 #[derive(Default)]
-struct Thumbnails(std::collections::HashMap<u64, Arc<RenderImage>>);
+struct Thumbnails(std::collections::HashMap<usize, (std::sync::Weak<Vec<u8>>, Arc<RenderImage>)>);
 impl Global for Thumbnails {}
-/// Core supplies bounded PNGs. Decode once into render data; no asynchronous layout race.
-pub(super) fn render_png(bytes: &[u8], cx: &mut App) -> Option<Arc<RenderImage>> {
-    let image = Image::from_bytes(ImageFormat::Png, bytes.to_vec());
-    let id = image.id();
-    if let Some(image) = cx
+/// Core supplies bounded PNGs. Decode once into render data, keyed by the
+/// shared buffer's address so scrolling never copies, hashes or re-decodes.
+pub(super) fn render_png(bytes: &Arc<Vec<u8>>, cx: &mut App) -> Option<Arc<RenderImage>> {
+    let key = Arc::as_ptr(bytes) as usize;
+    // The weak handle guards against a freed buffer's address being reused.
+    if let Some((_, image)) = cx
         .try_global::<Thumbnails>()
-        .and_then(|images| images.0.get(&id))
+        .and_then(|images| images.0.get(&key))
+        .filter(|(source, _)| {
+            source
+                .upgrade()
+                .is_some_and(|live| Arc::ptr_eq(&live, bytes))
+        })
     {
         return Some(image.clone());
     }
-    let image = image.to_image_data(cx.svg_renderer()).ok()?;
+    let image = Image::from_bytes(ImageFormat::Png, bytes.as_ref().clone())
+        .to_image_data(cx.svg_renderer())
+        .ok()?;
     if cx.try_global::<Thumbnails>().is_none() {
         cx.set_global(Thumbnails::default());
     }
     let cache = cx.global_mut::<Thumbnails>();
-    if cache.0.len() >= 32 {
+    // Thumbnails are at most 512px; a few hundred stay well under 200 MB.
+    if cache.0.len() >= 256 {
         cache.0.clear();
     }
-    cache.0.insert(id, image.clone());
+    cache.0.insert(key, (Arc::downgrade(bytes), image.clone()));
+    Some(image)
+}
+
+#[derive(Default)]
+struct SmallImages(std::collections::HashMap<u64, Arc<RenderImage>>);
+impl Global for SmallImages {}
+/// For a handful of tiny images (sign-in provider icons) without a shared buffer.
+pub(super) fn render_small_png(bytes: &[u8], cx: &mut App) -> Option<Arc<RenderImage>> {
+    let image = Image::from_bytes(ImageFormat::Png, bytes.to_vec());
+    let id = image.id();
+    if let Some(image) = cx
+        .try_global::<SmallImages>()
+        .and_then(|cache| cache.0.get(&id))
+    {
+        return Some(image.clone());
+    }
+    let image = image.to_image_data(cx.svg_renderer()).ok()?;
+    if cx.try_global::<SmallImages>().is_none() {
+        cx.set_global(SmallImages::default());
+    }
+    cx.global_mut::<SmallImages>().0.insert(id, image.clone());
     Some(image)
 }
 

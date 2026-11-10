@@ -55,7 +55,7 @@ struct RailTile {
     unread: u64,
 }
 
-fn avatar(label: &str, fill: Hsla, size: f32, radius: f32, palette: &Palette) -> Div {
+pub(super) fn avatar(label: &str, fill: Hsla, size: f32, radius: f32, palette: &Palette) -> Div {
     div()
         .flex_none()
         .size(px(size))
@@ -68,17 +68,6 @@ fn avatar(label: &str, fill: Hsla, size: f32, radius: f32, palette: &Palette) ->
         .items_center()
         .justify_center()
         .child(label.to_owned())
-}
-
-fn room_avatar(room: &Room, size: f32, palette: &Palette) -> Div {
-    let radius = if room.direct { size / 2. } else { size * 0.27 };
-    avatar(
-        &theme::initials(&room.name),
-        theme::avatar_color(&room.id),
-        size,
-        radius,
-        palette,
-    )
 }
 
 /// Unread count as a quiet grey pill, like Mail's sidebar counts.
@@ -361,7 +350,7 @@ impl MatrixApp {
                         if let Some(icon) = provider
                             .icon_png
                             .as_ref()
-                            .and_then(|bytes| crate::attachments::render_png(bytes, cx))
+                            .and_then(|bytes| crate::attachments::render_small_png(bytes, cx))
                         {
                             button = button.child(img(icon).size(px(20.)));
                         }
@@ -597,7 +586,13 @@ impl MatrixApp {
                 .iter()
                 .filter(|room| !room.is_space && space.room_ids.contains(&room.id))
                 .fold(0u64, |sum, room| sum.saturating_add(room.unread));
-            let label = div().child(theme::initials(&space.name)).into_any_element();
+            // A space's own picture fills the tile; initials remain the fallback.
+            let label = if space.avatar.is_some() {
+                self.avatar_image(space.avatar.as_deref(), &space.id, &space.name, 32., 7., cx)
+                    .into_any_element()
+            } else {
+                div().child(theme::initials(&space.name)).into_any_element()
+            };
             let name = if space.level > 0 {
                 format!("{} (subspace)", space.name)
             } else {
@@ -679,13 +674,16 @@ impl MatrixApp {
         } else {
             (cx.theme().foreground, cx.theme().muted_foreground)
         };
-        let icon = if room.direct {
-            avatar(
-                &theme::initials(&room.name),
-                theme::avatar_color(&room.id),
+        let _ = &palette;
+        // DMs and rooms with their own picture show it; plain rooms keep the # glyph.
+        let icon = if room.direct || room.avatar.is_some() {
+            self.avatar_image(
+                room.avatar.as_deref(),
+                &room.id,
+                &room.name,
                 18.,
-                9.,
-                &palette,
+                if room.direct { 9. } else { 5. },
+                cx,
             )
             .text_size(px(9.))
             .into_any_element()
@@ -740,7 +738,7 @@ impl MatrixApp {
     }
 
     fn sidebar_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        let palette = theme::palette(cx);
+        let _palette = theme::palette(cx);
         let muted = cx.theme().muted_foreground;
         let query = self.search.read(cx).value().to_lowercase();
         let visible: Vec<Room> = self
@@ -827,12 +825,13 @@ impl MatrixApp {
                         h_flex()
                             .w_full()
                             .gap(px(8.))
-                            .child(avatar(
-                                &theme::initials(&user),
-                                theme::avatar_color(&user),
+                            .child(self.avatar_image(
+                                self.own_avatar.as_deref(),
+                                &user,
+                                &user,
                                 24.,
                                 12.,
-                                &palette,
+                                cx,
                             ))
                             .child(
                                 v_flex()
@@ -1020,28 +1019,57 @@ impl MatrixApp {
                             ReplyTarget::Ready { sender, excerpt } => {
                                 (sender.as_str(), excerpt.as_str())
                             }
-                            ReplyTarget::Pending => ("Reply", "Loading original message…"),
-                            ReplyTarget::Unavailable => ("Reply", "Original message unavailable"),
+                            ReplyTarget::Pending => ("", "Loading the original message…"),
+                            // Usually history from before you joined; no fake sender name.
+                            ReplyTarget::Unavailable => ("", "Replying to an earlier message"),
                         };
+                        // Line styles quote on one line: "↩ Sender  excerpt…".
+                        let one_line = self.preferences.chat.style != ChatStyle::Bubbles;
                         content = content.child(
-                            v_flex()
+                            div()
                                 .id(SharedString::from(format!("reply-{}", message.id)))
-                                .border_l_2()
-                                .border_color(if outgoing {
-                                    cx.theme().primary_foreground.opacity(0.6)
-                                } else {
-                                    cx.theme().primary
+                                .flex()
+                                .when(one_line, |quote| {
+                                    quote.flex_row().items_center().gap(px(6.))
                                 })
-                                .pl(px(7.))
+                                .when(!one_line, |quote| quote.flex_col())
+                                .min_w_0()
+                                .when(one_line, |quote| {
+                                    quote.child(
+                                        Icon::new(IconName::CornerUpLeft)
+                                            .size(px(12.))
+                                            .text_color(cx.theme().muted_foreground),
+                                    )
+                                })
+                                .when(!one_line, |quote| {
+                                    quote
+                                        .border_l_2()
+                                        .border_color(if outgoing {
+                                            cx.theme().primary_foreground.opacity(0.6)
+                                        } else {
+                                            cx.theme().primary
+                                        })
+                                        .pl(px(7.))
+                                })
                                 .text_size(px(11.5))
                                 .opacity(0.85)
+                                .when(!sender.is_empty(), |quote| {
+                                    quote.child(
+                                        div()
+                                            .flex_none()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .truncate()
+                                            .child(sender.to_owned()),
+                                    )
+                                })
                                 .child(
                                     div()
-                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .min_w_0()
+                                        .when(one_line, |line| line.flex_1())
                                         .truncate()
-                                        .child(sender.to_owned()),
+                                        .when(sender.is_empty(), |line| line.italic())
+                                        .child(excerpt.to_owned()),
                                 )
-                                .child(div().truncate().child(excerpt.to_owned()))
                                 .test_support(),
                         );
                     }
@@ -1453,13 +1481,18 @@ impl MatrixApp {
         } else {
             &self.snapshot.messages
         };
-        if message.event_id.is_some()
-            && messages
+        // The main timeline's latest event is precomputed in `apply`; threads are small.
+        let latest = if in_thread {
+            messages
                 .iter()
                 .rev()
                 .find(|m| m.event_id.is_some())
-                .map(|m| &m.id)
-                == Some(&message.id)
+                .map(|m| m.id.clone())
+        } else {
+            self.latest_event()
+        };
+        if message.event_id.is_some()
+            && latest.as_deref() == Some(message.id.as_str())
             && let (Some(event_id), Some(room)) = (
                 message.event_id.clone(),
                 self.navigation.selected_room.clone(),
@@ -1513,7 +1546,7 @@ impl MatrixApp {
         let Some(range) = groups.get(ix).cloned() else {
             return div().into_any_element();
         };
-        let palette = theme::palette(cx);
+        let _palette = theme::palette(cx);
         let muted = cx.theme().muted_foreground;
         let first = messages[range.start].clone();
         let outgoing = first.sender == self.snapshot.user_id;
@@ -1577,110 +1610,182 @@ impl MatrixApp {
         }
         if self.preferences.chat.style != ChatStyle::Bubbles {
             let style = self.preferences.chat.style;
-            if style == ChatStyle::Minimal
-                && previous.is_none_or(|message| message.sender != first.sender)
-            {
+            let compact = self.preferences.chat.density == Density::Compact;
+            let always_time = self.preferences.chat.timestamps == Timestamps::Always;
+            let latest_own_id = if in_thread {
+                messages
+                    .iter()
+                    .rev()
+                    .find(|message| message.sender == self.snapshot.user_id)
+                    .map(|message| message.id.clone())
+            } else {
+                self.latest_own()
+            };
+            let latest_own = latest_own_id.as_ref();
+            let delivered = |message: &crate::backend::Message| {
+                (latest_own == Some(&message.id) && message.delivery == DeliveryState::Sent)
+                    .then_some(if message.read_by.is_empty() {
+                        "Sent"
+                    } else {
+                        "Read"
+                    })
+            };
+            if style == ChatStyle::Minimal {
+                // Slack-style: avatar gutter, name and time on each new group (new
+                // sender or a pause), then the group's lines in one text column.
                 let id = first.sender.clone();
                 let name = first.display_name.clone();
-                let mut header = h_flex().gap(px(8.)).items_center();
-                if self.preferences.chat.avatars {
-                    header = header.child(avatar(
-                        &theme::initials(&name),
-                        theme::avatar_color(&id),
-                        22.,
-                        11.,
-                        &palette,
-                    ));
+                let header = h_flex()
+                    .gap(px(8.))
+                    .items_baseline()
+                    .child(
+                        Button::new(SharedString::from(format!("sender-{}", first.id)))
+                            .text()
+                            .p_0()
+                            .h_auto()
+                            .accessibility_label(name.clone())
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(cx.theme().foreground)
+                                    .child(name.clone()),
+                            )
+                            .tooltip(id.clone())
+                            .on_click(cx.listener({
+                                let id = id.clone();
+                                let name = name.clone();
+                                move |this, _, window, cx| {
+                                    this.open_profile(id.clone(), name.clone(), window, cx)
+                                }
+                            })),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(muted)
+                            .child(time_label(first.timestamp_ms)),
+                    );
+                let mut column = v_flex().flex_1().min_w_0().child(header);
+                for message in &messages[range] {
+                    column = column.child(
+                        div()
+                            .id(SharedString::from(format!("style-row-{}", message.id)))
+                            .w_full()
+                            .min_w_0()
+                            .py(px(if compact { 0. } else { 1. }))
+                            .child(self.message_body(message, false, in_thread, cx))
+                            .test_support(),
+                    );
+                    if let Some(label) = delivered(message) {
+                        column =
+                            column.child(div().text_size(px(10.5)).text_color(muted).child(label));
+                    }
                 }
-                header = header.child(
-                    Button::new(SharedString::from(format!("sender-{}", first.id)))
-                        .text()
-                        .xsmall()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .label(name.clone())
-                        .tooltip(id.clone())
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.open_profile(id.clone(), name.clone(), window, cx)
-                        })),
-                );
-                group = group.child(header);
+                let mut row = h_flex().w_full().items_start().gap(px(10.));
+                if self.preferences.chat.avatars {
+                    row = row.child(
+                        Button::new(SharedString::from(format!("avatar-{}", first.id)))
+                            .ghost()
+                            .size(px(32.))
+                            .p_0()
+                            .rounded(px(16.))
+                            .accessibility_label(format!("Open profile of {name}"))
+                            .tooltip(format!("Open profile of {name}"))
+                            .child(self.avatar_image(
+                                first.sender_avatar.as_deref(),
+                                &first.sender,
+                                &name,
+                                32.,
+                                16.,
+                                cx,
+                            ))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_profile(id.clone(), name.clone(), window, cx)
+                            })),
+                    );
+                }
+                return group
+                    .child(row.child(column))
+                    .test_support()
+                    .into_any_element();
             }
-            let latest_own = messages
-                .iter()
-                .rev()
-                .find(|message| message.sender == self.snapshot.user_id)
-                .map(|message| &message.id);
+            // IRC: one line per message. Sender at body size in its own colour; the
+            // time column exists only when timestamps are always shown.
             for message in &messages[range] {
+                let id = message.sender.clone();
+                let name = message.display_name.clone();
                 let mut line = h_flex()
                     .id(SharedString::from(format!("style-row-{}", message.id)))
-                    .group("chat-row")
                     .w_full()
                     .min_w_0()
-                    .gap(px(8.))
+                    .gap(px(10.))
                     .items_start()
-                    .py(px(if self.preferences.chat.density == Density::Compact {
-                        1.
-                    } else {
-                        3.
-                    }))
+                    .py(px(if compact { 0. } else { 2. }))
+                    .rounded(px(4.))
                     .hover(|style| style.bg(cx.theme().secondary.opacity(0.4)));
-                if style == ChatStyle::Irc {
-                    let id = message.sender.clone();
-                    let name = message.display_name.clone();
-                    line = line
-                        .child(
-                            div()
-                                .w(px(42.))
-                                .flex_none()
-                                .text_color(muted)
-                                .text_size(px(11.))
-                                .when(
-                                    self.preferences.chat.timestamps == Timestamps::OnHover,
-                                    |view| {
-                                        view.opacity(0.)
-                                            .group_hover("chat-row", |style| style.opacity(1.))
-                                    },
-                                )
-                                .child(time_label(message.timestamp_ms)),
-                        )
-                        .child(
+                if always_time {
+                    line = line.child(
+                        div()
+                            .w(px(38.))
+                            .flex_none()
+                            .pt(px(1.))
+                            .text_color(muted)
+                            .text_size(px(11.))
+                            .child(time_label(message.timestamp_ms)),
+                    );
+                }
+                line = line
+                    .child(
+                        div().w(px(120.)).flex_none().flex().justify_end().child(
                             Button::new(SharedString::from(format!("sender-{}", message.id)))
                                 .text()
-                                .xsmall()
-                                .w(px(90.))
-                                .flex_none()
-                                .text_color(theme::avatar_text_color(&id, cx))
-                                .label(name.clone())
-                                .tooltip(id.clone())
+                                .p_0()
+                                .h_auto()
+                                .max_w(px(120.))
+                                .accessibility_label(name.clone())
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_size(px(13.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(theme::avatar_text_color(&id, cx))
+                                        .child(name.clone()),
+                                )
+                                .tooltip(format!("{id} · {}", time_label(message.timestamp_ms)))
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.open_profile(id.clone(), name.clone(), window, cx)
                                 })),
-                        );
-                }
-                line = line.child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(self.message_body(message, false, in_thread, cx)),
-                );
+                        ),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(self.message_body(message, false, in_thread, cx)),
+                    );
                 group = group.child(line.test_support());
-                if latest_own == Some(&message.id) && message.delivery == DeliveryState::Sent {
-                    group = group.child(div().text_size(px(10.5)).text_color(muted).child(
-                        if message.read_by.is_empty() {
-                            "Sent"
-                        } else {
-                            "Read"
-                        },
-                    ));
+                if let Some(label) = delivered(message) {
+                    group = group.child(
+                        div()
+                            .pl(px(if always_time { 178. } else { 130. }))
+                            .text_size(px(10.5))
+                            .text_color(muted)
+                            .child(label),
+                    );
                 }
             }
             return group.test_support().into_any_element();
         }
-        let latest_own = messages
-            .iter()
-            .rev()
-            .find(|message| message.sender == self.snapshot.user_id)
-            .map(|message| message.id.clone());
+        let latest_own = if in_thread {
+            messages
+                .iter()
+                .rev()
+                .find(|message| message.sender == self.snapshot.user_id)
+                .map(|message| message.id.clone())
+        } else {
+            self.latest_own()
+        };
         let messages = &messages[range];
         if outgoing {
             let mut column = v_flex()
@@ -1726,12 +1831,13 @@ impl MatrixApp {
             .rounded(px(13.))
             .accessibility_label(format!("Open profile of {}", first.display_name))
             .tooltip(format!("Open profile of {}", first.display_name))
-            .child(avatar(
-                &theme::initials(&first.display_name),
-                theme::avatar_color(&first.sender),
+            .child(self.avatar_image(
+                first.sender_avatar.as_deref(),
+                &first.sender,
+                &first.display_name,
                 26.,
                 13.,
-                &palette,
+                cx,
             ))
             .on_click(cx.listener({
                 let id = id.clone();
@@ -2102,13 +2208,7 @@ impl MatrixApp {
                 h_flex()
                     .w_full()
                     .gap(px(8.))
-                    .child(avatar(
-                        &theme::initials(&name),
-                        theme::avatar_color(&id),
-                        22.,
-                        11.,
-                        &theme::palette(cx),
-                    ))
+                    .child(self.avatar_image(member.avatar.as_deref(), &id, &name, 22., 11., cx))
                     .child(
                         div()
                             .flex_1()
@@ -2204,7 +2304,14 @@ impl MatrixApp {
                     .px(px(16.))
                     .pt(px(18.))
                     .pb(px(14.))
-                    .child(room_avatar(&room, 48., &palette))
+                    .child(self.avatar_image(
+                        room.avatar.as_deref(),
+                        &room.id,
+                        &room.name,
+                        48.,
+                        if room.direct { 24. } else { 13. },
+                        cx,
+                    ))
                     .child(
                         div()
                             .pt(px(4.))
@@ -2301,12 +2408,13 @@ impl MatrixApp {
             .gap(px(6.))
             .px(px(16.))
             .py(px(20.))
-            .child(avatar(
-                &theme::initials(&name),
-                theme::avatar_color(&profile_id),
+            .child(self.avatar_image(
+                self.member_avatar(&profile_id),
+                &profile_id,
+                &name,
                 64.,
                 32.,
-                &palette,
+                cx,
             ))
             .child(
                 div()

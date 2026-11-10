@@ -137,6 +137,13 @@ credentials and explicit authorization.
 
 ## Known technical debt
 
+- Thread unread counts: every timeline update recomputes the unread count of
+  every thread root, one at a time, before the snapshot reaches the UI
+  (`projected_rows` → `Conversation::unread`, crates/core/src/conversation.rs).
+  It doesn't block rendering, but it delays every update in rooms with many
+  threads. Cache per root; recompute only when that thread gets a reply or
+  your receipt changes.
+
 - Message text is escaped and passed through Kit's Markdown renderer to get
   selectable text. Replace with a plain selectable-text element when available.
 - Release credential entry is separate from debug; release migration and
@@ -155,8 +162,9 @@ Linux and Windows CI passed on `36f850a`; macOS CI was switched to `macos-15`
    Element and physical acceptance covers thread view and replies, space
    join/leave, room directory, invites, room creation; full-size image
    viewer with zoom, pan and next/previous.
-4. **M4 settings and appearance.** Settings window with notifications, UI
-   scaling, fonts, colour schemes and chat styles (bubbles, IRC, minimal).
+4. **M4 settings and appearance.** Done except notifications: Settings window,
+   UI scaling, fonts, colour schemes, chat styles, avatars. Next: notification
+   rules and native delivery (M4 task 5), plus the thread-unread caching debt.
 5. **M5 calls.** Element Call runtime, direct and group calls.
 6. **M6 release.** Accessibility pass, packaging, signing, updates.
 
@@ -338,6 +346,19 @@ M4 review fixes (2026-11-10):
   segmented controls, steppers, scheme thumbnails, accent dots and a switch.
 - General and Notifications are hidden from the sidebar until they have real
   controls; Settings opens on Appearance.
+
+Chat styles, avatars and performance (2026-11-10, after operator screenshots):
+- Minimal is Slack-style (avatar gutter, name and time per group); IRC shows
+  coloured 13px senders, a time column only with "Always", one-line replies.
+- Real avatars for senders, members, DMs, rooms, spaces and your account:
+  SDK thumbnails decoded and cropped in core, cached per `mxc://`, initials
+  as fallback. Reply previews retry failed fetches; unloadable ones read
+  "Replying to an earlier message" instead of a fake "Reply" sender.
+- Scrolling: only message groups whose content changed are re-measured (not
+  every row on every typing/receipt update); per-row full-history scans
+  replaced by a per-snapshot cache; thumbnails cached by buffer instead of
+  copied and hashed every frame. Dependencies are optimised in dev builds and
+  `macos/build.sh --release` builds the optimised app.
 
 Not yet verified:
 - Physical GUI checks of logout, pagination, IME and VoiceOver.
