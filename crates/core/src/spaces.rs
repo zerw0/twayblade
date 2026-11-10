@@ -12,6 +12,7 @@ pub struct SpaceSummary {
     pub id: String,
     pub name: String,
     pub level: u8,
+    pub can_add_rooms: bool,
     pub room_ids: HashSet<String>,
 }
 
@@ -38,7 +39,10 @@ fn descendants(root: &str, edges: &HashMap<String, Vec<String>>) -> HashSet<Stri
     visited
 }
 
-fn summaries(filters: impl Iterator<Item = SpaceFilter>) -> Vec<SpaceSummary> {
+fn summaries(
+    filters: impl Iterator<Item = SpaceFilter>,
+    editable: &HashSet<String>,
+) -> Vec<SpaceSummary> {
     let filters: Vec<_> = filters.collect();
     let edges: HashMap<_, _> = filters
         .iter()
@@ -57,6 +61,7 @@ fn summaries(filters: impl Iterator<Item = SpaceFilter>) -> Vec<SpaceSummary> {
             let id = filter.space_room.room_id.to_string();
             SpaceSummary {
                 room_ids: descendants(&id, &edges),
+                can_add_rooms: editable.contains(&id),
                 id,
                 name: filter.space_room.display_name,
                 level: filter.level,
@@ -72,13 +77,16 @@ impl Account {
             let service = SpaceService::new(account.client.clone()).await;
             let (mut filters, updates) = service.subscribe_to_space_filters().await;
             let mut updates = Box::pin(updates);
+            let mut room_updates = account.client.subscribe_to_all_room_updates();
             loop {
                 yield SpaceSnapshot {
                     account_instance: account.instance_id(),
-                    spaces: summaries(filters.iter().cloned()),
+                    spaces: summaries(filters.iter().cloned(), &service.editable_spaces().await.into_iter().map(|r| r.room_id.to_string()).collect()),
                 };
-                let Some(diffs) = updates.next().await else { break; };
-                for diff in diffs { diff.apply(&mut filters); }
+                tokio::select! {
+                    next = updates.next() => { let Some(diffs) = next else { break; }; for diff in diffs { diff.apply(&mut filters); } }
+                    update = room_updates.recv() => { if matches!(update, Err(tokio::sync::broadcast::error::RecvError::Closed)) { break; } }
+                }
             }
         }
     }

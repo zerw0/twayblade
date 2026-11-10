@@ -26,6 +26,9 @@ fn checked<T, E>(result: Result<T, E>, stage: &'static str) -> T {
 async fn test_client(root: &Path, store: &str, passphrase: &str, cert: &Certificate) -> Client {
     checked(
         Client::builder()
+            .with_threading_support(matrix_sdk::ThreadingSupport::Enabled {
+                with_subscriptions: false,
+            })
             .homeserver_url("https://127.0.0.1:18448")
             .add_root_certificates(vec![cert.clone()])
             .sqlite_store(root.join(store), Some(passphrase))
@@ -848,6 +851,10 @@ async fn members_typing_and_read_receipts() {
     checked(bob.client.join_room_by_id(&id).await, "join");
     wait_for_room(&alice, &id).await;
     wait_for_room(&bob, &id).await;
+    let _power_state = checked(
+        alice.sync_rooms(vec![id.clone()]).await,
+        "power-level state ready",
+    );
     checked(
         room.update_power_levels(vec![(bob.client.user_id().expect("Bob"), int!(50))])
             .await,
@@ -939,7 +946,7 @@ async fn members_typing_and_read_receipts() {
                 if room
                     .load_user_receipt(
                         ReceiptType::Read,
-                        &ReceiptThread::Unthreaded,
+                        &ReceiptThread::Main,
                         bob.client.user_id().expect("Bob"),
                     )
                     .await
@@ -1262,6 +1269,9 @@ async fn revoked_device_and_soft_logout_recovery() {
         });
         let second = checked(
             Client::builder()
+                .with_threading_support(matrix_sdk::ThreadingSupport::Enabled {
+                    with_subscriptions: false,
+                })
                 .homeserver_url(&fixture.homeserver)
                 .add_root_certificates(vec![certificate])
                 .build()
@@ -1375,4 +1385,676 @@ async fn revoked_device_and_soft_logout_recovery() {
         assert!(!path.exists());
         assert!(checked(context.session_store.load().await, "credential cleanup").is_none());
     }
+}
+
+#[tokio::test]
+#[ignore = "requires isolated Synapse fixture"]
+async fn threads_send_paginate_receipts_and_closed_unread() {
+    use matrix_sdk::ruma::events::{
+        receipt::{ReceiptThread, ReceiptType},
+        room::message::RoomMessageEventContent,
+    };
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-data/local/integration");
+    let fixture: Fixture = checked(
+        serde_json::from_slice(&checked(
+            tokio::fs::read(root.join("fixture.json")).await,
+            "fixture",
+        )),
+        "parse fixture",
+    );
+    assert!(
+        fixture.homeserver == "https://127.0.0.1:18448",
+        "Loopback fixture only"
+    );
+    let cert = checked(
+        Certificate::from_pem(&checked(
+            tokio::fs::read(root.join("ca.crt")).await,
+            "test CA",
+        )),
+        "parse CA",
+    );
+    let run = root.join(format!("threads-{}", Uuid::new_v4()));
+    let alice_client = test_client(&run, "alice", &Uuid::new_v4().to_string(), &cert).await;
+    let bob_client = test_client(&run, "bob", &Uuid::new_v4().to_string(), &cert).await;
+    checked(
+        alice_client
+            .matrix_auth()
+            .login_username("alice", &fixture.alice)
+            .await,
+        "Alice login",
+    );
+    checked(
+        bob_client
+            .matrix_auth()
+            .login_username("bob", &fixture.bob)
+            .await,
+        "Bob login",
+    );
+    checked(
+        alice_client
+            .account()
+            .set_display_name(Some("Sample Alice"))
+            .await,
+        "Alice name",
+    );
+    checked(
+        bob_client
+            .account()
+            .set_display_name(Some("Sample Bob"))
+            .await,
+        "Bob name",
+    );
+    let alice = Account::new(
+        alice_client,
+        run.join("alice"),
+        secrets::SessionStore::new("matrix-client.integration.unused"),
+        Arc::new(Mutex::new(())),
+    );
+    let bob = Account::new(
+        bob_client,
+        run.join("bob"),
+        secrets::SessionStore::new("matrix-client.integration.unused"),
+        Arc::new(Mutex::new(())),
+    );
+    let alice_sync = sync(&alice);
+    let bob_sync = sync(&bob);
+    let mut request = create_room::v3::Request::new();
+    request.name = Some("Isolated thread acceptance".into());
+    request.invite = vec![bob.client.user_id().expect("Bob").to_owned()];
+    let room = checked(alice.client.create_room(request).await, "room");
+    let id = room.room_id().to_owned();
+    checked(bob.client.join_room_by_id(&id).await, "join");
+    wait_for_room(&alice, &id).await;
+    wait_for_room(&bob, &id).await;
+
+    alice.select_room(Some(id.as_str()));
+    bob.select_room(Some(id.as_str()));
+    let root_event = checked(
+        room.send(RoomMessageEventContent::text_plain("thread root sample"))
+            .await,
+        "send root",
+    )
+    .response
+    .event_id;
+    let mut main = Box::pin(bob.conversation_updates(id.to_string(), 1));
+    let main_state = wait_snapshot(
+        &mut main,
+        |s| {
+            s.messages
+                .iter()
+                .any(|m| m.event_id.as_deref() == Some(root_event.as_str()))
+        },
+        "main root",
+    )
+    .await;
+    let main_conversation = main_state.conversation.expect("main timeline");
+    let mut alice_thread =
+        Box::pin(alice.thread_updates(id.to_string(), root_event.to_string(), 2));
+    let alice_state = wait_snapshot(
+        &mut alice_thread,
+        |s| s.conversation.is_some(),
+        "Alice thread",
+    )
+    .await;
+    let alice_conversation = alice_state.conversation.expect("Alice timeline");
+    checked(
+        alice_conversation.send("thread seed sample".into()).await,
+        "start new thread through SDK",
+    );
+    checked(
+        alice_conversation.send("thread send sample".into()).await,
+        "send through SDK thread",
+    );
+    let mut bob_thread = Box::pin(bob.thread_updates(id.to_string(), root_event.to_string(), 3));
+    let bob_state = wait_snapshot(
+        &mut bob_thread,
+        |s| s.messages.iter().any(|m| m.body == "thread send sample"),
+        "Bob receives threaded send",
+    )
+    .await;
+    let bob_conversation = bob_state.conversation.expect("Bob timeline");
+    let latest = bob_state
+        .messages
+        .iter()
+        .find(|m| m.body == "thread send sample")
+        .and_then(|m| m.event_id.clone())
+        .expect("remote thread reply");
+    checked(bob_conversation.mark_read(&latest).await, "thread receipt");
+    checked(
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                if room
+                    .load_user_receipt(
+                        ReceiptType::Read,
+                        &ReceiptThread::Thread(root_event.clone()),
+                        bob.client.user_id().expect("Bob"),
+                    )
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some_and(|(event, _)| event.as_str() == latest)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await,
+        "thread-scoped receipt received by Alice",
+    );
+    wait_snapshot(
+        &mut alice_thread,
+        |s| {
+            s.messages.iter().any(|m| {
+                m.event_id.as_deref() == Some(latest.as_str()) && m.read_by.contains(&bob.user_id())
+            })
+        },
+        "typed thread receipt projection",
+    )
+    .await;
+    checked(
+        bob_conversation.send("thread response sample".into()).await,
+        "Bob sends in thread",
+    );
+    wait_snapshot(
+        &mut alice_thread,
+        |s| {
+            s.messages
+                .iter()
+                .any(|m| m.body == "thread response sample")
+        },
+        "Alice receives Bob reply",
+    )
+    .await;
+    drop(bob_thread);
+    for ix in 0..65 {
+        checked(
+            alice_conversation
+                .send(format!("pagination sample {ix}"))
+                .await,
+            "thread send queue",
+        );
+    }
+    let mut reopened = Box::pin(bob.thread_updates(id.to_string(), root_event.to_string(), 4));
+    let latest_state = wait_snapshot(
+        &mut reopened,
+        |s| s.messages.iter().any(|m| m.body == "pagination sample 64"),
+        "closed thread receive",
+    )
+    .await;
+    let reopened_conversation = latest_state.conversation.clone().expect("reopened thread");
+    assert!(
+        latest_state.unread > 0,
+        "closed thread unread must survive reopening"
+    );
+    let main_state = wait_snapshot(
+        &mut main,
+        |s| {
+            s.messages
+                .iter()
+                .any(|m| m.thread_replies >= 68 && m.thread_unread > 0)
+        },
+        "live root reply summary",
+    )
+    .await;
+    assert!(
+        !main_state
+            .messages
+            .iter()
+            .any(|m| m.body.starts_with("pagination sample") || m.body == "thread send sample"),
+        "main timeline must hide threaded replies"
+    );
+    checked(
+        main_conversation.mark_read(root_event.as_str()).await,
+        "main-scoped receipt",
+    );
+    assert!(
+        checked(
+            reopened_conversation.unread(root_event.as_str()).await,
+            "closed unread"
+        ) > 0,
+        "reading main must not clear thread unread"
+    );
+    let mut state = latest_state;
+    for _ in 0..8 {
+        if state
+            .messages
+            .iter()
+            .any(|m| m.body == "thread seed sample")
+        {
+            break;
+        }
+        checked(reopened_conversation.older().await, "thread pagination");
+        state = wait_snapshot(
+            &mut reopened,
+            |s| s.messages.len() > state.messages.len(),
+            "earlier thread page",
+        )
+        .await;
+    }
+    assert!(
+        state
+            .messages
+            .iter()
+            .any(|m| m.body == "thread seed sample"),
+        "thread pagination must reach first reply"
+    );
+    let ids = state
+        .messages
+        .iter()
+        .map(|m| &m.id)
+        .collect::<std::collections::HashSet<_>>();
+    assert!(
+        ids.len() == state.messages.len(),
+        "thread IDs must remain unique"
+    );
+    checked(alice.client.matrix_auth().logout().await, "Alice logout");
+    checked(bob.client.matrix_auth().logout().await, "Bob logout");
+    alice_sync.abort();
+    bob_sync.abort();
+    println!(
+        "PASS: SDK thread send/receive, pagination, scoped receipts, main filtering and closed-thread unread"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires isolated Synapse fixture"]
+async fn spaces_hierarchy_invites_creation_restricted_join_and_selective_leave() {
+    use crate::space_actions::{CreateRoom, JoinAccess};
+    use matrix_sdk::ruma::{
+        events::{
+            room::join_rules::RoomJoinRulesEventContent, space::child::SpaceChildEventContent,
+        },
+        room::RoomType,
+    };
+    use matrix_sdk_ui::spaces::SpaceService;
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-data/local/integration");
+    #[derive(Deserialize)]
+    struct SpaceFixture {
+        homeserver: String,
+        scenario_alice_username: String,
+        scenario_alice_password: String,
+        scenario_bob_username: String,
+        scenario_bob_password: String,
+    }
+    let fixture: SpaceFixture = checked(
+        serde_json::from_slice(&checked(
+            tokio::fs::read(root.join("fixture.json")).await,
+            "fixture",
+        )),
+        "parse fixture",
+    );
+    assert!(
+        fixture.homeserver == "https://127.0.0.1:18448",
+        "Loopback fixture only"
+    );
+    let cert = checked(
+        Certificate::from_pem(&checked(
+            tokio::fs::read(root.join("ca.crt")).await,
+            "test CA",
+        )),
+        "parse CA",
+    );
+    let run = root.join(format!("spaces-{}", Uuid::new_v4()));
+    let alice_client = test_client(&run, "alice", &Uuid::new_v4().to_string(), &cert).await;
+    let bob_client = test_client(&run, "bob", &Uuid::new_v4().to_string(), &cert).await;
+    checked(
+        alice_client
+            .matrix_auth()
+            .login_username(
+                &fixture.scenario_alice_username,
+                &fixture.scenario_alice_password,
+            )
+            .await,
+        "Alice login",
+    );
+    checked(
+        bob_client
+            .matrix_auth()
+            .login_username(
+                &fixture.scenario_bob_username,
+                &fixture.scenario_bob_password,
+            )
+            .await,
+        "Bob login",
+    );
+    checked(
+        alice_client
+            .account()
+            .set_display_name(Some("Sample Alice"))
+            .await,
+        "Alice name",
+    );
+    checked(
+        bob_client
+            .account()
+            .set_display_name(Some("Sample Bob"))
+            .await,
+        "Bob name",
+    );
+    let alice = Account::new(
+        alice_client,
+        run.join("alice"),
+        secrets::SessionStore::new("matrix-client.integration.unused"),
+        Arc::new(Mutex::new(())),
+    );
+    let bob = Account::new(
+        bob_client,
+        run.join("bob"),
+        secrets::SessionStore::new("matrix-client.integration.unused"),
+        Arc::new(Mutex::new(())),
+    );
+    let alice_sync = sync(&alice);
+    let bob_sync = sync(&bob);
+
+    let mut request = create_room::v3::Request::new();
+    request.name = Some("Isolated public space".into());
+    request.preset = Some(create_room::v3::RoomPreset::PublicChat);
+    let mut creation = create_room::v3::CreationContent::new();
+    creation.room_type = Some(RoomType::Space);
+    request.creation_content = Some(checked(Raw::new(&creation), "space creation content"));
+    let parent = checked(alice.client.create_room(request).await, "public space");
+    let parent_id = parent.room_id().to_owned();
+    let via = alice
+        .client
+        .user_id()
+        .expect("Alice")
+        .server_name()
+        .to_owned();
+    let mut request = create_room::v3::Request::new();
+    request.name = Some("Isolated private nested space".into());
+    request.preset = Some(create_room::v3::RoomPreset::PrivateChat);
+    request.creation_content = Some(checked(Raw::new(&creation), "nested creation content"));
+    let nested = checked(
+        alice.client.create_room(request).await,
+        "private nested space",
+    );
+    let nested_id = nested.room_id().to_owned();
+    checked(
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if parent.is_space() && nested.is_space() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await,
+        "space state synced",
+    );
+    let _space_sync = checked(
+        alice
+            .sync_rooms(vec![parent_id.clone(), nested_id.clone()])
+            .await,
+        "spaces fully synced",
+    );
+    let service = SpaceService::new(alice.client.clone()).await;
+    if let Err(error) = service
+        .add_child_to_space(nested_id.clone(), parent_id.clone())
+        .await
+    {
+        use matrix_sdk_ui::spaces::Error;
+        match error {
+            Error::UpdateRelationship(e) => panic!(
+                "Nested forward relationship failed, HTTP status: {:?}",
+                e.as_client_api_error().map(|e| e.status_code.as_u16())
+            ),
+            Error::UpdateInverseRelationship(e) => panic!(
+                "Nested inverse relationship failed, HTTP status: {:?}",
+                e.as_client_api_error().map(|e| e.status_code.as_u16())
+            ),
+            _ => panic!("Nested relationship failed before update"),
+        }
+    }
+    checked(
+        alice.join_space(parent_id.as_str()).await,
+        "idempotent space join",
+    );
+    checked(
+        bob.join_space(parent_id.as_str()).await,
+        "Bob joins public space",
+    );
+    wait_for_room(&bob, &parent_id).await;
+    let encrypted = (alice
+        .create_room(CreateRoom {
+            name: "Encrypted space child".into(),
+            topic: "Sample topic".into(),
+            encrypted: true,
+            parent: Some(parent_id.to_string()),
+        })
+        .await)
+        .unwrap_or_else(|error| panic!("Encrypted child creation failed: {error}"));
+    let child_id = checked(matrix_sdk::ruma::RoomId::parse(&encrypted), "child ID");
+    let child = alice.client.get_room(&child_id).expect("created child");
+    // Rooms created in a space must be joinable by its members, not invite-only.
+    checked(
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while !matches!(
+                child.join_rule(),
+                Some(matrix_sdk::ruma::events::room::join_rules::JoinRule::Restricted(_))
+            ) {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await,
+        "space child uses a restricted join rule",
+    );
+    checked(
+        child
+            .invite_user_by_id(bob.client.user_id().expect("Bob"))
+            .await,
+        "room invitation",
+    );
+    checked(
+        nested
+            .invite_user_by_id(bob.client.user_id().expect("Bob"))
+            .await,
+        "private space invitation",
+    );
+    let dm = checked(alice.start_dm(&bob.user_id()).await, "create encrypted DM");
+    checked(
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let invites = bob.invites().await;
+                if invites.iter().any(|i| i.id == encrypted)
+                    && invites
+                        .iter()
+                        .any(|i| i.id == nested_id.as_str() && i.space)
+                    && invites.iter().any(|i| i.id == dm && i.direct)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await,
+        "typed room/space/DM invites",
+    );
+    checked(
+        bob.respond_to_invite(&encrypted, true).await,
+        "accept child invite",
+    );
+    checked(
+        bob.respond_to_invite(nested_id.as_str(), true).await,
+        "accept private space invite",
+    );
+    checked(bob.respond_to_invite(&dm, false).await, "decline DM invite");
+    wait_for_room(&bob, &child_id).await;
+    wait_for_room(&bob, &nested_id).await;
+    checked(
+        service
+            .add_child_to_space(child_id.clone(), nested_id.clone())
+            .await,
+        "multi-parent child link",
+    );
+    let restricted = checked(
+        alice
+            .client
+            .create_room(create_room::v3::Request::new())
+            .await,
+        "restricted child",
+    );
+    let rules: RoomJoinRulesEventContent = checked(
+        serde_json::from_value(
+            serde_json::json!({"join_rule":"restricted","allow":[{"type":"m.room_membership","room_id":parent_id}]}),
+        ),
+        "restricted join rule",
+    );
+    checked(restricted.send_state_event(rules).await, "restricted state");
+    let mut suggested = SpaceChildEventContent::new(vec![via.clone()]);
+    suggested.suggested = true;
+    checked(
+        parent
+            .send_state_event_for_key(restricted.room_id(), suggested)
+            .await,
+        "suggested restricted child",
+    );
+    // Synapse caps hierarchy pages at 50 rooms. Force a real continuation.
+    for ix in 0..52 {
+        let mut request = create_room::v3::Request::new();
+        request.name = Some(format!("Directory pagination sample {ix}"));
+        request.preset = Some(create_room::v3::RoomPreset::PublicChat);
+        let extra = checked(alice.client.create_room(request).await, "pagination child");
+        checked(
+            parent
+                .send_state_event_for_key(
+                    extra.room_id(),
+                    SpaceChildEventContent::new(vec![via.clone()]),
+                )
+                .await,
+            "pagination child link",
+        );
+    }
+    let hidden = checked(
+        alice
+            .client
+            .create_room(create_room::v3::Request::new())
+            .await,
+        "inaccessible private child",
+    );
+    checked(
+        parent
+            .send_state_event_for_key(
+                hidden.room_id(),
+                SpaceChildEventContent::new(vec![via.clone()]),
+            )
+            .await,
+        "inaccessible child link",
+    );
+    let directory = checked(bob.directory(parent_id.as_str()).await, "open hierarchy");
+    let mut page = checked(directory.next_page().await, "hierarchy first page");
+    assert!(
+        !page.end_reached,
+        "fixture must exercise a real hierarchy continuation"
+    );
+    for _ in 0..10 {
+        if page.end_reached {
+            break;
+        }
+        page = checked(directory.next_page().await, "hierarchy next page");
+    }
+    assert!(
+        page.rooms.len() >= 55,
+        "all accessible directory children must paginate"
+    );
+    assert_eq!(
+        page.rooms
+            .iter()
+            .map(|r| &r.id)
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        page.rooms.len()
+    );
+    assert!(
+        !page.rooms.iter().any(|r| r.id == hidden.room_id().as_str()),
+        "inaccessible private child must not expose a Join control"
+    );
+    assert!(
+        page.end_reached
+            && page
+                .rooms
+                .iter()
+                .any(|r| r.id == restricted.room_id().as_str()
+                    && r.access == JoinAccess::Restricted
+                    && r.suggested),
+        "restricted suggested child missing"
+    );
+    assert!(
+        page.rooms.iter().any(|r| r.id == encrypted && r.joined),
+        "joined child missing"
+    );
+    checked(
+        bob.join_room_or_space(restricted.room_id().as_str(), vec![via.to_string()])
+            .await,
+        "restricted join through allowed space",
+    );
+    assert!(
+        bob.create_room(CreateRoom {
+            name: "Must not be created".into(),
+            parent: Some(parent_id.to_string()),
+            encrypted: true,
+            ..Default::default()
+        })
+        .await
+        .is_err(),
+        "unprivileged user must not create in parent"
+    );
+    checked(
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if child.encryption_state().is_encrypted() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await,
+        "created child encryption",
+    );
+    let mut spaces = Box::pin(bob.space_updates());
+    checked(
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while let Some(snapshot) = spaces.next().await {
+                if snapshot
+                    .spaces
+                    .iter()
+                    .any(|s| s.id == parent_id.as_str() && s.room_ids.contains(&encrypted))
+                    && snapshot
+                        .spaces
+                        .iter()
+                        .any(|s| s.id == nested_id.as_str() && s.room_ids.contains(&encrypted))
+                {
+                    break;
+                }
+            }
+        })
+        .await,
+        "multi-parent navigation",
+    );
+    let plan = checked(
+        bob.plan_leave_space(parent_id.as_str()).await,
+        "SDK leave plan",
+    );
+    assert!(
+        plan.rooms.iter().any(|r| r.id == encrypted && r.shared),
+        "shared child must be offered explicitly"
+    );
+    checked(
+        plan.leave(std::collections::HashSet::from([parent_id.to_string()]))
+            .await,
+        "leave only selected parent",
+    );
+    assert!(
+        bob.client
+            .get_room(&child_id)
+            .is_some_and(|r| r.state() == matrix_sdk::RoomState::Joined),
+        "space leave must preserve unselected child"
+    );
+    checked(alice.client.matrix_auth().logout().await, "Alice logout");
+    checked(bob.client.matrix_auth().logout().await, "Bob logout");
+    alice_sync.abort();
+    bob_sync.abort();
+    println!(
+        "PASS: SDK nested/private hierarchy, restricted join, invites, encrypted creation, multi-parent navigation and selective leave"
+    );
 }

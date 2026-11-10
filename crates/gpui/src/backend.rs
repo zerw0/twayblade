@@ -32,15 +32,34 @@ pub(super) struct Snapshot {
     pub(super) user_id: String,
     pub(super) rooms: Vec<Room>,
     pub(super) spaces: Vec<Space>,
+    pub(super) invites: Vec<matrix_client_core::space_actions::Invite>,
     pub(super) spaces_loaded: bool,
     pub(super) selected_room: String,
     pub(super) messages: Vec<Message>,
+    pub(super) thread: Option<ThreadSnapshot>,
     pub(super) timeline_ready: bool,
     pub(super) members: Vec<Member>,
     pub(super) members_state: MembersState,
     pub(super) typing: Vec<String>,
     pub(super) sync_status: String,
     pub(super) timeline_status: String,
+}
+
+#[derive(Clone)]
+pub(super) struct ThreadSnapshot {
+    pub room: String,
+    pub root: String,
+    pub request: u64,
+    pub messages: Vec<Message>,
+    pub status: TimelineStatus,
+    pub ready: bool,
+    pub unread: u64,
+}
+
+pub(super) enum ThreadAction {
+    Send(String),
+    Older,
+    Timeline(TimelineAction),
 }
 
 pub(super) struct LoginOptions {
@@ -72,18 +91,31 @@ struct State {
     selection: u64,
     tasks: Vec<JoinHandle<()>>,
     timeline_task: Option<JoinHandle<()>>,
+    thread_task: Option<JoinHandle<()>>,
+    thread_conversation: Option<Conversation>,
+    thread_request: u64,
+    directory: Option<matrix_client_core::space_actions::Directory>,
+    directory_request: u64,
+    leave_request: u64,
+    leave_plan: Option<(String, Arc<matrix_client_core::space_actions::LeavePlan>)>,
     typing_intent: Option<watch::Sender<Option<(String, bool)>>>,
 }
 
 impl State {
     fn stop(&mut self) {
         self.security = None;
+        self.directory = None;
+        self.leave_plan = None;
         for task in self.tasks.drain(..) {
             task.abort();
         }
         if let Some(task) = self.timeline_task.take() {
             task.abort();
         }
+        if let Some(task) = self.thread_task.take() {
+            task.abort();
+        }
+        self.thread_conversation = None;
         self.conversation = None;
         self.typing_intent = None;
         self.epoch = self.epoch.wrapping_add(1);
@@ -120,11 +152,64 @@ pub(super) struct Backend {
     oauth: Mutex<Option<BrowserLogin>>,
 }
 
+pub(super) fn render_viewer_image(
+    image: &mut matrix_client_core::conversation::ViewerImage,
+) -> Arc<gpui_kit::RenderImage> {
+    let mut frames = std::mem::take(&mut image.frames);
+    for frame in &mut frames {
+        for pixel in frame.buffer_mut().pixels_mut() {
+            pixel.0.swap(0, 2);
+        }
+    }
+    Arc::new(gpui_kit::RenderImage::new(frames))
+}
+
 fn publish(sender: &watch::Sender<Snapshot>, update: impl FnOnce(&mut Snapshot)) {
     sender.send_modify(|snapshot| {
         update(snapshot);
         snapshot.revision = snapshot.revision.wrapping_add(1);
     });
+}
+
+pub(super) enum SpaceAction {
+    Directory(String),
+    NextDirectory(String),
+    Join(String, Vec<String>),
+    JoinSpace(String),
+    Invite(String, bool),
+    PlanLeave(String),
+    Leave(String, std::collections::HashSet<String>),
+    Create(matrix_client_core::space_actions::CreateRoom),
+    Dm(String),
+}
+pub(super) enum SpaceOutcome {
+    Directory(matrix_client_core::space_actions::DirectorySnapshot),
+    Leave(Vec<matrix_client_core::space_actions::LeaveCandidate>),
+    Room(String),
+    PartialRoom(String),
+    Done,
+}
+fn space_failure(error: matrix_client_core::space_actions::SpaceError) -> ServiceError {
+    use matrix_client_core::space_actions::SpaceError::*;
+    failure(match error {
+        InvalidId => "Enter a valid Matrix room or user ID and a room name when creating a room.",
+        NotSpace => "This ID belongs to a room. Enter a space ID or alias.",
+        Unavailable => "This space or invitation is no longer available. Refresh and try again.",
+        Permission => "You do not have permission to add rooms to this space.",
+        Hierarchy => "Rooms could not be loaded. The space may be private or inaccessible.",
+        Join => {
+            "Could not join. Restricted rooms require membership in an allowed space; private rooms require an invitation."
+        }
+        Leave => {
+            "Some rooms could not be left. Your remaining memberships are preserved; review and retry."
+        }
+        Create => {
+            "The conversation could not be created. Check your connection and server permissions."
+        }
+        ParentLink { .. } => {
+            "The room was created, but its space links could not be completed. Do not create it again."
+        }
+    })
 }
 
 pub(super) enum SecurityAction {
@@ -511,6 +596,10 @@ impl Backend {
         if let Some(task) = state.timeline_task.take() {
             task.abort();
         }
+        if let Some(task) = state.thread_task.take() {
+            task.abort();
+        }
+        state.thread_conversation = None;
         state.conversation = None;
         if let Some(typing) = &state.typing_intent {
             typing.send_replace(None);
@@ -522,6 +611,7 @@ impl Backend {
         publish(&self.updates, |snapshot| {
             snapshot.selected_room = room_id.clone();
             snapshot.messages.clear();
+            snapshot.thread = None;
             snapshot.timeline_ready = false;
             snapshot.members.clear();
             snapshot.members_state = MembersState::Loading;
@@ -583,6 +673,261 @@ impl Backend {
         Ok(())
     }
 
+    pub(super) fn select_thread(
+        &self,
+        room: String,
+        root: Option<String>,
+        account_id: u128,
+        request: u64,
+    ) -> Result<(), ServiceError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session unavailable."))?;
+        let account = state
+            .account
+            .clone()
+            .filter(|a| a.instance_id() == account_id)
+            .ok_or_else(|| failure("Account changed."))?;
+        if self.updates.borrow().selected_room != room || request < state.thread_request {
+            return Err(failure("Conversation changed."));
+        }
+        state.thread_request = request;
+        if let Some(task) = state.thread_task.take() {
+            task.abort();
+        }
+        state.thread_conversation = None;
+        publish(&self.updates, |view| view.thread = None);
+        let Some(root) = root else {
+            return Ok(());
+        };
+        let epoch = state.epoch;
+        let selection = state.selection;
+        let shared = self.state.clone();
+        let updates = self.updates.clone();
+        state.thread_task = Some(self.runtime.spawn(async move {
+            let stream = account.thread_updates(room.clone(), root.clone(), request);
+            tokio::pin!(stream);
+            while let Some(snapshot) = stream.next().await {
+                let Ok(mut state) = shared.lock() else {
+                    return;
+                };
+                if state.epoch != epoch
+                    || state.selection != selection
+                    || state.thread_request != request
+                {
+                    return;
+                }
+                state.thread_conversation = snapshot.conversation;
+                publish(&updates, |view| {
+                    view.thread = Some(ThreadSnapshot {
+                        room: room.clone(),
+                        root: root.clone(),
+                        request,
+                        messages: snapshot.messages,
+                        status: snapshot.status,
+                        ready: state.thread_conversation.is_some(),
+                        unread: snapshot.unread,
+                    })
+                });
+            }
+        }));
+        Ok(())
+    }
+
+    pub(super) fn thread_action(
+        &self,
+        room: String,
+        root: String,
+        account: u128,
+        request: u64,
+        action: ThreadAction,
+    ) -> Result<bool, ServiceError> {
+        let conversation = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| failure("Session unavailable."))?;
+            if state.account.as_ref().map(Account::instance_id) != Some(account)
+                || state.thread_request != request
+                || !self
+                    .updates
+                    .borrow()
+                    .thread
+                    .as_ref()
+                    .is_some_and(|t| t.root == root && t.room == room)
+            {
+                return Err(failure("Thread changed."));
+            }
+            state
+                .thread_conversation
+                .clone()
+                .ok_or_else(|| failure("Thread is loading."))?
+        };
+        self.runtime
+            .block_on(async move {
+                match action {
+                    ThreadAction::Send(body) => conversation.send(body).await.map(|_| false),
+                    ThreadAction::Older => conversation.older().await,
+                    ThreadAction::Timeline(action) => match action {
+                        TimelineAction::Read { event_id } => {
+                            conversation.mark_read(&event_id).await
+                        }
+                        TimelineAction::React { message, key } => {
+                            conversation.toggle_reaction(&message, &key).await
+                        }
+                        TimelineAction::Retry { message } => conversation.retry(&message).await,
+                        TimelineAction::Cancel { message } => conversation.cancel(&message).await,
+                    }
+                    .map(|_| false),
+                }
+            })
+            .map_err(conversation_failure)
+    }
+
+    pub(super) fn space_action(
+        &self,
+        expected: u128,
+        request: u64,
+        action: SpaceAction,
+    ) -> Result<SpaceOutcome, ServiceError> {
+        let account = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| failure("Session unavailable."))?;
+            match &action {
+                SpaceAction::Directory(_) => {
+                    if request < state.directory_request {
+                        return Err(failure("Directory changed."));
+                    }
+                    state.directory_request = request;
+                }
+                SpaceAction::PlanLeave(_) => {
+                    if request < state.leave_request {
+                        return Err(failure("Leave selection changed."));
+                    }
+                    state.leave_request = request;
+                }
+                _ => {}
+            }
+            state
+                .account
+                .clone()
+                .filter(|a| a.instance_id() == expected)
+                .ok_or_else(|| failure("Account changed."))?
+        };
+        self.runtime.block_on(async {
+            use SpaceAction::*;
+            let result = match action {
+                Directory(id) => {
+                    let directory = account.directory(&id).await.map_err(space_failure)?;
+                    let snapshot = directory.next_page().await.map_err(space_failure)?;
+                    let mut state = self
+                        .state
+                        .lock()
+                        .map_err(|_| failure("Session unavailable."))?;
+                    if state.account.as_ref().map(Account::instance_id) != Some(expected) {
+                        return Err(failure("Account changed."));
+                    }
+                    if state.directory_request != request {
+                        return Err(failure("Directory changed."));
+                    }
+                    state.directory = Some(directory);
+                    Ok(SpaceOutcome::Directory(snapshot))
+                }
+                NextDirectory(id) => {
+                    let directory = self
+                        .state
+                        .lock()
+                        .map_err(|_| failure("Session unavailable."))?
+                        .directory
+                        .clone()
+                        .ok_or_else(|| failure("Open the directory again."))?;
+                    let snapshot = directory.snapshot().await;
+                    if snapshot.space != id {
+                        return Err(failure("Directory changed."));
+                    }
+                    directory
+                        .next_page()
+                        .await
+                        .map(SpaceOutcome::Directory)
+                        .map_err(space_failure)
+                }
+                JoinSpace(id) => account
+                    .join_space(&id)
+                    .await
+                    .map(SpaceOutcome::Room)
+                    .map_err(space_failure),
+                Join(id, via) => account
+                    .join_room_or_space(&id, via)
+                    .await
+                    .map(SpaceOutcome::Room)
+                    .map_err(space_failure),
+                Invite(id, accept) => account
+                    .respond_to_invite(&id, accept)
+                    .await
+                    .map(|_| SpaceOutcome::Done)
+                    .map_err(space_failure),
+                PlanLeave(id) => {
+                    let plan = account.plan_leave_space(&id).await.map_err(space_failure)?;
+                    let rooms = plan.rooms.clone();
+                    let mut state = self
+                        .state
+                        .lock()
+                        .map_err(|_| failure("Session unavailable."))?;
+                    if state.account.as_ref().map(Account::instance_id) != Some(expected) {
+                        return Err(failure("Account changed."));
+                    }
+                    if state.leave_request != request {
+                        return Err(failure("Leave selection changed."));
+                    }
+                    state.leave_plan = Some((id, Arc::new(plan)));
+                    Ok(SpaceOutcome::Leave(rooms))
+                }
+                Leave(id, selected) => {
+                    let plan = self
+                        .state
+                        .lock()
+                        .map_err(|_| failure("Session unavailable."))?
+                        .leave_plan
+                        .as_ref()
+                        .filter(|(space, _)| space == &id)
+                        .map(|(_, p)| p.clone())
+                        .ok_or_else(|| failure("Review the leave selection again."))?;
+                    plan.leave(selected)
+                        .await
+                        .map(|_| SpaceOutcome::Done)
+                        .map_err(space_failure)
+                }
+                Create(draft) => match account.create_room(draft).await {
+                    Ok(id) => Ok(SpaceOutcome::Room(id)),
+                    Err(matrix_client_core::space_actions::SpaceError::ParentLink { room }) => {
+                        Ok(SpaceOutcome::PartialRoom(room))
+                    }
+                    Err(e) => Err(space_failure(e)),
+                },
+                Dm(id) => account
+                    .start_dm(&id)
+                    .await
+                    .map(SpaceOutcome::Room)
+                    .map_err(space_failure),
+            };
+            if self
+                .state
+                .lock()
+                .map_err(|_| failure("Session unavailable."))?
+                .account
+                .as_ref()
+                .map(Account::instance_id)
+                != Some(expected)
+            {
+                return Err(failure("Account changed."));
+            }
+            result
+        })
+    }
+
     pub(super) fn profile(
         &self,
         user_id: String,
@@ -618,6 +963,10 @@ impl Backend {
             task.abort();
         }
         state.selection = state.selection.wrapping_add(1);
+        if let Some(task) = state.thread_task.take() {
+            task.abort();
+        }
+        state.thread_conversation = None;
         state.conversation = None;
         if let Some(typing) = &state.typing_intent {
             typing.send_replace(None);
@@ -628,6 +977,7 @@ impl Backend {
         publish(&self.updates, |snapshot| {
             snapshot.selected_room.clear();
             snapshot.messages.clear();
+            snapshot.thread = None;
             snapshot.timeline_ready = false;
             snapshot.members.clear();
             snapshot.members_state = MembersState::Loading;
@@ -687,6 +1037,46 @@ impl Backend {
             .block_on(conversation.send_attachment(draft))
             .map_err(media_failure)
     }
+    pub(super) fn viewer_image(
+        &self,
+        room: String,
+        account: u128,
+        message: String,
+        cancel: watch::Receiver<bool>,
+    ) -> Result<
+        (
+            Arc<matrix_client_core::conversation::ViewerImage>,
+            Arc<gpui_kit::RenderImage>,
+        ),
+        matrix_client_core::conversation::ImageError,
+    > {
+        use matrix_client_core::conversation::ImageError;
+        let conversation = {
+            let state = self.state.lock().map_err(|_| ImageError::Unavailable)?;
+            let view = self.updates.borrow();
+            if state.account.as_ref().map(Account::instance_id) != Some(account)
+                || view.selected_room != room
+            {
+                return Err(ImageError::Unavailable);
+            }
+            if view
+                .thread
+                .as_ref()
+                .is_some_and(|t| t.room == room && t.messages.iter().any(|m| m.id == message))
+            {
+                state.thread_conversation.clone()
+            } else {
+                state.conversation.clone()
+            }
+            .ok_or(ImageError::Unavailable)?
+        };
+        let mut image = self
+            .runtime
+            .block_on(conversation.viewer_image(&message, cancel))?;
+        let render = render_viewer_image(&mut image);
+        Ok((Arc::new(image), render))
+    }
+
     pub(super) fn media_action(
         &self,
         room: String,
@@ -694,7 +1084,27 @@ impl Backend {
         message: String,
         path: Option<std::path::PathBuf>,
     ) -> Result<(), ServiceError> {
-        let conversation = self.media_conversation(&room, account)?;
+        let main = self.media_conversation(&room, account)?;
+        let conversation = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| failure("Session unavailable."))?;
+            if self
+                .updates
+                .borrow()
+                .thread
+                .as_ref()
+                .is_some_and(|t| t.room == room && t.messages.iter().any(|m| m.id == message))
+            {
+                state
+                    .thread_conversation
+                    .clone()
+                    .ok_or_else(|| failure("Thread changed."))?
+            } else {
+                main
+            }
+        };
         self.runtime
             .block_on(async {
                 match path {
@@ -927,6 +1337,7 @@ impl Backend {
                 publish(&updates, |view| {
                     view.sync_status = sync_status_text(snapshot.status).into();
                     view.rooms = snapshot.rooms;
+                    view.invites = snapshot.invites;
                 });
             }
         }));

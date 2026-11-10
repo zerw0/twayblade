@@ -27,6 +27,7 @@ pub struct RoomSummary {
 pub struct RoomSnapshot {
     pub account_instance: u128,
     pub rooms: Vec<RoomSummary>,
+    pub invites: Vec<crate::space_actions::Invite>,
     pub status: SyncStatus,
 }
 
@@ -70,14 +71,87 @@ impl Drop for StopOnDrop {
     }
 }
 
+pub(crate) struct RoomSyncLease {
+    account: Account,
+    rooms: Vec<matrix_sdk::ruma::OwnedRoomId>,
+}
+impl Drop for RoomSyncLease {
+    fn drop(&mut self) {
+        if let Ok(mut requests) = self.account.sync_requests.lock() {
+            for id in &self.rooms {
+                if let Some(count) = requests.get_mut(id) {
+                    *count -= 1;
+                    if *count == 0 {
+                        requests.remove(id);
+                    }
+                }
+            }
+            self.account
+                .sync_request_updates
+                .send_replace(requests.keys().cloned().collect());
+        }
+    }
+}
+
 impl Account {
+    /// Temporarily subscribe operations to the required SDK room state without changing
+    /// the frontend selection. Overlapping operations share reference counts.
+    pub(crate) async fn sync_rooms(
+        &self,
+        rooms: Vec<matrix_sdk::ruma::OwnedRoomId>,
+    ) -> Result<RoomSyncLease, ()> {
+        let rooms: Vec<_> = rooms
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        {
+            let mut requests = self.sync_requests.lock().map_err(|_| ())?;
+            for id in &rooms {
+                *requests.entry(id.clone()).or_default() += 1;
+            }
+            self.sync_request_updates
+                .send_replace(requests.keys().cloned().collect());
+        }
+        let lease = RoomSyncLease {
+            account: self.clone(),
+            rooms,
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            for id in &lease.rooms {
+                let room = self.client.get_room(id).ok_or(())?;
+                // Native sliding sync is intentionally partial: `sync_up()`
+                // waits for all room state and cannot complete on this path.
+                // Wait only for the SDK records needed for permissions/routing.
+                loop {
+                    if room.create_content().is_some()
+                        && room.power_levels().await.is_ok()
+                        && room
+                            .get_member_no_sync(room.own_user_id())
+                            .await
+                            .ok()
+                            .flatten()
+                            .is_some()
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            }
+            Ok::<_, ()>(())
+        })
+        .await
+        .map_err(|_| ())??;
+        Ok(lease)
+    }
+
     pub fn room_updates(&self) -> impl Stream<Item = RoomSnapshot> + Send + 'static + use<> {
         let account = self.clone();
         async_stream::stream! {
             let mut session_state = account.session_state();
             let mut rooms = imbl::Vector::<RoomSummary>::new();
             let snapshot = |rooms: &imbl::Vector<RoomSummary>, status| RoomSnapshot {
-                account_instance: account.instance_id(), rooms: rooms.iter().cloned().collect(), status,
+                account_instance: account.instance_id(), rooms: rooms.iter().cloned().collect(), invites: Vec::new(), status,
             };
             if *session_state.borrow_and_update() != crate::auth::SessionState::Active {
                 yield snapshot(&rooms, SyncStatus::Stopped);
@@ -103,15 +177,20 @@ impl Account {
             controller.set_filter(Box::new(filters::new_filter_joined()));
             let mut changes = Box::pin(changes);
             let mut selection = account.selected_room.subscribe();
-            let initial = selection.borrow_and_update().clone();
-            if let Some(id) = initial {
-                service.room_list_service().set_room_subscriptions(&[id.as_ref()]).await;
-            }
+            let mut all_updates = account.client.subscribe_to_all_room_updates();
+            let mut requested = account.sync_request_updates.subscribe();
+            let mut initial = requested.borrow_and_update().clone();
+            initial.extend(selection.borrow_and_update().clone());
+            let ids: Vec<_> = initial.iter().map(|id| id.as_ref()).collect();
+            service.room_list_service().set_room_subscriptions(&ids).await;
             service.start().await;
             let mut status = SyncStatus::Syncing;
             loop {
-                yield snapshot(&rooms, status);
+                let mut current = snapshot(&rooms, status);
+                current.invites = account.invites().await;
+                yield current;
                 tokio::select! {
+                    change = all_updates.recv() => { if matches!(change, Err(tokio::sync::broadcast::error::RecvError::Closed)) { break; } }
                     _ = session_state.changed() => {
                         if *session_state.borrow_and_update() != crate::auth::SessionState::Active {
                             service.stop().await;
@@ -122,7 +201,14 @@ impl Account {
                     result = selection.changed() => {
                         if result.is_err() { break; }
                         let selected = selection.borrow_and_update().clone();
-                        let ids: Vec<_> = selected.iter().map(|id| id.as_ref()).collect();
+                        let mut subscriptions = requested.borrow().clone(); subscriptions.extend(selected);
+                        let ids: Vec<_> = subscriptions.iter().map(|id| id.as_ref()).collect();
+                        service.room_list_service().set_room_subscriptions(&ids).await;
+                    }
+                    change = requested.changed() => {
+                        if change.is_err() { break; }
+                        let mut subscriptions = requested.borrow_and_update().clone(); subscriptions.extend(selection.borrow().clone());
+                        let ids: Vec<_> = subscriptions.iter().map(|id| id.as_ref()).collect();
                         service.room_list_service().set_room_subscriptions(&ids).await;
                     }
                     next = state.next() => {

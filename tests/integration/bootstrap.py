@@ -161,6 +161,32 @@ def register_security():
     register([username])
 
 
+def register_pair():
+    fixture = json.loads(FIXTURE.read_text())
+    users = []
+    for role in ['alice', 'bob']:
+        username = 'scenario_' + role + '_' + secrets.token_hex(8)
+        password = secrets.token_urlsafe(32)
+        fixture[username] = password
+        fixture['scenario_' + role + '_username'] = username
+        fixture['scenario_' + role + '_password'] = password
+        users.append(username)
+    FIXTURE.write_text(json.dumps(fixture))
+    register(users)
+
+
+def spaces_config():
+    import yaml
+    path = ROOT / 'homeserver.yaml'
+    config = yaml.safe_load(path.read_text())
+    limits = {'per_second': 1000, 'burst_count': 1000}
+    config['rc_room_creation'] = limits.copy()
+    config['rc_joins'] = {'local': limits.copy(), 'remote': limits.copy()}
+    config['rc_invites'] = {key: limits.copy() for key in ['per_room', 'per_user', 'per_issuer']}
+    path.write_text(yaml.safe_dump(config))
+    print('Isolated hierarchy pagination rate limits configured.')
+
+
 def recovery_config():
     import yaml
     config = yaml.safe_load((ROOT / 'homeserver.yaml').read_text())
@@ -231,6 +257,10 @@ if __name__ == '__main__':
         action = sys.argv[1]
         if action == 'generate':
             generate()
+        elif action == 'spaces-config':
+            spaces_config()
+        elif action == 'register-pair':
+            register_pair()
         elif action == 'register-security':
             register_security()
         elif action == 'recovery-config':

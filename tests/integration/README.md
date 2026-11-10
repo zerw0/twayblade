@@ -152,3 +152,21 @@ Run `bash tests/integration/run.sh media` for generated-user plain/encrypted fil
 and image round trips, server thumbnail/download, oversize rejection, queue cancel
 and persisted upload restart. This does not simulate interrupting an HTTP request
 mid-transfer or exercise native file dialogs/clipboard/drop.
+
+Thread acceptance: `nix develop --command bash tests/integration/run.sh threads`
+uses the same isolated Synapse and generated accounts. It starts a thread through
+the SDK, exchanges replies, paginates, checks scoped receipts and unread replies
+arriving with the thread closed. Run fixture commands sequentially.
+
+Spaces: `nix develop --command bash tests/integration/run.sh spaces` generates a
+fresh account pair and raises only the isolated server's creation/join/invite
+limits. The check creates 55 accessible directory children to cross Synapse's
+50-room hierarchy page cap, plus an inaccessible private child. It also covers
+restricted joins, invites, encrypted creation, multiple parents and selective leave.
+
+Viewer: `nix develop --command bash tests/integration/run.sh viewer` uses a fresh
+fixture user for plain/encrypted PNG, animated GIF/WebP, a 9000px image, corrupt
+bytes, explicit original-byte save and cancellation. It checks that viewer fetches
+do not put decrypted content in the SDK media cache. Offline GPUI tests cover
+keyboard, focus, clipboard, gestures and save prompts; native application opening,
+physical animation and Element interoperability still need operator acceptance.

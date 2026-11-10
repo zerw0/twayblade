@@ -6,7 +6,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
-image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
+image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 mime = "=0.3.17"
 mime_guess = "=2.0.5"
 imbl = "=7.0.2"
