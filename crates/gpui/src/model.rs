@@ -200,6 +200,7 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
                 excerpt: "A single Rust interface for every desktop.".into(),
             });
             message.kind = MessageKind::Notice;
+            message.edited = true;
         }
         if let Some(message) = snapshot.messages.get_mut(3) {
             message.kind = MessageKind::Emote;

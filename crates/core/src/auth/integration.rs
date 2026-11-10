@@ -149,6 +149,43 @@ async fn encrypted_delivery_profile_and_same_device_store_restore() {
         secrets::SessionStore::default(),
         Arc::new(Mutex::new(())),
     );
+    checked(
+        alice
+            .update_profile(crate::profile::ProfileUpdate::DisplayName(
+                "Integration Alice".into(),
+            ))
+            .await,
+        "edit account display name through core",
+    );
+    let avatar_path = run.join("avatar.png");
+    checked(
+        tokio::fs::write(
+            &avatar_path,
+            include_bytes!("../../../gpui/assets/attachment-sample.png"),
+        )
+        .await,
+        "prepare test avatar",
+    );
+    checked(
+        alice
+            .update_profile(crate::profile::ProfileUpdate::Avatar(avatar_path))
+            .await,
+        "edit account avatar through core",
+    );
+    assert!(checked(alice.client.account().get_avatar_url().await, "read avatar").is_some());
+    checked(
+        alice
+            .update_profile(crate::profile::ProfileUpdate::RemoveAvatar)
+            .await,
+        "remove test avatar",
+    );
+    assert!(
+        checked(
+            alice.client.account().get_avatar_url().await,
+            "read removed avatar"
+        )
+        .is_none()
+    );
     let alice_sync = sync(&alice);
     let bob_sync = sync(&bob);
     let device = bob.client.device_id().expect("test device").to_owned();

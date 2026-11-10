@@ -310,6 +310,35 @@ M3 review fixes (2026-11-10):
 - Thread panel: compact root header, "Load earlier replies" at the top,
   muted status line, composer matches the main field.
 
+Settings — M4 Task 1 (2026-11-10):
+- Versioned frontend JSON preferences with atomic replacement, defaults and corrupt/unknown-file backup; one separate Settings window with six sections, Security controls and SDK account name/avatar edits. Unimplemented controls remain hidden.
+- Locked fmt/strict Clippy/69 unit/UI tests pass; Settings light/dark samples reviewed; section navigation retains the main conversation and draft.
+- `encrypted_delivery_profile_and_same_device_store_restore` passes on isolated Synapse 1.164.2 (`matrixclient.test`), including core display-name/avatar update/removal. Operator checks: native menus/shortcut, file picker, account sign-out, security focus/VoiceOver. Appearance, Chat and Notifications controls follow in Tasks 2–5.
+
+Colour schemes and accent — M4 Task 2 (2026-11-10):
+- System/Light/Dark/High contrast and Solarized/Gruvbox/Nord variants; persisted system/custom accent with six swatches and Kit colour picker, applied live through semantic tokens.
+- Locked fmt/strict Clippy/82 unit/UI tests pass, including one contrast test per palette variant (4.5:1; High contrast 7:1) and live-control room/draft/timeline/thread preservation. Scheme light/dark samples captured; physical system transitions and picker/VoiceOver checks pending.
+- Frontend-only change; no new isolated-server check required. Task 1's Synapse account check remains separate evidence.
+
+Scaling and fonts — M4 Task 3 (2026-11-10):
+- 85–150% in 5% steps and View shortcuts; shared logical-pixel helper plus Kit type scale covers the workspace and panels. Responsive column caps retain conversation space. Installed-family selectors set interface/message/code fonts; message size is independent; missing families fall back safely.
+- Locked fmt/strict Clippy/83 tests pass; actual sidebar/composer scaling and font fallback tested; `captures/scale-{85,150}-{light,dark}.png` sample layouts reviewed. Frontend-only; no additional isolated-server check.
+- Physical checks pending: native shortcuts versus image zoom, font rendering/IME, live scale and reading-anchor behavior with long histories, Linux/Windows.
+
+Chat styles — M4 Task 4 (2026-11-10):
+- Shared Bubbles/IRC/Minimal renderer in the timeline and threads, persisted density/avatars/timestamps; SDK edit indicator and all existing reply/reaction/media/error controls retained. Style changes remeasure retained scrollers.
+- Locked fmt/strict Clippy/85 tests pass; control-driven style test preserves visible IDs, room, draft, reading anchor and open thread, and reaches existing message actions; edited/deleted states included. Light/dark style and attachment samples captured; thread samples included.
+- `timeline_metadata_and_send_queue_actions` passes on isolated Synapse 1.164.2 (`matrixclient.test`). Operator checks: keyboard/VoiceOver, long-history switching, real encrypted attachments and thread interactions. M4 notifications remain unimplemented.
+
+M4 review fixes (2026-11-10):
+- Choosing System after a forced Light/Dark scheme re-reads the OS appearance
+  (it previously stayed on the forced mode); regression test added.
+- Settings window restyled like the main window: sidebar under the traffic
+  lights with icon rows, section title in the toolbar, grouped form rows with
+  segmented controls, steppers, scheme thumbnails, accent dots and a switch.
+- General and Notifications are hidden from the sidebar until they have real
+  controls; Settings opens on Appearance.
+
 Not yet verified:
 - Physical GUI checks of logout, pagination, IME and VoiceOver.
 - CI on any host; Linux and Windows builds and runs.

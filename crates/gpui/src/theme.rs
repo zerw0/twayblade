@@ -1,6 +1,41 @@
 //! Product theme definitions. UI code consumes semantic Kit tokens only.
-use gpui_kit::component::Theme;
-use gpui_kit::{App, Global, Hsla, Rgba, px, rgb};
+use crate::preferences::{Appearance, Scheme, Variant};
+use gpui_kit::component::{Theme, ThemeMode};
+#[derive(Clone)]
+struct MessageFont(gpui_kit::SharedString);
+impl Global for MessageFont {}
+pub(super) fn message_font(cx: &App) -> gpui_kit::SharedString {
+    cx.try_global::<MessageFont>()
+        .map(|font| font.0.clone())
+        .unwrap_or_else(|| {
+            gpui_kit::component::ActiveTheme::theme(cx)
+                .font_family
+                .clone()
+        })
+}
+impl Global for Appearance {}
+pub(super) fn set_appearance(value: Appearance, cx: &mut App) {
+    cx.set_global(value);
+    apply(cx);
+}
+use gpui_kit::{App, Global, Hsla, Pixels, Rgba, rgb};
+thread_local! { static UI_SCALE: std::cell::Cell<f32> = const { std::cell::Cell::new(1.) }; }
+/// All frontend pixel dimensions share this scale. OS window bounds remain OS pixels.
+pub(super) fn scaled_px(value: f32) -> Pixels {
+    gpui_kit::px(value * UI_SCALE.with(|scale| scale.get()))
+}
+use scaled_px as px;
+pub(super) fn font_or_default(
+    saved: Option<&str>,
+    installed: &[String],
+    fallback: &str,
+) -> gpui_kit::SharedString {
+    saved
+        .filter(|name| installed.iter().any(|family| family == name))
+        .unwrap_or(fallback)
+        .to_owned()
+        .into()
+}
 
 #[derive(Clone, Copy, Default, PartialEq)]
 struct SystemAccent(Option<[f32; 3]>);
@@ -45,11 +80,15 @@ fn contrast(a: Rgba, b: Rgba) -> f32 {
 /// The accent hue, darkened (light mode) or lightened (dark mode) until it
 /// reaches 4.5:1 against the background, so any system accent stays readable
 /// when used as text.
+#[cfg(test)]
 fn readable_accent(accent: Rgba, background: Rgba, dark: bool) -> Rgba {
+    readable_accent_to(accent, background, dark, 4.5)
+}
+fn readable_accent_to(accent: Rgba, background: Rgba, dark: bool, minimum: f32) -> Rgba {
     let target = if dark { 1.0 } else { 0.0 };
     let mut color = accent;
-    for _ in 0..20 {
-        if contrast(color, background) >= 4.5 {
+    for _ in 0..100 {
+        if contrast(color, background) >= minimum {
             break;
         }
         let step = |channel: f32| channel + (target - channel) * 0.1;
@@ -73,33 +112,141 @@ fn tint(background: Rgba, accent: Rgba, amount: f32) -> Hsla {
     .into()
 }
 
+/// Curated surfaces and contrast-safe text; colour literals stay in this module.
+fn surfaces(scheme: Scheme, dark: bool) -> [u32; 6] {
+    match (scheme, dark) {
+        (Scheme::HighContrast, false) => {
+            [0xffffff, 0xf5f5f5, 0x000000, 0x333333, 0xe8e8e8, 0x555555]
+        }
+        (Scheme::HighContrast, true) => {
+            [0x000000, 0x111111, 0xffffff, 0xcccccc, 0x222222, 0xaaaaaa]
+        }
+        (Scheme::Solarized, false) => [0xfdf6e3, 0xeee8d5, 0x073642, 0x52676d, 0xe8e1cd, 0x93a1a1],
+        (Scheme::Solarized, true) => [0x002b36, 0x073642, 0xeee8d5, 0x9baead, 0x10404a, 0x586e75],
+        (Scheme::Gruvbox, false) => [0xfbf1c7, 0xf2e5bc, 0x282828, 0x665c54, 0xebdbb2, 0xa89984],
+        (Scheme::Gruvbox, true) => [0x282828, 0x32302f, 0xfbf1c7, 0xbdae93, 0x3c3836, 0x7c6f64],
+        (Scheme::Nord, false) => [0xeceff4, 0xe5e9f0, 0x2e3440, 0x4c566a, 0xd8dee9, 0x929bab],
+        (Scheme::Nord, true) => [0x2e3440, 0x343b49, 0xeceff4, 0xb8c5d7, 0x3b4252, 0x616e88],
+        (_, false) => [0xffffff, 0xf3f3f5, 0x1c1c1e, 0x66666e, 0xebebef, 0xdcdce0],
+        (_, true) => [0x1c1c1e, 0x252527, 0xf2f2f7, 0xa0a0a7, 0x353538, 0x3a3a3e],
+    }
+}
+/// Background, sidebar and text colours for a scheme's preview tile in Settings.
+pub(super) fn scheme_preview(scheme: Scheme, dark: bool) -> [Hsla; 3] {
+    let [background, sidebar, text, ..] = surfaces(scheme, dark);
+    [
+        rgb(background).into(),
+        rgb(sidebar).into(),
+        rgb(text).into(),
+    ]
+}
+pub(super) const SWATCHES: [(&str, u32); 6] = [
+    ("Blue", 0x0064d2),
+    ("Purple", 0x8851b8),
+    ("Pink", 0xc13c79),
+    ("Red", 0xc23b31),
+    ("Orange", 0xd87716),
+    ("Green", 0x287d55),
+];
+pub(super) fn swatch(value: u32) -> Hsla {
+    rgb(value).into()
+}
+pub(super) fn accent_bytes(color: Hsla) -> [u8; 3] {
+    let value: Rgba = color.into();
+    [value.r, value.g, value.b].map(|v| (v.clamp(0., 1.) * 255.).round() as u8)
+}
+fn effective_accent(accent: Rgba, high_contrast: bool) -> Rgba {
+    if !high_contrast {
+        return accent;
+    }
+    let mut value = accent;
+    let target: Rgba = foreground(accent).into();
+    // Move the accent away from its chosen foreground until it meets 7:1.
+    for _ in 0..100 {
+        if contrast(value, target) >= 7. {
+            break;
+        }
+        let step = |v: f32, t: f32| v + ((1. - t) - v) * 0.1;
+        value = Rgba {
+            r: step(value.r, target.r),
+            g: step(value.g, target.g),
+            b: step(value.b, target.b),
+            a: 1.,
+        };
+    }
+    value
+}
 pub(super) fn apply(cx: &mut App) {
     let system = cx
         .try_global::<SystemAccent>()
         .copied()
         .unwrap_or_default()
         .0;
+    let preferences = cx.try_global::<Appearance>().cloned().unwrap_or_default();
+    let mode = match preferences.scheme {
+        Scheme::Light => Some(ThemeMode::Light),
+        Scheme::Dark => Some(ThemeMode::Dark),
+        Scheme::System => None,
+        _ => match preferences.variant {
+            Variant::System => None,
+            Variant::Light => Some(ThemeMode::Light),
+            Variant::Dark => Some(ThemeMode::Dark),
+        },
+    };
+    UI_SCALE.with(|scale| scale.set(f32::from(preferences.scale.clamp(85, 150)) / 100.));
+    let installed = cx.text_system().all_font_names();
+    let defaults = Theme::default();
+    let interface_font = font_or_default(
+        preferences.interface_font.as_deref(),
+        &installed,
+        &defaults.font_family,
+    );
+    let code_font = font_or_default(
+        preferences.code_font.as_deref(),
+        &installed,
+        &defaults.mono_font_family,
+    );
+    cx.set_global(MessageFont(font_or_default(
+        preferences.message_font.as_deref(),
+        &installed,
+        &interface_font,
+    )));
+    match mode {
+        Some(mode) => Theme::change(mode, None, cx),
+        // Returning to System after a forced Light/Dark must re-read the OS
+        // appearance; otherwise the last forced mode sticks until the OS changes.
+        None => Theme::sync_system_appearance(None, cx),
+    }
     Theme::update(cx, |theme| {
         let dark = theme.is_dark();
+        let [background, sidebar, text, muted, secondary, border] =
+            surfaces(preferences.scheme, dark);
         // macOS system text size; Kit scales controls from this.
         theme.font_size = px(13.);
+        theme.font_family = interface_font;
+        theme.mono_font_family = code_font;
         theme.radius = px(8.);
         theme.radius_lg = px(14.);
         let colors = &mut theme.colors;
-        let accent: Rgba = system
+        let custom = preferences
+            .accent
+            .map(|value| value.map(|v| f32::from(v) / 255.));
+        let accent: Rgba = custom
+            .or(system)
             .map(|[r, g, b]| Rgba { r, g, b, a: 1. })
             .unwrap_or_else(|| rgb(if dark { 0x0070df } else { 0x0064d2 }));
+        let accent = effective_accent(accent, preferences.scheme == Scheme::HighContrast);
         let primary: Hsla = accent.into();
         let on_primary = foreground(accent);
-        colors.background = rgb(if dark { 0x1c1c1e } else { 0xffffff }).into();
-        colors.sidebar = rgb(if dark { 0x252527 } else { 0xf3f3f5 }).into();
-        colors.foreground = rgb(if dark { 0xf2f2f7 } else { 0x1c1c1e }).into();
+        colors.background = rgb(background).into();
+        colors.sidebar = rgb(sidebar).into();
+        colors.foreground = rgb(text).into();
         colors.sidebar_foreground = colors.foreground;
         colors.secondary_foreground = colors.foreground;
-        colors.muted_foreground = rgb(if dark { 0xa0a0a7 } else { 0x66666e }).into();
-        colors.secondary = rgb(if dark { 0x353538 } else { 0xebebef }).into();
+        colors.muted_foreground = rgb(muted).into();
+        colors.secondary = rgb(secondary).into();
         colors.muted = colors.secondary;
-        colors.border = rgb(if dark { 0x3a3a3e } else { 0xdcdce0 }).into();
+        colors.border = rgb(border).into();
         colors.sidebar_border = colors.border;
         colors.primary = primary;
         colors.primary_foreground = on_primary;
@@ -110,7 +257,17 @@ pub(super) fn apply(cx: &mut App) {
         colors.button_primary_hover = primary;
         colors.button_primary_active = primary;
         colors.ring = primary;
-        colors.link = readable_accent(accent, colors.background.into(), dark).into();
+        colors.link = readable_accent_to(
+            accent,
+            colors.background.into(),
+            dark,
+            if preferences.scheme == Scheme::HighContrast {
+                7.
+            } else {
+                4.5
+            },
+        )
+        .into();
         colors.button = colors.secondary;
         colors.button_foreground = colors.foreground;
         colors.accent = tint(
@@ -124,6 +281,15 @@ pub(super) fn apply(cx: &mut App) {
         colors.list_active = colors.accent;
         colors.list_active_border = colors.border;
         colors.list = colors.sidebar;
+        colors.list_hover = colors.secondary;
+        colors.list_head = colors.sidebar;
+        colors.list_even = colors.background;
+        colors.popover = colors.background;
+        colors.popover_foreground = colors.foreground;
+        colors.input = colors.background;
+        colors.selection = colors.accent;
+        colors.sidebar_primary = colors.primary;
+        colors.sidebar_primary_foreground = colors.primary_foreground;
     });
 }
 
@@ -142,8 +308,8 @@ pub(super) fn palette(cx: &App) -> Palette {
     let pick =
         |light: u32, dark_value: u32| -> Hsla { rgb(if dark { dark_value } else { light }).into() };
     Palette {
-        field: pick(0xffffff, 0x2a2a2d),
-        pressed: pick(0xe4e4e9, 0x353538),
+        field: gpui_kit::component::ActiveTheme::theme(cx).background,
+        pressed: gpui_kit::component::ActiveTheme::theme(cx).secondary,
         warning: pick(0x8a3f00, 0xffc285),
         warning_background: pick(0xfff1e0, 0x3a2a18),
         error: pick(0xc4281c, 0xff8a80),
@@ -162,6 +328,17 @@ pub(super) fn avatar_color(id: &str) -> Hsla {
     rgb(AVATAR_FILLS[hash as usize % AVATAR_FILLS.len()]).into()
 }
 
+/// IRC names retain their identity hue with readable contrast on the transcript.
+pub(super) fn avatar_text_color(id: &str, cx: &App) -> Hsla {
+    use gpui_kit::component::ActiveTheme;
+    readable_accent_to(
+        avatar_color(id).into(),
+        cx.theme().secondary.into(),
+        cx.theme().is_dark(),
+        4.5,
+    )
+    .into()
+}
 /// Up to two initials from a display name; one letter for a bare Matrix ID.
 pub(super) fn initials(name: &str) -> String {
     let name = name.trim();
@@ -185,6 +362,54 @@ pub(super) fn initials(name: &str) -> String {
 mod tests {
     use super::*;
 
+    fn palette_contrast(scheme: Scheme, dark: bool) {
+        let [background, sidebar, text, muted, secondary, _] = surfaces(scheme, dark);
+        let minimum = if scheme == Scheme::HighContrast {
+            7.
+        } else {
+            4.5
+        };
+        for bg in [background, sidebar, secondary] {
+            assert!(
+                contrast(rgb(text), rgb(bg)) >= minimum,
+                "body {scheme:?} dark={dark}"
+            );
+            assert!(
+                contrast(rgb(muted), rgb(bg)) >= minimum,
+                "muted {scheme:?} dark={dark} bg={bg:x}"
+            );
+        }
+        for (_, value) in SWATCHES {
+            let accent = effective_accent(rgb(value), scheme == Scheme::HighContrast);
+            assert!(contrast(accent, foreground(accent).into()) >= minimum);
+            assert!(
+                contrast(
+                    readable_accent_to(accent, rgb(background), dark, minimum),
+                    rgb(background)
+                ) >= minimum
+            );
+        }
+    }
+    macro_rules! palette_test {
+        ($name:ident, $scheme:ident, $dark:expr) => {
+            #[test]
+            fn $name() {
+                palette_contrast(Scheme::$scheme, $dark);
+            }
+        };
+    }
+    palette_test!(system_light, System, false);
+    palette_test!(system_dark, System, true);
+    palette_test!(light, Light, false);
+    palette_test!(dark, Dark, true);
+    palette_test!(high_contrast_light, HighContrast, false);
+    palette_test!(high_contrast_dark, HighContrast, true);
+    palette_test!(solarized_light, Solarized, false);
+    palette_test!(solarized_dark, Solarized, true);
+    palette_test!(gruvbox_light, Gruvbox, false);
+    palette_test!(gruvbox_dark, Gruvbox, true);
+    palette_test!(nord_light, Nord, false);
+    palette_test!(nord_dark, Nord, true);
     #[test]
     fn accent_text_is_readable_for_light_and_dark_accents() {
         let white = Rgba {

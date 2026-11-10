@@ -1,4 +1,5 @@
 //! Selection-scoped thread presentation; Matrix state remains in core.
+use crate::theme::scaled_px as px;
 use crate::{
     app::MatrixApp,
     backend::{Message, ThreadAction, ThreadSnapshot, TimelineAction},
@@ -362,6 +363,7 @@ impl MatrixApp {
         root.thread_unread = 0;
         v_flex()
             .w(px(360.))
+            .max_w(relative(0.36))
             .h_full()
             .flex_none()
             .border_l_1()

@@ -288,6 +288,7 @@ fn discovery_failure(error: DiscoveryError) -> ServiceError {
 
 fn profile_failure(error: ProfileError) -> ServiceError {
     failure(match error {
+        ProfileError::InvalidImage => "Choose an image up to 8 MB and 4096 pixels per side.",
         ProfileError::InvalidUser => "This user ID is not valid.",
         ProfileError::Unavailable => {
             "This profile could not be loaded. Check your connection and try again."
@@ -926,6 +927,25 @@ impl Backend {
             }
             result
         })
+    }
+
+    pub(super) fn update_profile(
+        &self,
+        expected: u128,
+        update: matrix_client_core::profile::ProfileUpdate,
+    ) -> Result<Profile, ServiceError> {
+        let account = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session unavailable."))?
+            .account
+            .clone()
+            .filter(|a| a.instance_id() == expected)
+            .ok_or_else(|| failure("Account changed."))?;
+        self.runtime
+            .block_on(account.update_profile(update))
+            .map_err(profile_failure)?;
+        self.profile(account.user_id().to_string(), None)
     }
 
     pub(super) fn profile(

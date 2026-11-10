@@ -20,6 +20,10 @@ gpui_kit::actions!(
     matrix_client,
     [
         Quit,
+        OpenSettings,
+        IncreaseScale,
+        DecreaseScale,
+        ResetScale,
         FindConversation,
         CloseProfile,
         ToggleDetails,
@@ -38,6 +42,16 @@ pub(super) struct ProfilePage {
 }
 
 pub(super) struct MatrixApp {
+    pub settings: Option<(AnyWindowHandle, WeakEntity<crate::settings::SettingsWindow>)>,
+    pub preferences: crate::preferences::Preferences,
+    pub preferences_writable: bool,
+    pub preference_revision: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    pub preference_write_lock: std::sync::Arc<std::sync::Mutex<()>>,
+    pub accent_picker: Entity<color_picker::ColorPickerState>,
+    pub font_selectors: [Entity<select::SelectState<select::SearchableVec<String>>>; 3],
+    pub settings_status: String,
+    pub account_name: Option<Entity<InputState>>,
+    pub account_edit_busy: bool,
     pub snapshot: Snapshot,
     pub navigation: Navigation,
     pub groups: Vec<Range<usize>>,
@@ -182,7 +196,89 @@ impl MatrixApp {
                 crate::theme::apply(cx);
             }));
         }
+        let loaded = if preview {
+            Ok(Default::default())
+        } else {
+            crate::preferences::Preferences::path()
+                .map(|path| crate::preferences::Preferences::load(&path))
+                .unwrap_or_else(|| Err(std::io::Error::other("No config directory")))
+        };
+        let preferences_writable = loaded.is_ok();
+        let mut installed = cx.text_system().all_font_names();
+        installed.sort();
+        installed.dedup();
+        installed.insert(0, "System default".into());
+        let font_selectors = std::array::from_fn(|index| {
+            let saved = loaded
+                .as_ref()
+                .ok()
+                .and_then(|p: &crate::preferences::Preferences| match index {
+                    0 => p.appearance.interface_font.as_ref(),
+                    1 => p.appearance.message_font.as_ref(),
+                    _ => p.appearance.code_font.as_ref(),
+                })
+                .filter(|name| installed.contains(name))
+                .cloned()
+                .unwrap_or_else(|| "System default".into());
+            let selector = cx.new(|cx| {
+                let mut state = select::SelectState::new(
+                    select::SearchableVec::from(installed.clone()),
+                    None,
+                    window,
+                    cx,
+                )
+                .searchable(true);
+                state.set_selected_value(&saved, window, cx);
+                state
+            });
+            subscriptions.push(cx.subscribe_in(
+                &selector,
+                window,
+                move |this,
+                      _,
+                      event: &select::SelectEvent<select::SearchableVec<String>>,
+                      window,
+                      cx| {
+                    let select::SelectEvent::Confirm(value) = event;
+                    let value = value
+                        .as_ref()
+                        .filter(|name| name.as_str() != "System default")
+                        .cloned();
+                    match index {
+                        0 => this.preferences.appearance.interface_font = value,
+                        1 => this.preferences.appearance.message_font = value,
+                        _ => this.preferences.appearance.code_font = value,
+                    }
+                    this.appearance_changed(window, cx);
+                },
+            ));
+            selector
+        });
+        let accent_picker = cx.new(|cx| color_picker::ColorPickerState::new(window, cx));
+        subscriptions.push(cx.subscribe_in(
+            &accent_picker,
+            window,
+            |this, _, event: &color_picker::ColorPickerEvent, window, cx| {
+                let color_picker::ColorPickerEvent::Change(value) = event;
+                this.preferences.appearance.accent = value.map(crate::theme::accent_bytes);
+                this.appearance_changed(window, cx);
+            },
+        ));
         let mut this = Self {
+            accent_picker,
+            font_selectors,
+            preference_revision: Default::default(),
+            preference_write_lock: Default::default(),
+            settings: None,
+            preferences: loaded.unwrap_or_default(),
+            preferences_writable,
+            settings_status: if preferences_writable {
+                String::new()
+            } else {
+                "Preferences could not be read or backed up; saving is disabled to preserve the original file.".into()
+            },
+            account_name: None,
+            account_edit_busy: false,
             navigation: Navigation {
                 selected_space: (preview && !home).then(|| "design".into()),
                 selected_room: preview.then(|| snapshot.selected_room.clone()),
@@ -253,6 +349,7 @@ impl MatrixApp {
             _subscriptions: subscriptions,
             selection_task: None,
         };
+        crate::theme::set_appearance(this.preferences.appearance.clone(), cx);
         if let Some(room) = this.navigation.selected_room.clone() {
             this.activate_composer(room, window, cx);
         }
@@ -348,6 +445,8 @@ impl MatrixApp {
         if self.snapshot.user_id != snapshot.user_id
             || self.snapshot.account_instance != snapshot.account_instance
         {
+            self.account_name = None;
+            self.account_edit_busy = false;
             self.emoji_picker = None;
             self.clear_attachment();
             self.security_key = None;

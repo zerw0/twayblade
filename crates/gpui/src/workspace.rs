@@ -1,7 +1,9 @@
 //! Signed-in workspace and sign-in window, laid out after the approved mockup:
 //! space rail → conversations sidebar → conversation → optional details panel.
 //! Controls whose feature does not exist yet are omitted rather than faked.
+use crate::theme::scaled_px as px;
 
+use crate::preferences::{ChatStyle, Density, Timestamps};
 use chrono::{Local, TimeZone};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::TestSupportExt;
@@ -917,6 +919,7 @@ impl MatrixApp {
             .unwrap_or_else(|| "Home".into());
         v_flex()
             .w(px(RAIL_WIDTH + SIDEBAR_WIDTH))
+            .max_w(relative(0.30))
             .h_full()
             .flex_none()
             .bg(cx.theme().sidebar)
@@ -989,6 +992,8 @@ impl MatrixApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = theme::palette(cx);
+        let bubbles = self.preferences.chat.style == ChatStyle::Bubbles;
+        let outgoing = outgoing && bubbles;
         let bubble = match message.kind {
             MessageKind::Text
             | MessageKind::Emote
@@ -1001,7 +1006,9 @@ impl MatrixApp {
                 } else {
                     MessageAlignment::Start
                 })
-                .with_variant(if outgoing {
+                .with_variant(if !bubbles {
+                    BubbleVariant::Ghost
+                } else if outgoing {
                     BubbleVariant::Filled
                 } else {
                     BubbleVariant::Secondary
@@ -1038,17 +1045,35 @@ impl MatrixApp {
                                 .test_support(),
                         );
                     }
+                    let message_font = theme::message_font(cx);
                     content = content.child(
-                        TextView::markdown(
-                            SharedString::from(format!("message-{}", message.id)),
-                            model::plain_text(&model::message_text(message)),
-                        )
-                        .selectable(true)
-                        .when(
-                            matches!(message.kind, MessageKind::Emote | MessageKind::Notice),
-                            |text| text.italic(),
-                        ),
+                        div()
+                            .font_family(message_font)
+                            .text_size(px(f32::from(self.preferences.appearance.message_size)))
+                            .child(
+                                TextView::markdown(
+                                    SharedString::from(format!("message-{}", message.id)),
+                                    model::plain_text(&model::message_text(message)),
+                                )
+                                .selectable(true)
+                                .when(
+                                    matches!(
+                                        message.kind,
+                                        MessageKind::Emote | MessageKind::Notice
+                                    ),
+                                    |text| text.italic(),
+                                ),
+                            ),
                     );
+                    if message.edited {
+                        content = content.child(
+                            div()
+                                .id(SharedString::from(format!("edited-{}", message.id)))
+                                .text_size(px(10.5))
+                                .child("Edited")
+                                .test_support(),
+                        );
+                    }
                     if let Some(attachment) = &message.attachment {
                         let thumbnail = attachment
                             .preview_png
@@ -1060,6 +1085,11 @@ impl MatrixApp {
                             let focus = self.image_focus(&id, cx);
                             let mut button = Button::new(SharedString::from(format!("image-{id}")))
                                 .ghost()
+                                .text_color(if outgoing {
+                                    cx.theme().primary_foreground
+                                } else {
+                                    cx.theme().foreground
+                                })
                                 .p_0()
                                 .track_focus(&focus)
                                 .accessibility_label(format!("Open image {}", attachment.filename))
@@ -1208,8 +1238,9 @@ impl MatrixApp {
                 .gap(px(7.))
                 .px(px(12.))
                 .py(px(7.))
-                .rounded(px(16.))
-                .bg(palette.warning_background)
+                .when(bubbles, |view| {
+                    view.rounded(px(16.)).bg(palette.warning_background)
+                })
                 .text_color(palette.warning)
                 .child(Icon::new(IconName::Lock).small())
                 .child("Unable to decrypt this message.")
@@ -1217,15 +1248,18 @@ impl MatrixApp {
             MessageKind::Redacted => div()
                 .px(px(12.))
                 .py(px(7.))
-                .rounded(px(16.))
-                .border_1()
-                .border_color(cx.theme().border)
+                .when(bubbles, |view| {
+                    view.rounded(px(16.))
+                        .border_1()
+                        .border_color(cx.theme().border)
+                })
                 .text_color(cx.theme().muted_foreground)
                 .italic()
                 .child("Message deleted")
                 .into_any_element(),
         };
         let mut row = v_flex()
+            .id(SharedString::from(format!("message-row-{}", message.id)))
             .min_w_0()
             .max_w_full()
             .gap(px(3.))
@@ -1249,13 +1283,17 @@ impl MatrixApp {
         line = line.child(div().min_w_0().child(bubble));
         if message.event_id.is_some() || self.preview {
             let message_id = message.id.clone();
+            let focus = self.image_focus(&format!("reaction-action-{}", message.id), cx);
             line = line.child(
                 div()
                     .flex_none()
+                    .track_focus(&focus)
+                    .focus(|style| style.opacity(1.))
                     .opacity(0.)
                     .group_hover("message", |style| style.opacity(1.))
                     .child(
                         Button::new(SharedString::from(format!("add-reaction-{}", message.id)))
+                            .track_focus(&focus)
                             .ghost()
                             .xsmall()
                             .icon(IconName::FaceSlightlySmiling)
@@ -1270,12 +1308,16 @@ impl MatrixApp {
         }
         if !in_thread && message.event_id.is_some() {
             let id = message.id.clone();
+            let focus = self.image_focus(&format!("thread-action-{id}"), cx);
             line = line.child(
                 div()
+                    .track_focus(&focus)
+                    .focus(|style| style.opacity(1.))
                     .opacity(0.)
                     .group_hover("message", |style| style.opacity(1.))
                     .child(
                         Button::new(SharedString::from(format!("reply-thread-{id}")))
+                            .track_focus(&focus)
                             .ghost()
                             .small()
                             .icon(IconName::MessagesSquare)
@@ -1285,6 +1327,22 @@ impl MatrixApp {
                                 this.open_thread(id.clone(), window, cx)
                             })),
                     ),
+            );
+        }
+        if self.preferences.chat.style != ChatStyle::Irc {
+            line = line.child(
+                div()
+                    .flex_none()
+                    .text_size(px(10.5))
+                    .text_color(cx.theme().muted_foreground)
+                    .when(
+                        self.preferences.chat.timestamps == Timestamps::OnHover,
+                        |view| {
+                            view.opacity(0.)
+                                .group_hover("message", |style| style.opacity(1.))
+                        },
+                    )
+                    .child(time_label(message.timestamp_ms)),
             );
         }
         row = row.child(line);
@@ -1437,7 +1495,7 @@ impl MatrixApp {
                 .size_full(),
             );
         }
-        row.into_any_element()
+        row.test_support().into_any_element()
     }
 
     fn message_group(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -1482,7 +1540,13 @@ impl MatrixApp {
             .id(SharedString::from(format!("group-{}", first.id)))
             .w_full()
             .px(px(16.))
-            .pt(px(if previous.is_none() { 10. } else { 6. }))
+            .pt(px(if previous.is_none() {
+                10.
+            } else if self.preferences.chat.density == Density::Compact {
+                2.
+            } else {
+                6.
+            }))
             .gap(px(2.));
         if let Some(marker) = marker {
             group = group.child(
@@ -1511,13 +1575,113 @@ impl MatrixApp {
                     .test_support(),
             );
         }
-        let messages = &messages[range];
-        // Delivery state like Messages: shown once, under your latest message.
+        if self.preferences.chat.style != ChatStyle::Bubbles {
+            let style = self.preferences.chat.style;
+            if style == ChatStyle::Minimal
+                && previous.is_none_or(|message| message.sender != first.sender)
+            {
+                let id = first.sender.clone();
+                let name = first.display_name.clone();
+                let mut header = h_flex().gap(px(8.)).items_center();
+                if self.preferences.chat.avatars {
+                    header = header.child(avatar(
+                        &theme::initials(&name),
+                        theme::avatar_color(&id),
+                        22.,
+                        11.,
+                        &palette,
+                    ));
+                }
+                header = header.child(
+                    Button::new(SharedString::from(format!("sender-{}", first.id)))
+                        .text()
+                        .xsmall()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .label(name.clone())
+                        .tooltip(id.clone())
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.open_profile(id.clone(), name.clone(), window, cx)
+                        })),
+                );
+                group = group.child(header);
+            }
+            let latest_own = messages
+                .iter()
+                .rev()
+                .find(|message| message.sender == self.snapshot.user_id)
+                .map(|message| &message.id);
+            for message in &messages[range] {
+                let mut line = h_flex()
+                    .id(SharedString::from(format!("style-row-{}", message.id)))
+                    .group("chat-row")
+                    .w_full()
+                    .min_w_0()
+                    .gap(px(8.))
+                    .items_start()
+                    .py(px(if self.preferences.chat.density == Density::Compact {
+                        1.
+                    } else {
+                        3.
+                    }))
+                    .hover(|style| style.bg(cx.theme().secondary.opacity(0.4)));
+                if style == ChatStyle::Irc {
+                    let id = message.sender.clone();
+                    let name = message.display_name.clone();
+                    line = line
+                        .child(
+                            div()
+                                .w(px(42.))
+                                .flex_none()
+                                .text_color(muted)
+                                .text_size(px(11.))
+                                .when(
+                                    self.preferences.chat.timestamps == Timestamps::OnHover,
+                                    |view| {
+                                        view.opacity(0.)
+                                            .group_hover("chat-row", |style| style.opacity(1.))
+                                    },
+                                )
+                                .child(time_label(message.timestamp_ms)),
+                        )
+                        .child(
+                            Button::new(SharedString::from(format!("sender-{}", message.id)))
+                                .text()
+                                .xsmall()
+                                .w(px(90.))
+                                .flex_none()
+                                .text_color(theme::avatar_text_color(&id, cx))
+                                .label(name.clone())
+                                .tooltip(id.clone())
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.open_profile(id.clone(), name.clone(), window, cx)
+                                })),
+                        );
+                }
+                line = line.child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(self.message_body(message, false, in_thread, cx)),
+                );
+                group = group.child(line.test_support());
+                if latest_own == Some(&message.id) && message.delivery == DeliveryState::Sent {
+                    group = group.child(div().text_size(px(10.5)).text_color(muted).child(
+                        if message.read_by.is_empty() {
+                            "Sent"
+                        } else {
+                            "Read"
+                        },
+                    ));
+                }
+            }
+            return group.test_support().into_any_element();
+        }
         let latest_own = messages
             .iter()
             .rev()
             .find(|message| message.sender == self.snapshot.user_id)
             .map(|message| message.id.clone());
+        let messages = &messages[range];
         if outgoing {
             let mut column = v_flex()
                 .w_full()
@@ -1580,29 +1744,19 @@ impl MatrixApp {
             .max_w(px(BUBBLE_MAX_WIDTH))
             .gap(px(2.))
             .child(
-                h_flex()
-                    .pl(px(10.))
-                    .gap(px(6.))
-                    .items_baseline()
-                    .child(
-                        Button::new(SharedString::from(format!("sender-{}", first.id)))
-                            .text()
-                            .xsmall()
-                            .text_size(px(11.5))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(muted)
-                            .label(name.clone())
-                            .tooltip(first.sender.clone())
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.open_profile(id.clone(), name.clone(), window, cx)
-                            })),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(10.5))
-                            .text_color(muted.opacity(0.8))
-                            .child(time_label(first.timestamp_ms)),
-                    ),
+                h_flex().pl(px(10.)).gap(px(6.)).items_baseline().child(
+                    Button::new(SharedString::from(format!("sender-{}", first.id)))
+                        .text()
+                        .xsmall()
+                        .text_size(px(11.5))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(muted)
+                        .label(name.clone())
+                        .tooltip(first.sender.clone())
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.open_profile(id.clone(), name.clone(), window, cx)
+                        })),
+                ),
             );
         for message in messages {
             column = column.child(self.message_body(message, false, in_thread, cx));
@@ -1613,7 +1767,9 @@ impl MatrixApp {
                     .w_full()
                     .items_end()
                     .gap(px(8.))
-                    .child(avatar_button)
+                    .when(self.preferences.chat.avatars, |row| {
+                        row.child(avatar_button)
+                    })
                     .child(column),
             )
             .test_support()
@@ -1888,6 +2044,7 @@ impl MatrixApp {
         v_flex()
             .id("details-panel")
             .w(px(DETAILS_WIDTH))
+            .max_w(relative(0.32))
             .h_full()
             .flex_none()
             .bg(cx.theme().background)
@@ -2223,39 +2380,39 @@ impl Render for MatrixApp {
         if let Some(viewer) = &mut self.viewer {
             viewer.clamp_pan(window);
         }
-        let content = if self.security_open
-            && !self.snapshot.user_id.is_empty()
-            && self.snapshot.session_state == matrix_client_core::auth::SessionState::Active
-        {
-            self.security_view(cx)
-        } else if self.snapshot.session_state != matrix_client_core::auth::SessionState::Active {
-            self.session_recovery_view(cx)
-        } else if self.snapshot.user_id.is_empty() {
-            self.sign_in_view(cx)
-        } else {
-            let panel = if self.management.is_some() {
-                None
-            } else if self.thread.is_some() {
-                Some(self.thread_view(cx))
-            } else if self.profile.is_some() {
-                Some(self.profile_view(cx))
-            } else if self.details_open && self.navigation.selected_room.is_some() {
-                Some(self.details_view(cx))
+        if self.security_open {
+            self.security_open = false;
+            self.open_settings(crate::settings::Section::Security, cx);
+        }
+        let content =
+            if self.snapshot.session_state != matrix_client_core::auth::SessionState::Active {
+                self.session_recovery_view(cx)
+            } else if self.snapshot.user_id.is_empty() {
+                self.sign_in_view(cx)
             } else {
-                None
-            };
-            h_flex()
-                .size_full()
-                .items_stretch()
-                .child(self.navigation_column(cx))
-                .child(if self.management.is_some() {
-                    self.management_view(cx)
+                let panel = if self.management.is_some() {
+                    None
+                } else if self.thread.is_some() {
+                    Some(self.thread_view(cx))
+                } else if self.profile.is_some() {
+                    Some(self.profile_view(cx))
+                } else if self.details_open && self.navigation.selected_room.is_some() {
+                    Some(self.details_view(cx))
                 } else {
-                    self.conversation_view(cx)
-                })
-                .children(panel)
-                .into_any_element()
-        };
+                    None
+                };
+                h_flex()
+                    .size_full()
+                    .items_stretch()
+                    .child(self.navigation_column(cx))
+                    .child(if self.management.is_some() {
+                        self.management_view(cx)
+                    } else {
+                        self.conversation_view(cx)
+                    })
+                    .children(panel)
+                    .into_any_element()
+            };
         let overlay = self.viewer.as_ref().map(|_| self.viewer_view(window, cx));
         let workspace = !self.security_open
             && !self.snapshot.user_id.is_empty()
@@ -2271,6 +2428,22 @@ impl Render for MatrixApp {
                 if this.viewer.is_none() {
                     this.emoji_key(event, window, cx);
                 }
+            }))
+            .on_action(
+                cx.listener(|this, _: &crate::app::IncreaseScale, window, cx| {
+                    this.change_scale(5, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::app::DecreaseScale, window, cx| {
+                    this.change_scale(-5, window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &crate::app::ResetScale, window, cx| {
+                this.reset_scale(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &crate::app::OpenSettings, _, cx| {
+                this.open_settings(crate::settings::Section::Appearance, cx)
             }))
             .on_action(cx.listener(|this, _: &FindConversation, window, cx| {
                 this.search.update(cx, |state, cx| state.focus(window, cx))

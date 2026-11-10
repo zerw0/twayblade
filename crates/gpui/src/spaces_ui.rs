@@ -1,4 +1,5 @@
 //! Native space directory, membership confirmation and conversation creation.
+use crate::theme::scaled_px as px;
 use crate::{
     app::MatrixApp,
     backend::{SpaceAction, SpaceOutcome},

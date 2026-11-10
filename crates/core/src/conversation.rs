@@ -42,6 +42,7 @@ pub struct MessageRow {
     /// Plain text; never log this or reply excerpts.
     pub body: String,
     pub kind: MessageKind,
+    pub edited: bool,
     pub delivery: DeliveryState,
     pub reply: Option<ReplyTarget>,
     pub reactions: Vec<Reaction>,
@@ -405,6 +406,9 @@ fn rows<'a>(
                 display_name: sender_name(event.sender_profile(), event.sender()),
                 timestamp_ms: u64::from(event.timestamp().get()) as i64,
                 body,
+                edited: content
+                    .as_message()
+                    .is_some_and(|message| message.is_edited()),
                 kind,
                 attachment,
                 delivery: delivery(event.send_state()),

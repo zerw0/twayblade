@@ -552,7 +552,7 @@ fn soft_logout_retains_account_and_has_no_destructive_control(cx: &mut TestAppCo
 
 #[gpui_kit::test]
 fn recovery_key_can_be_written_down_or_copied_and_is_dropped(cx: &mut TestAppContext) {
-    let (window, app) = preview_window(cx);
+    let (_main_window, app) = preview_window(cx);
     let show_key = |cx: &mut TestAppContext| {
         cx.update(|cx| {
             app.update(cx, |app, cx| {
@@ -562,6 +562,12 @@ fn recovery_key_can_be_written_down_or_copied_and_is_dropped(cx: &mut TestAppCon
             })
         })
     };
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            app.open_settings(crate::settings::Section::Security, cx)
+        })
+    });
+    let window = cx.update(|cx| app.read(cx).settings.as_ref().unwrap().0);
     // Writing the key down is valid: confirmation must not require the clipboard.
     show_key(cx);
     cx.update_window(window, |_, window, cx| {
@@ -583,7 +589,7 @@ fn recovery_key_can_be_written_down_or_copied_and_is_dropped(cx: &mut TestAppCon
 
 #[gpui_kit::test]
 fn sas_sample_has_explicit_match_mismatch_and_cancel_controls(cx: &mut TestAppContext) {
-    let (window, app) = preview_window(cx);
+    let (_main_window, app) = preview_window(cx);
     cx.update(|cx| {
         app.update(cx, |app, cx| {
             app.security_open = true;
@@ -604,6 +610,12 @@ fn sas_sample_has_explicit_match_mismatch_and_cancel_controls(cx: &mut TestAppCo
             cx.notify();
         })
     });
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            app.open_settings(crate::settings::Section::Security, cx)
+        })
+    });
+    let window = cx.update(|cx| app.read(cx).settings.as_ref().unwrap().0);
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
         assert!(window.find("confirm-verification").visible());
@@ -628,7 +640,7 @@ fn sas_sample_has_explicit_match_mismatch_and_cancel_controls(cx: &mut TestAppCo
 
 #[gpui_kit::test]
 fn recovery_input_is_cleared_when_leaving_the_screen(cx: &mut TestAppContext) {
-    let (window, app) = preview_window(cx);
+    let (_main_window, app) = preview_window(cx);
     cx.update(|cx| {
         app.update(cx, |app, cx| {
             app.security_open = true;
@@ -636,6 +648,12 @@ fn recovery_input_is_cleared_when_leaving_the_screen(cx: &mut TestAppContext) {
             cx.notify();
         })
     });
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            app.open_settings(crate::settings::Section::Security, cx)
+        })
+    });
+    let window = cx.update(|cx| app.read(cx).settings.as_ref().unwrap().0);
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
         window.click("cancel-recovery", cx);
@@ -1335,4 +1353,326 @@ fn viewer_pinch_double_click_pan_outside_click_and_stale_loads(cx: &mut TestAppC
         app.update(cx, |app, _| assert!(app.viewer.is_none()));
     })
     .expect("viewer gestures and request lifetime");
+}
+
+#[gpui_kit::test]
+fn settings_sections_share_one_window_and_preserve_conversation(cx: &mut TestAppContext) {
+    let (main_window, app) = preview_window(cx);
+    cx.update_window(main_window, |_, window, cx| {
+        window.render_frame(cx);
+        window.within("composer-panel").click("input-state", cx);
+        window.input("Retained Settings draft", cx);
+        window.click("open-settings", cx);
+        window.render_frame(cx);
+    })
+    .unwrap();
+    let handle = cx.update(|cx| app.read(cx).settings.as_ref().unwrap().0);
+    for section in crate::settings::Section::VISIBLE {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.click(
+                gpui_kit::SharedString::from(format!("settings-{}", section.label())),
+                cx,
+            );
+            window.render_frame(cx);
+            // Reset exists only where there are local preferences to reset.
+            let resettable = matches!(
+                section,
+                crate::settings::Section::Appearance | crate::settings::Section::Chat
+            );
+            assert_eq!(
+                !window.find_all("reset-settings-section").is_empty(),
+                resettable
+            );
+        })
+        .unwrap();
+    }
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            app.open_settings(crate::settings::Section::Appearance, cx)
+        });
+        let main = app.read(cx);
+        assert_eq!(main.settings.as_ref().unwrap().0, handle);
+        assert_eq!(main.snapshot.selected_room, "general");
+        assert_eq!(
+            main.composer.read(cx).value().as_str(),
+            "Retained Settings draft"
+        );
+    });
+    cx.update_window(main_window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window
+                .within("composer-panel")
+                .find("input-state")
+                .visible()
+        );
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn live_scheme_controls_preserve_room_draft_timeline_and_thread(cx: &mut TestAppContext) {
+    use gpui_kit::AppContext;
+    let (main_window, app) = preview_window(cx);
+    cx.update_window(main_window, |_, window, cx| {
+        window.render_frame(cx);
+        window.within("composer-panel").click("input-state", cx);
+        window.input("Scheme draft", cx);
+        app.update(cx, |app, cx| {
+            app.open_thread("sample-0".into(), window, cx);
+            app.open_settings(crate::settings::Section::Appearance, cx);
+        });
+    })
+    .unwrap();
+    let (handle, ids, scroller) = cx.update(|cx| {
+        let main = app.read(cx);
+        (
+            main.settings.as_ref().unwrap().0,
+            main.snapshot
+                .messages
+                .iter()
+                .map(|m| m.id.clone())
+                .collect::<Vec<_>>(),
+            main.scroller.entity_id(),
+        )
+    });
+    for scheme in crate::preferences::Scheme::ALL {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.click(
+                gpui_kit::SharedString::from(format!("scheme-{}", scheme.name())),
+                cx,
+            );
+        })
+        .unwrap();
+        cx.update(|cx| {
+            let main = app.read(cx);
+            assert_eq!(main.preferences.appearance.scheme, scheme);
+            assert_eq!(main.snapshot.selected_room, "general");
+            assert_eq!(main.composer.read(cx).value().as_str(), "Scheme draft");
+            assert!(main.thread.is_some());
+            assert_eq!(main.scroller.entity_id(), scroller);
+            assert_eq!(
+                main.snapshot
+                    .messages
+                    .iter()
+                    .map(|m| m.id.clone())
+                    .collect::<Vec<_>>(),
+                ids
+            );
+        });
+    }
+}
+
+#[gpui_kit::test]
+fn scale_changes_real_layout_and_missing_fonts_fall_back(cx: &mut TestAppContext) {
+    use gpui_kit::AppContext;
+    let (window, app) = preview_window(cx);
+    let before = cx
+        .update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.find("room-general").bounds().size.height
+        })
+        .unwrap();
+    for percent in [85, 150, 100] {
+        cx.update_window(window, |_, window, cx| {
+            app.update(cx, |app, cx| {
+                app.preferences.appearance.scale = percent;
+                app.preferences.appearance.interface_font = Some("Missing Matrix Test Font".into());
+                app.appearance_changed(window, cx);
+            });
+            window.render_frame(cx);
+            let height = window.find("room-general").bounds().size.height;
+            assert!((f32::from(height) - f32::from(before) * f32::from(percent) / 100.).abs() < 1.);
+            assert!(
+                window
+                    .within("composer-panel")
+                    .find("input-state")
+                    .visible()
+            );
+            assert!(window.find("open-settings").visible());
+        })
+        .unwrap();
+    }
+    cx.update(|_| {
+        assert_eq!(
+            crate::theme::font_or_default(Some("missing"), &["Installed".into()], "System")
+                .as_ref(),
+            "System"
+        );
+        assert_eq!(
+            crate::theme::font_or_default(Some("Installed"), &["Installed".into()], "System")
+                .as_ref(),
+            "Installed"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn switching_all_styles_preserves_visible_ids_draft_anchor_thread_and_actions(
+    cx: &mut TestAppContext,
+) {
+    use crate::preferences::ChatStyle;
+    use gpui_kit::AppContext;
+    cx.update(gpui_kit::init);
+    let (window, app) = cx.update(|cx| {
+        gpui_kit::open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                    None,
+                    size(px(1600.), px(1200.)),
+                    cx,
+                ))),
+                ..Default::default()
+            },
+            cx,
+            |window, cx| cx.new(|cx| MatrixApp::new(true, false, false, window, cx)),
+        )
+        .unwrap()
+    });
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            let mut snapshot = app.snapshot.clone();
+            let mut deleted = snapshot.messages[0].clone();
+            deleted.id = "sample-deleted".into();
+            deleted.kind = crate::backend::MessageKind::Redacted;
+            deleted.reactions.clear();
+            deleted.thread_replies = 0;
+            deleted.reply = None;
+            deleted.body.clear();
+            snapshot.messages.insert(2, deleted);
+            snapshot.revision += 1;
+            app.apply(snapshot, window, cx);
+        });
+        window.render_frame(cx);
+        window.within("composer-panel").click("input-state", cx);
+        window.input("Style draft 🦀", cx);
+        app.update(cx, |app, cx| {
+            app.open_thread("sample-0".into(), window, cx);
+            app.open_settings(crate::settings::Section::Chat, cx);
+            app.scroller
+                .update(cx, |state, cx| state.scroll_to_item(0, cx));
+        });
+        window.render_frame(cx);
+    })
+    .unwrap();
+    let handle = cx.update(|cx| app.read(cx).settings.as_ref().unwrap().0);
+    let ids = cx.update(|cx| {
+        app.read(cx)
+            .snapshot
+            .messages
+            .iter()
+            .map(|m| m.id.clone())
+            .collect::<Vec<_>>()
+    });
+    for style in [ChatStyle::Bubbles, ChatStyle::Irc, ChatStyle::Minimal] {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.click(gpui_kit::SharedString::from(format!("style-{style:?}")), cx);
+        })
+        .unwrap();
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            for id in &ids {
+                assert!(
+                    window
+                        .within("messages")
+                        .find(gpui_kit::SharedString::from(format!("message-row-{id}")))
+                        .visible(),
+                    "Missing visible message {id} in {style:?}"
+                );
+            }
+            assert!(window.within("messages").find("edited-sample-1").visible());
+            for action in [
+                "add-reaction-sample-0",
+                "reply-thread-sample-0",
+                "reaction-sample-0-👍",
+                "thread-sample-0",
+                "image-sample-4",
+                "save-sample-4",
+                "open-sample-4",
+                "retry-sample-5",
+                "cancel-sample-5",
+            ] {
+                window.within("messages").hover(action, cx);
+                assert!(
+                    window.within("messages").find(action).visible(),
+                    "Missing action {action} in {style:?}"
+                );
+            }
+            assert_eq!(
+                window
+                    .within("composer-panel")
+                    .find_by_label("Message")
+                    .value(),
+                Some("Style draft 🦀")
+            );
+        })
+        .unwrap();
+        cx.update(|cx| {
+            let main = app.read(cx);
+            assert_eq!(main.snapshot.selected_room, "general");
+            assert_eq!(
+                main.snapshot
+                    .messages
+                    .iter()
+                    .map(|m| m.id.clone())
+                    .collect::<Vec<_>>(),
+                ids
+            );
+            assert_eq!(main.scroller.read(cx).logical_scroll_top().item_ix, 0);
+            assert_eq!(main.thread.as_ref().unwrap().root.id, "sample-0");
+        });
+    }
+}
+
+#[gpui_kit::test]
+fn leaving_security_section_discards_recovery_entry(cx: &mut TestAppContext) {
+    let (_, app) = preview_window(cx);
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            app.open_settings(crate::settings::Section::Security, cx)
+        })
+    });
+    let settings = cx.update(|cx| app.read(cx).settings.as_ref().unwrap().0);
+    cx.update_window(settings, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.security_restore = true;
+            app.security_input.update(cx, |input, cx| {
+                input.set_value("Sample recovery entry", window, cx)
+            });
+            cx.notify();
+        });
+        window.render_frame(cx);
+        window.click("settings-Appearance", cx);
+    })
+    .unwrap();
+    cx.update(|cx| {
+        assert!(app.read(cx).security_input.read(cx).value().is_empty());
+        assert!(!app.read(cx).security_restore);
+    });
+}
+
+#[gpui_kit::test]
+fn returning_to_the_system_scheme_follows_the_os_again(cx: &mut TestAppContext) {
+    use crate::preferences::{Appearance, Scheme};
+    use gpui_kit::component::ActiveTheme;
+    cx.update(gpui_kit::init);
+    cx.update(|cx| {
+        let os_dark = matches!(
+            cx.window_appearance(),
+            gpui_kit::WindowAppearance::Dark | gpui_kit::WindowAppearance::VibrantDark
+        );
+        // Force the opposite of the OS, then go back to System.
+        let mut appearance = Appearance {
+            scheme: if os_dark { Scheme::Light } else { Scheme::Dark },
+            ..Appearance::default()
+        };
+        crate::theme::set_appearance(appearance.clone(), cx);
+        assert_eq!(cx.theme().is_dark(), !os_dark);
+        appearance.scheme = Scheme::System;
+        crate::theme::set_appearance(appearance, cx);
+        assert_eq!(cx.theme().is_dark(), os_dark);
+    });
 }
