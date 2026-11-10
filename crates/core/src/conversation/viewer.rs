@@ -10,7 +10,13 @@ use std::{
 
 const MAX_BYTES: usize = 64 * 1024 * 1024;
 const MAX_DIMENSION: u32 = 8192;
+/// Total decoded budget for animations (all frames together).
 const MAX_DECODED: u64 = 96 * 1024 * 1024;
+/// A single still may use the full 8192² RGBA budget while decoding, so 48 MP
+/// phone photos open; it is then scaled down for display.
+const MAX_STILL_DECODED: u64 = MAX_DIMENSION as u64 * MAX_DIMENSION as u64 * 4;
+/// Longest side kept in memory for display. Save/Open use the original bytes.
+const MAX_DISPLAY: u32 = 4096;
 const MAX_FRAMES: usize = 240;
 static DECODER: LazyLock<Arc<tokio::sync::Semaphore>> =
     LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(1)));
@@ -52,12 +58,27 @@ impl ViewerImage {
             .map_err(|_| ImageError::Save)
     }
 }
-fn limits() -> image::Limits {
+fn limits_with(max_alloc: u64) -> image::Limits {
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(MAX_DIMENSION);
     limits.max_image_height = Some(MAX_DIMENSION);
-    limits.max_alloc = Some(MAX_DECODED);
+    limits.max_alloc = Some(max_alloc);
     limits
+}
+fn limits() -> image::Limits {
+    limits_with(MAX_DECODED)
+}
+fn display_frame(image: image::DynamicImage) -> image::Frame {
+    let image = if image.width().max(image.height()) > MAX_DISPLAY {
+        image.resize(
+            MAX_DISPLAY,
+            MAX_DISPLAY,
+            image::imageops::FilterType::Triangle,
+        )
+    } else {
+        image
+    };
+    image::Frame::new(image.into_rgba8())
 }
 fn image_error(e: image::ImageError) -> ImageError {
     if matches!(e, image::ImageError::Limits(_)) {
@@ -72,7 +93,7 @@ fn dimensions(width: u32, height: u32) -> Result<(), ImageError> {
     }
     if width > MAX_DIMENSION
         || height > MAX_DIMENSION
-        || u64::from(width) * u64::from(height) * 4 > MAX_DECODED
+        || u64::from(width) * u64::from(height) * 4 > MAX_STILL_DECODED
     {
         return Err(ImageError::Limit);
     }
@@ -117,19 +138,18 @@ pub fn decode_viewer_image(bytes: Vec<u8>, filename: &str) -> Result<ViewerImage
             if decoder.has_animation() {
                 collect_frames(decoder.into_frames())?
             } else {
-                vec![image::Frame::new(
-                    image::DynamicImage::from_decoder(decoder)
-                        .map_err(image_error)?
-                        .into_rgba8(),
+                decoder
+                    .set_limits(limits_with(MAX_STILL_DECODED))
+                    .map_err(image_error)?;
+                vec![display_frame(
+                    image::DynamicImage::from_decoder(decoder).map_err(image_error)?,
                 )]
             }
         }
         _ => {
             let mut reader = image::ImageReader::with_format(Cursor::new(&bytes), format);
-            reader.limits(limits());
-            vec![image::Frame::new(
-                reader.decode().map_err(image_error)?.into_rgba8(),
-            )]
+            reader.limits(limits_with(MAX_STILL_DECODED));
+            vec![display_frame(reader.decode().map_err(image_error)?)]
         }
     };
     let mut png = Cursor::new(Vec::new());
@@ -257,6 +277,18 @@ mod tests {
         assert_eq!(image.frames[0].delay().numer_denom_ms(), (80, 1));
         assert_eq!(image.frames[0].buffer().get_pixel(0, 0).0, [255, 0, 0, 255]);
         assert_eq!(image.frames[1].buffer().get_pixel(0, 0).0, [0, 255, 0, 255]);
+    }
+    #[test]
+    fn large_photos_open_scaled_for_display_with_original_dimensions() {
+        // 6000 × 5000 is over the animation budget but a normal camera photo.
+        let mut bytes = Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(6000, 5000)
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        let image = decode_viewer_image(bytes.into_inner(), "photo.png").unwrap();
+        assert_eq!((image.width, image.height), (6000, 5000));
+        let frame = image.frames[0].buffer();
+        assert!(frame.width().max(frame.height()) <= MAX_DISPLAY);
     }
     #[test]
     fn oversized_and_corrupt_images_have_distinct_typed_failures() {

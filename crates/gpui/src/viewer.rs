@@ -169,7 +169,9 @@ impl Viewer {
         let rendered = if let ImageLoad::Ready { image, .. } = &self.load {
             let fit = (f32::from(available.width) / image.width as f32)
                 .min(f32::from(available.height) / image.height as f32)
-                .min(1.);
+                // Small images are enlarged up to 2× so they don't sit tiny in
+                // the window; large ones fit. ⌘0 still shows the fitted size.
+                .min(2.);
             size(
                 px(image.width as f32 * fit * self.zoom),
                 px(image.height as f32 * fit * self.zoom),

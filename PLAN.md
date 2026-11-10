@@ -298,9 +298,17 @@ Image viewer — M3 Task 3 (2026-11-10):
 - fmt/strict locked Clippy/66 unit/UI tests pass; keyboard/focus/save/gesture
   tests and reviewed light/dark samples. Isolated Synapse 1.164.2 verifies plain
   and encrypted images, GIF/WebP, oversized/corrupt inputs and uncached decryption.
-- Decode limits: 8192px, 64MiB encoded, 96MiB decoded and 240 frames. Attachment
-  regression passes. Physical animation, native dialogs/default apps, trackpad,
+- Decode limits: 8192px, 64MiB encoded; stills may use the full 8192² budget
+  and are scaled to 4096px for display (Save/Open keep the original);
+  animations 96MiB decoded and 240 frames. Small images fit up to 2×.
+  Physical animation, native dialogs/default apps, trackpad,
   Element media interoperability and Linux/Windows execution remain pending.
+
+M3 review fixes (2026-11-10):
+- Rooms created in a space get a restricted join rule for the parent space
+  (Element's "visible to space members"); the spaces server test asserts it.
+- Thread panel: compact root header, "Load earlier replies" at the top,
+  muted status line, composer matches the main field.
 
 Not yet verified:
 - Physical GUI checks of logout, pagination, IME and VoiceOver.

@@ -376,8 +376,14 @@ impl MatrixApp {
                     .overflow_y_scroll()
                     .px(px(12.))
                     .py(px(10.))
+                    .gap(px(2.))
+                    .border_b_1()
+                    .border_color(cx.theme().border)
                     .child(
                         div()
+                            .pl(px(10.))
+                            .text_size(px(11.5))
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(cx.theme().muted_foreground)
                             .child(root.display_name.clone()),
                     )
@@ -396,6 +402,24 @@ impl MatrixApp {
                         .child(format!("{} unread", t.unread)),
                 )
             })
+            .when(!t.exhausted && !t.messages.is_empty(), |v| {
+                v.child(
+                    Button::new("thread-older")
+                        .text()
+                        .xsmall()
+                        .mx_auto()
+                        .my(px(4.))
+                        .text_color(cx.theme().muted_foreground)
+                        .label("Load earlier replies")
+                        .disabled(t.paginating || self.preview)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if let Some(t) = &mut this.thread {
+                                t.paginating = true;
+                            }
+                            this.run_thread_action(ThreadAction::Older, window, cx);
+                        })),
+                )
+            })
             .child(
                 MessageScroller::new("thread-messages", t.scroller.clone(), move |ix, _, cx| {
                     weak.update(cx, |this, cx| {
@@ -409,51 +433,58 @@ impl MatrixApp {
                 .with_row_style(StyleRefinement::default().px_0().pb_0()),
             )
             .when(!t.status.is_empty(), |v| {
-                v.child(div().px(px(12.)).child(t.status.clone()))
-            })
-            .when(!t.exhausted && !t.messages.is_empty(), |v| {
                 v.child(
-                    Button::new("thread-older")
-                        .text()
-                        .small()
-                        .label("Load earlier replies")
-                        .disabled(t.paginating || self.preview)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            if let Some(t) = &mut this.thread {
-                                t.paginating = true;
-                            }
-                            this.run_thread_action(ThreadAction::Older, window, cx);
-                        })),
+                    div()
+                        .px(px(14.))
+                        .pt(px(4.))
+                        .text_size(px(11.))
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t.status.clone()),
                 )
             })
+            // Same field as the main composer: rounded, bordered, send inside.
             .child(
-                h_flex()
-                    .gap(px(4.))
-                    .p(px(10.))
-                    .child(
-                        div().id("thread-composer-panel").flex_1().min_w_0().child(
-                            Textarea::new(&t.composer)
-                                .accessibility_id("thread-composer")
-                                .aria_label("Reply in thread")
-                                .appearance(false)
-                                .w_full()
-                                .disabled(!t.ready),
+                div().px(px(12.)).pt(px(4.)).pb(px(12.)).child(
+                    h_flex()
+                        .items_end()
+                        .gap(px(2.))
+                        .min_h(px(32.))
+                        .py(px(3.))
+                        .pl(px(10.))
+                        .pr(px(3.))
+                        .rounded(px(16.))
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .bg(crate::theme::palette(cx).field)
+                        .child(
+                            div()
+                                .id("thread-composer-panel")
+                                .flex_1()
+                                .min_w_0()
+                                .py(px(1.))
+                                .child(
+                                    Textarea::new(&t.composer)
+                                        .accessibility_id("thread-composer")
+                                        .aria_label("Reply in thread")
+                                        .appearance(false)
+                                        .w_full()
+                                        .disabled(!t.ready),
+                                ),
+                        )
+                        .child(
+                            Button::new("thread-send")
+                                .primary()
+                                .xsmall()
+                                .rounded(px(12.))
+                                .icon(assets::IconName::ArrowUp)
+                                .accessibility_label("Send thread reply")
+                                .tooltip("Send Reply  ↩")
+                                .disabled(self.preview || !t.ready || empty || t.sending)
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| this.send_thread(window, cx)),
+                                ),
                         ),
-                    )
-                    .child(
-                        Button::new("thread-send")
-                            .primary()
-                            .size(px(24.))
-                            .w(px(28.))
-                            .h(px(28.))
-                            .icon(assets::IconName::ArrowUp)
-                            .accessibility_label("Send thread reply")
-                            .tooltip("Send Reply  ↩")
-                            .disabled(self.preview || !t.ready || empty || t.sending)
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.send_thread(window, cx)),
-                            ),
-                    ),
+                ),
             )
             .into_any_element()
     }
