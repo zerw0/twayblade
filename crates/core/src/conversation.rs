@@ -5,10 +5,7 @@ use crate::{
     room_state::{Member, MembersState, room_members},
 };
 use futures_util::{Stream, StreamExt};
-use matrix_sdk::ruma::{
-    RoomId, UserId,
-    events::room::message::{MessageType, RoomMessageEventContent},
-};
+use matrix_sdk::ruma::{RoomId, UserId, events::room::message::MessageType};
 use matrix_sdk_ui::timeline::{
     EventSendState, MsgLikeContent, Profile, RoomExt, Timeline, TimelineDetails, TimelineFocus,
     TimelineItem, TimelineItemContent, TimelineReadReceiptTracking, VirtualTimelineItem,
@@ -44,6 +41,7 @@ pub struct MessageRow {
     pub timestamp_ms: i64,
     /// Plain text; never log this or reply excerpts.
     pub body: String,
+    pub rich: Option<Arc<crate::rich_text::RichText>>,
     pub kind: MessageKind,
     pub edited: bool,
     pub delivery: DeliveryState,
@@ -105,6 +103,8 @@ pub enum ConversationError {
     EmptyMessage,
     #[error("queue_failed")]
     Queue,
+    #[error(transparent)]
+    Formatting(#[from] crate::rich_text::FormattingError),
     #[error("pagination_failed")]
     Pagination,
     #[error("event_unavailable")]
@@ -148,7 +148,7 @@ impl Conversation {
             return Err(ConversationError::EmptyMessage);
         }
         self.timeline
-            .send(RoomMessageEventContent::text_plain(body).into())
+            .send(crate::rich_text::compose(body)?.into())
             .await
             .map(|_| ())
             .map_err(|_| ConversationError::Queue)
@@ -425,6 +425,9 @@ fn rows<'a>(
                 },
                 timestamp_ms: u64::from(event.timestamp().get()) as i64,
                 body,
+                rich: content
+                    .as_message()
+                    .and_then(|m| crate::rich_text::message(m.msgtype())),
                 edited: content
                     .as_message()
                     .is_some_and(|message| message.is_edited()),

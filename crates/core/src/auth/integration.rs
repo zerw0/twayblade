@@ -236,12 +236,24 @@ async fn encrypted_delivery_profile_and_same_device_store_restore() {
         .await,
         "sender application timeline",
     );
-    let body = format!("isolated-e2ee-{}", Uuid::new_v4());
+    let body = format!("**isolated-e2ee-{}**", Uuid::new_v4());
     checked(
         conversation.send(body.clone()).await,
         "application send queue",
     );
     wait_for_message(&bob, room_id.to_string(), &body).await;
+    let mut rich_updates = Box::pin(bob.conversation_updates(room_id.to_string(), 2));
+    wait_snapshot(
+        &mut rich_updates,
+        |s| {
+            s.messages
+                .iter()
+                .any(|m| m.body == body && m.rich.is_some())
+        },
+        "encrypted Markdown rich-text projection",
+    )
+    .await;
+    drop(rich_updates);
     let response = checked(
         alice
             .client
@@ -647,8 +659,11 @@ async fn timeline_metadata_and_send_queue_actions() {
     .await;
     let mut conversation = ready.conversation.expect("conversation");
     let root_event = checked(
-        room.send(RoomMessageEventContent::text_plain("sample root excerpt"))
-            .await,
+        room.send(RoomMessageEventContent::text_html(
+            "sample root excerpt",
+            "<p><strong>sample root excerpt</strong></p>",
+        ))
+        .await,
         "root send",
     )
     .response
@@ -659,6 +674,14 @@ async fn timeline_metadata_and_send_queue_actions() {
         "root projection",
     )
     .await;
+    assert!(
+        root_snapshot
+            .messages
+            .iter()
+            .find(|m| m.event_id.as_deref() == Some(root_event.as_str()))
+            .is_some_and(|m| m.rich.is_some()),
+        "Element-style HTML must project to native rich data"
+    );
     let root_id = root_snapshot
         .messages
         .iter()

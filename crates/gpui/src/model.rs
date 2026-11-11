@@ -422,6 +422,7 @@ pub(super) fn group_signature(messages: &[Message], range: std::ops::Range<usize
         message.id.hash(&mut hasher);
         message.display_name.hash(&mut hasher);
         message.body.hash(&mut hasher);
+        message.rich.hash(&mut hasher);
         std::mem::discriminant(&message.kind).hash(&mut hasher);
         std::mem::discriminant(&message.delivery).hash(&mut hasher);
         message.edited.hash(&mut hasher);
@@ -453,4 +454,26 @@ pub(super) fn group_signature(messages: &[Message], range: std::ops::Range<usize
         }
     }
     hasher.finish()
+}
+
+#[cfg(test)]
+mod rich_tests {
+    use super::*;
+    #[test]
+    fn formatting_only_edits_invalidate_the_message_group_fingerprint() {
+        use matrix_client_core::rich_text::{RichNode, RichText, SpanKind};
+        let mut message = Message {
+            id: "$same".into(),
+            body: "same plain text".into(),
+            ..Default::default()
+        };
+        let plain = group_signature(&[message.clone()], 0..1);
+        message.rich = Some(std::sync::Arc::new(RichText {
+            nodes: vec![RichNode::Span {
+                kind: SpanKind::Strong,
+                children: vec![RichNode::Text(message.body.clone())],
+            }],
+        }));
+        assert_ne!(plain, group_signature(&[message], 0..1));
+    }
 }

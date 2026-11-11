@@ -10,8 +10,10 @@ image = { version = "=0.25.10", default-features = false, features = ["png", "jp
 mime = "=0.3.17"
 mime_guess = "=2.0.5"
 imbl = "=7.0.2"
-matrix-sdk.workspace = true
+matrix-sdk = { workspace = true, features = ["markdown"] }
 matrix-sdk-ui.workspace = true
+ruma-html = "=0.9.0"
+tracing = "0.1"
 async-stream.workspace = true
 futures-util.workspace = true
 thiserror.workspace = true

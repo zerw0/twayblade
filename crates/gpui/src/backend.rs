@@ -359,6 +359,9 @@ fn media_failure(error: matrix_client_core::conversation::AttachmentError) -> Se
 fn conversation_failure(error: ConversationError) -> ServiceError {
     failure(match error {
         ConversationError::EmptyMessage => "Write a message first.",
+        ConversationError::Formatting(_) => {
+            "This message is too large to format. Shorten it and try again."
+        }
         ConversationError::Queue => "Message could not be queued. Your draft has been kept.",
         ConversationError::Pagination => "Older messages could not be loaded. Try again.",
         ConversationError::Unavailable => "This message is no longer available for that action.",

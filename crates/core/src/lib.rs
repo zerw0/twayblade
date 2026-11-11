@@ -8,6 +8,7 @@ pub mod media;
 pub mod notifications;
 pub mod presence;
 pub mod profile;
+pub mod rich_text;
 pub mod room_state;
 pub mod rooms;
 pub mod search;
