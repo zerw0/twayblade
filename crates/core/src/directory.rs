@@ -101,6 +101,7 @@ pub struct PreviewMessage {
 #[derive(Clone)]
 pub struct RoomPreview {
     pub room: DirectoryRoom,
+    /// Text, notice and emote messages, oldest first.
     pub messages: Vec<PreviewMessage>,
     pub history_error: Option<DirectoryError>,
 }
@@ -392,7 +393,12 @@ impl Account {
                         else {
                             continue;
                         };
-                        if v["type"] != "m.room.message" {
+                        if v["type"] != "m.room.message"
+                            || !matches!(
+                                v["content"]["msgtype"].as_str(),
+                                Some("m.text" | "m.notice" | "m.emote")
+                            )
+                        {
                             continue;
                         }
                         if let (Some(id), Some(sender), Some(body), Some(ts)) = (
@@ -409,6 +415,8 @@ impl Account {
                             });
                         }
                     }
+                    // `/messages` backwards is newest first; present oldest first.
+                    preview.messages.reverse();
                 }
                 Err(e) => preview.history_error = Some(http_error(&e)),
             }

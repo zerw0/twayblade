@@ -43,19 +43,19 @@ pub enum PresenceError {
     #[error("presence_unavailable")]
     Unavailable,
 }
+/// Whitespace-only input clears the status, like `None`.
 fn validate_status(status: Option<String>) -> Result<Option<String>, PresenceError> {
-    status
-        .map(|s| {
-            if s.chars().any(char::is_control) {
-                return Err(PresenceError::InvalidStatus);
-            }
-            let s = s.trim();
-            if s.chars().count() > 256 {
-                return Err(PresenceError::InvalidStatus);
-            }
-            Ok(s.to_owned())
-        })
-        .transpose()
+    let Some(status) = status else {
+        return Ok(None);
+    };
+    if status.chars().any(char::is_control) {
+        return Err(PresenceError::InvalidStatus);
+    }
+    let status = status.trim();
+    if status.chars().count() > 256 {
+        return Err(PresenceError::InvalidStatus);
+    }
+    Ok((!status.is_empty()).then(|| status.to_owned()))
 }
 fn project(response: api::Response) -> Option<Presence> {
     let state = match response.presence {
@@ -178,10 +178,7 @@ mod tests {
                 .as_deref(),
             Some("status")
         );
-        assert_eq!(
-            validate_status(Some("   ".into())).unwrap().as_deref(),
-            Some("")
-        );
+        assert_eq!(validate_status(Some("   ".into())).unwrap(), None);
         assert_eq!(
             validate_status(Some("🙂".repeat(256)))
                 .unwrap()

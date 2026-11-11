@@ -674,7 +674,6 @@ impl Backend {
         if let Some(task) = state.thread_task.take() {
             task.abort();
         }
-        state.cancel_discovery();
         state.cancel_media();
         state.cancel_presence();
         state.thread_conversation = None;
@@ -691,8 +690,6 @@ impl Backend {
             snapshot.media = MediaState::default();
             snapshot.media_thumbnails.clear();
             snapshot.media_thumbnail_order.clear();
-            snapshot.room_preview = PreviewState::default();
-            snapshot.directory.loading = false;
             snapshot.selected_room = room_id.clone();
             snapshot.messages.clear();
             snapshot.thread = None;
@@ -1127,7 +1124,6 @@ impl Backend {
         if let Some(task) = state.thread_task.take() {
             task.abort();
         }
-        state.cancel_discovery();
         state.cancel_media();
         state.cancel_presence();
         state.thread_conversation = None;
@@ -1143,8 +1139,6 @@ impl Backend {
             snapshot.media = MediaState::default();
             snapshot.media_thumbnails.clear();
             snapshot.media_thumbnail_order.clear();
-            snapshot.room_preview = PreviewState::default();
-            snapshot.directory.loading = false;
             snapshot.selected_room.clear();
             snapshot.messages.clear();
             snapshot.thread = None;

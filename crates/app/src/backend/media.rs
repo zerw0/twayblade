@@ -157,7 +157,9 @@ impl Backend {
                     .into_iter()
                     .chain(view.media.items.iter().cloned())
                     .filter(|i| {
-                        !view.media_thumbnails.contains_key(&i.event_id)
+                        // The Files list shows no thumbnails.
+                        kind == MediaKind::Images
+                            && !view.media_thumbnails.contains_key(&i.event_id)
                             && seen.insert(i.event_id.clone())
                     })
                     .take(256)

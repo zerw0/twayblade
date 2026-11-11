@@ -96,17 +96,28 @@ impl Backend {
         if !reset && (old.loading || old.exhausted) {
             return Ok(());
         }
-        let (server, filter, network) = query.unwrap_or((old.server, old.filter, old.network));
+        let (server, filter, network) =
+            query.unwrap_or((old.server.clone(), old.filter, old.network));
         state.cancel_discovery();
         let request = state.discovery_request;
         let instance = account.instance_id();
         let since = if reset { None } else { old.next };
+        // Networks depend only on the server; keep them across filter changes.
+        let fetch_networks = reset
+            && (old.server != server || (old.networks.is_empty() && old.networks_error.is_some()));
         publish(&self.updates, |v| {
             if reset {
+                let (networks, networks_error) = if fetch_networks {
+                    (Vec::new(), None)
+                } else {
+                    (old.networks.clone(), old.networks_error)
+                };
                 v.directory = DirectoryState {
                     server: server.clone(),
                     filter: filter.clone(),
                     network: network.clone(),
+                    networks,
+                    networks_error,
                     ..Default::default()
                 };
                 v.room_preview = PreviewState::default();
@@ -120,7 +131,7 @@ impl Backend {
             if reset {
                 tokio::time::sleep(std::time::Duration::from_millis(250)).await;
             }
-            let networks = if reset {
+            let networks = if fetch_networks {
                 Some(account.directory_networks(server.clone()).await)
             } else {
                 None
@@ -146,7 +157,10 @@ impl Backend {
                 v.directory.loading = false;
                 if let Some(networks) = networks {
                     match networks {
-                        Ok(n) => v.directory.networks = n,
+                        Ok(n) => {
+                            v.directory.networks = n;
+                            v.directory.networks_error = None;
+                        }
                         Err(e) => v.directory.networks_error = Some(e),
                     }
                 }
@@ -259,6 +273,18 @@ impl Backend {
         if let Some(task) = state.membership_task.take() {
             task.abort();
         }
+        // Prefer room types the UI already loaded over another preview request.
+        let known_space = {
+            let view = self.updates.borrow();
+            let id = target.id.as_str();
+            view.room_preview
+                .preview
+                .iter()
+                .map(|p| &p.room)
+                .chain(view.directory.rooms.iter())
+                .find(|r| r.room_id == id || r.alias.as_deref() == Some(id))
+                .map(|r| r.is_space)
+        };
         let (tx, rx) = tokio::sync::oneshot::channel();
         let worker = account.clone();
         state.membership_task = Some(self.runtime.spawn(async move {
@@ -268,10 +294,13 @@ impl Backend {
                     .await
                     .map(|id| (id, false))
             } else {
-                let space = worker
-                    .preview_room(target.clone())
-                    .await
-                    .is_ok_and(|p| p.room.is_space);
+                let space = match known_space {
+                    Some(space) => space,
+                    None => worker
+                        .preview_room(target.clone())
+                        .await
+                        .is_ok_and(|p| p.room.is_space),
+                };
                 worker.join_room(target).await.map(|id| (id, space))
             };
             let _ = tx.send(result);
