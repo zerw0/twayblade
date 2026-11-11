@@ -138,6 +138,14 @@ pub(crate) fn surfaces(scheme: Scheme, dark: bool) -> [u32; 6] {
 }
 /// A custom theme as applied: text and secondary text are corrected when they
 /// fall below 4.5:1 against any surface they are drawn on.
+/// The border colour, moved toward the text colour until it reaches 3:1
+/// against the background (WCAG 1.4.11 for control boundaries).
+fn field_outline(border: Rgba, background: Rgba, text: Rgba) -> Rgba {
+    (0..=20)
+        .map(|step| mix(border, text, step as f32 / 20.))
+        .find(|candidate| contrast(*candidate, background) >= 3.)
+        .unwrap_or(text)
+}
 pub(crate) struct CustomPalette {
     pub colors: [u32; 6],
     pub adjusted: bool,
@@ -378,7 +386,10 @@ pub(super) fn apply(cx: &mut App) {
         colors.list_even = colors.background;
         colors.popover = colors.background;
         colors.popover_foreground = colors.foreground;
-        colors.input = colors.background;
+        // Kit draws text-field outlines with `input`. Keep them at the 3:1
+        // non-text contrast minimum against the window background, so fields
+        // stay findable in every scheme, including custom themes.
+        colors.input = field_outline(rgb(border), rgb(background), rgb(text)).into();
         colors.selection = colors.accent;
         colors.sidebar_primary = colors.primary;
         colors.sidebar_primary_foreground = colors.primary_foreground;
@@ -476,7 +487,7 @@ mod tests {
     use super::*;
 
     fn palette_contrast(scheme: Scheme, dark: bool) {
-        let [background, sidebar, text, muted, secondary, _] = surfaces(scheme, dark);
+        let [background, sidebar, text, muted, secondary, border] = surfaces(scheme, dark);
         let minimum = if scheme == Scheme::HighContrast {
             7.
         } else {
@@ -492,6 +503,13 @@ mod tests {
                 "muted {scheme:?} dark={dark} bg={bg:x}"
             );
         }
+        assert!(
+            contrast(
+                field_outline(rgb(border), rgb(background), rgb(text)),
+                rgb(background)
+            ) >= 3.,
+            "field outline {scheme:?} dark={dark}"
+        );
         for (_, value) in SWATCHES {
             let accent = effective_accent(rgb(value), scheme == Scheme::HighContrast);
             assert!(contrast(accent, foreground(accent).into()) >= minimum);
