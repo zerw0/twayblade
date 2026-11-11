@@ -146,6 +146,7 @@ pub(super) struct MatrixApp {
     pub thread_request: u64,
     pub management: Option<crate::ui::spaces::Management>,
     pub management_request: u64,
+    directory_action_request: u64,
     pub viewer: Option<crate::ui::viewer::Viewer>,
     pub viewer_request: u64,
     pub reveal_image: Option<String>,
@@ -416,6 +417,7 @@ impl MatrixApp {
             thread_request: 0,
             management: None,
             management_request: 0,
+            directory_action_request: 0,
             viewer: None,
             viewer_request: 0,
             reveal_image: None,
@@ -1046,6 +1048,7 @@ impl MatrixApp {
         window: &Window,
         cx: &Context<Self>,
     ) {
+        self.directory_action_request = self.directory_action_request.wrapping_add(1);
         self.thread = None;
         self.management = None;
         if self.preview {
@@ -1854,5 +1857,121 @@ impl MatrixApp {
             cx,
         );
         cx.notify();
+    }
+}
+
+#[allow(dead_code, reason = "Public directory UI action contracts")]
+impl MatrixApp {
+    pub fn browse_directory(
+        &mut self,
+        server: Option<twayblade_core::directory::ServerName>,
+        filter: Option<String>,
+        window: &Window,
+        cx: &Context<Self>,
+    ) {
+        self.directory_action_request = self.directory_action_request.wrapping_add(1);
+        if let Some(b) = &self.backend {
+            let _ = b.browse_directory(server, filter);
+        }
+        let _ = (window, cx);
+    }
+    pub fn browse_directory_network(
+        &mut self,
+        server: Option<twayblade_core::directory::ServerName>,
+        filter: Option<String>,
+        network: Option<String>,
+    ) {
+        self.directory_action_request = self.directory_action_request.wrapping_add(1);
+        if let Some(b) = &self.backend {
+            let _ = b.browse_directory_network(server, filter, network);
+        }
+    }
+    pub fn directory_more(&mut self, window: &Window, cx: &Context<Self>) {
+        self.directory_action_request = self.directory_action_request.wrapping_add(1);
+        if let Some(b) = &self.backend {
+            let _ = b.directory_more();
+        }
+        let _ = (window, cx);
+    }
+    pub fn preview_room(
+        &mut self,
+        target: twayblade_core::directory::RoomTarget,
+        window: &Window,
+        cx: &Context<Self>,
+    ) {
+        self.directory_action_request = self.directory_action_request.wrapping_add(1);
+        if let Some(b) = &self.backend {
+            let _ = b.preview_room(target);
+        }
+        let _ = (window, cx);
+    }
+    pub fn join_room(
+        &mut self,
+        target: twayblade_core::directory::RoomTarget,
+        window: &Window,
+        cx: &Context<Self>,
+    ) {
+        self.directory_membership(target, false, None, window, cx);
+    }
+    pub fn knock_room(
+        &mut self,
+        target: twayblade_core::directory::RoomTarget,
+        reason: Option<String>,
+        window: &Window,
+        cx: &Context<Self>,
+    ) {
+        self.directory_membership(target, true, reason, window, cx);
+    }
+    fn directory_membership(
+        &mut self,
+        target: twayblade_core::directory::RoomTarget,
+        knock: bool,
+        reason: Option<String>,
+        window: &Window,
+        cx: &Context<Self>,
+    ) {
+        let account = self.snapshot.account_instance;
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        let ticket = match backend.reserve_directory_membership(account) {
+            Ok(ticket) => ticket,
+            Err(e) => {
+                self.status = e.to_string();
+                return;
+            }
+        };
+        self.directory_action_request = self.directory_action_request.wrapping_add(1);
+        let request = self.directory_action_request;
+        self.job(
+            window,
+            cx,
+            move |b| b.directory_membership(ticket, target, knock, reason),
+            move |this, result, window, cx| {
+                if this.snapshot.account_instance != account
+                    || this.directory_action_request != request
+                    || !backend.membership_is_current(ticket)
+                {
+                    return;
+                }
+                match result {
+                    Ok(Some((id, space))) => {
+                        if space {
+                            // UI: placeholder wiring to the existing space hierarchy action.
+                            this.select_space(Some(id.clone()), window, cx);
+                            this.open_management(
+                                crate::ui::spaces::ManageKind::Directory(id),
+                                window,
+                                cx,
+                            );
+                        } else {
+                            this.select_room(id, window, cx);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => this.status = e.to_string(),
+                }
+            },
+        );
     }
 }

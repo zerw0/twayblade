@@ -60,18 +60,23 @@ case "${1:-test}" in
             cargo test --locked -p twayblade-core --all-features oauth_keychain_lifecycle_across_processes -- --ignored --nocapture
         fi
         ;;
-    up|test|keychain|services|security|media|threads|spaces|viewer|search|notifications|notification-delivery)
+    up|test|keychain|services|security|media|threads|spaces|viewer|search|directory|notifications|notification-delivery)
         mkdir -p test-data/local/integration
         "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py generate
         if [[ "${1:-test}" == spaces ]]; then
             "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py spaces-config
+        fi
+        if [[ "${1:-test}" == directory ]]; then
+            "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py directory-config
         fi
         "${compose[@]}" up -d --force-recreate --wait --wait-timeout 90
         "${compose[@]}" exec -T synapse python /bootstrap.py register
         if [[ "${1:-test}" != up ]]; then
             # Keep encrypted fixture data for inspection; stop only our test service.
             trap '"${compose[@]}" stop' EXIT
-            if [[ "${1:-test}" == search ]]; then
+            if [[ "${1:-test}" == directory ]]; then
+                cargo test --locked -p twayblade-core --all-features public_directory_pagination_filter_links_preview_and_knock -- --ignored --nocapture
+            elif [[ "${1:-test}" == search ]]; then
                 "${compose[@]}" exec -T synapse python /bootstrap.py register-security
                 cargo test --locked -p twayblade-core --all-features search_server_cached_encryption_pagination_and_event_context -- --ignored --nocapture
             elif [[ "${1:-test}" == notification-delivery ]]; then
