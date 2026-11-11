@@ -15,6 +15,7 @@ pub(super) use twayblade_core::conversation::{
 use twayblade_core::conversation::{ConversationError, TimelineStatus};
 pub(super) use twayblade_core::room_state::{Member, MemberRole, MembersState};
 use zeroize::Zeroizing;
+pub(super) mod calls;
 mod directory;
 mod media;
 use directory::{DirectoryState, PreviewState};
@@ -32,6 +33,8 @@ pub(super) use twayblade_core::{
 
 #[derive(Clone, Default)]
 pub(super) struct Snapshot {
+    pub(super) call: Option<twayblade_core::calls::CallState>,
+    pub(super) room_calls: std::collections::HashMap<String, twayblade_core::calls::ActiveCall>,
     pub(super) revision: u64,
     pub(super) account_instance: u128,
     pub(super) session_state: SessionState,
@@ -108,6 +111,9 @@ fn failure(message: impl ToString) -> ServiceError {
 
 #[derive(Default)]
 struct State {
+    call_request: u64,
+    call_task: Option<JoinHandle<()>>,
+    call_control: Option<tokio::sync::mpsc::Sender<calls::Control>>,
     account: Option<Account>,
     security: Option<twayblade_core::security::Security>,
     conversation: Option<Conversation>,
@@ -141,6 +147,7 @@ struct State {
 
 impl State {
     fn stop(&mut self) {
+        self.cancel_call();
         self.cancel_discovery();
         self.cancel_media();
         self.cancel_search();
@@ -1402,12 +1409,21 @@ impl Backend {
             .lifecycle
             .lock()
             .map_err(|_| failure("Session is unavailable."))?;
-        let account = self
-            .state
-            .lock()
-            .map_err(|_| failure("Session is unavailable."))?
-            .account
-            .clone();
+        let account = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| failure("Session is unavailable."))?;
+            state.cancel_call();
+            publish(&self.updates, |v| {
+                if let Some(call) = &mut v.call {
+                    call.phase = twayblade_core::calls::CallPhase::Ended(
+                        twayblade_core::calls::EndReason::Logout,
+                    );
+                }
+            });
+            state.account.clone()
+        };
         if let Some(account) = account {
             self.runtime
                 .block_on(account.logout())
@@ -1468,6 +1484,7 @@ impl Backend {
             .map_err(|_| failure("Session is unavailable."))?;
         state.stop();
         state.account = Some(account.clone());
+        calls::observe(self, &mut state, account.clone());
         state.security = Some(security);
         let epoch = state.epoch;
         publish(&self.updates, |snapshot| {
