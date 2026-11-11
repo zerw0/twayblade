@@ -42,6 +42,9 @@ fn main() {
         eprintln!("Build with --features capture to capture an offline preview.");
         return;
     }
+    if !preview {
+        matrix_client_platform::notifications::initialize_activation();
+    }
     gpui_kit::application()
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx| {

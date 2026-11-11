@@ -1396,6 +1396,7 @@ impl Backend {
             .map_err(|_| failure("Session is unavailable."))?;
         state.stop();
         state.account = None;
+        matrix_client_platform::notifications::clear_launch_activation();
         publish(&self.updates, |snapshot| {
             let revision = snapshot.revision;
             *snapshot = Snapshot::default();

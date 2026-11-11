@@ -1,7 +1,9 @@
 //! Server notification rules. Local device delivery preferences belong to the UI.
 mod delivery;
 use crate::auth::Account;
-pub use delivery::{NotificationContext, NotificationItem, NotificationPreview, should_notify};
+pub use delivery::{
+    ActivationState, NotificationContext, NotificationItem, NotificationPreview, should_notify,
+};
 use matrix_sdk::notification_settings::RoomNotificationMode;
 use matrix_sdk::{notification_settings::NotificationSettings, ruma::RoomId};
 use std::collections::HashMap;

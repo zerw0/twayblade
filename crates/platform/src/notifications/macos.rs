@@ -1,37 +1,201 @@
+//! One early process delegate handles both running and cold-launch responses.
+//! Unsafe operations are restricted to Objective-C protocol registration and
+//! framework-guaranteed callback/dictionary types; application data stays safe Rust.
 use super::*;
-use mac_usernotifications as un;
-
+use objc2::{
+    AnyThread, define_class,
+    rc::Retained,
+    runtime::{AnyObject, ProtocolObject},
+};
+use objc2_foundation::{NSArray, NSDictionary, NSError, NSObject, NSObjectProtocol, NSString};
+use objc2_user_notifications::*;
+use std::{
+    collections::HashMap,
+    sync::{Mutex, OnceLock},
+};
+use tokio::sync::oneshot;
+const PAYLOAD_KEY: &str = "matrixclient.activation.v1";
+type Pending = (oneshot::Sender<Activation>, Activation);
+fn pending() -> &'static Mutex<HashMap<String, Pending>> {
+    static PENDING: OnceLock<Mutex<HashMap<String, Pending>>> = OnceLock::new();
+    PENDING.get_or_init(Mutex::default)
+}
 fn bundled() -> bool {
-    un::check_bundle().is_ok()
+    mac_usernotifications::check_bundle().is_ok()
+}
+
+define_class!(
+    // SAFETY: NSObject subclass with no ivars; callbacks use only thread-safe Rust
+    // channels and retained framework objects for the duration of each invocation.
+    #[unsafe(super(NSObject))]
+    #[name = "MatrixClientNotificationDelegate"]
+    struct NotificationDelegate;
+    unsafe impl NSObjectProtocol for NotificationDelegate {}
+    unsafe impl UNUserNotificationCenterDelegate for NotificationDelegate {
+        #[unsafe(method(userNotificationCenter:willPresentNotification:withCompletionHandler:))]
+        fn will_present(
+            &self,
+            _center: &UNUserNotificationCenter,
+            _notification: &UNNotification,
+            completion: &block2::DynBlock<dyn Fn(UNNotificationPresentationOptions)>,
+        ) {
+            completion.call((UNNotificationPresentationOptions::Banner
+                | UNNotificationPresentationOptions::List
+                | UNNotificationPresentationOptions::Sound,));
+        }
+        #[unsafe(method(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:))]
+        fn did_receive(
+            &self,
+            _center: &UNUserNotificationCenter,
+            response: &UNNotificationResponse,
+            completion: &block2::DynBlock<dyn Fn()>,
+        ) {
+            // SAFETY: framework-exported immutable NSString constant.
+            let is_default =
+                &*response.actionIdentifier() == unsafe { UNNotificationDefaultActionIdentifier };
+            let request = response.notification().request();
+            let live = pending()
+                .lock()
+                .ok()
+                .and_then(|mut map| map.remove(&request.identifier().to_string()));
+            if is_default {
+                let delivered = live.is_some_and(|(sender, target)| sender.send(target).is_ok());
+                if !delivered {
+                    let info = request.content().userInfo();
+                    let key = NSString::from_str(PAYLOAD_KEY);
+                    if let Some(value) = info.objectForKey(key.as_ref())
+                        && let Some(payload) = value.downcast_ref::<NSString>()
+                    {
+                        super::activation::receive_launch(&payload.to_string());
+                    }
+                }
+            }
+            completion.call(());
+        }
+    }
+);
+impl NotificationDelegate {
+    fn new() -> Retained<Self> {
+        let this = Self::alloc().set_ivars(());
+        // SAFETY: calls NSObject's designated initializer on the freshly allocated subclass.
+        unsafe { objc2::msg_send![super(this), init] }
+    }
+}
+pub(super) fn initialize() {
+    if !bundled() {
+        return;
+    }
+    static DELEGATE: OnceLock<Retained<NotificationDelegate>> = OnceLock::new();
+    DELEGATE.get_or_init(|| {
+        let delegate = NotificationDelegate::new();
+        UNUserNotificationCenter::currentNotificationCenter()
+            .setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+        delegate
+    });
+}
+fn begin_permission_read() -> oneshot::Receiver<Permission> {
+    let (tx, rx) = oneshot::channel();
+    let tx = Mutex::new(Some(tx));
+    let callback =
+        block2::RcBlock::new(move |settings: std::ptr::NonNull<UNNotificationSettings>| {
+            // SAFETY: UserNotifications guarantees a live settings object during this callback.
+            let status = unsafe { settings.as_ref() }.authorizationStatus();
+            let value = match status {
+                UNAuthorizationStatus::Authorized
+                | UNAuthorizationStatus::Provisional
+                | UNAuthorizationStatus::Ephemeral => Permission::Granted,
+                UNAuthorizationStatus::Denied => Permission::Denied,
+                UNAuthorizationStatus::NotDetermined => Permission::NotRequested,
+                _ => Permission::Unavailable,
+            };
+            if let Ok(mut tx) = tx.lock()
+                && let Some(tx) = tx.take()
+            {
+                let _ = tx.send(value);
+            }
+        });
+    UNUserNotificationCenter::currentNotificationCenter()
+        .getNotificationSettingsWithCompletionHandler(&callback);
+    rx
 }
 pub async fn permission() -> Permission {
     if !bundled() {
         return Permission::Unavailable;
     }
-    match un::get_notification_settings()
+    initialize();
+    begin_permission_read()
         .await
-        .map(|settings| settings.authorization_status)
-    {
-        Ok(
-            un::AuthorizationStatus::Authorized
-            | un::AuthorizationStatus::Provisional
-            | un::AuthorizationStatus::Ephemeral,
-        ) => Permission::Granted,
-        Ok(un::AuthorizationStatus::Denied) => Permission::Denied,
-        Ok(un::AuthorizationStatus::NotDetermined) => Permission::NotRequested,
-        _ => Permission::Unavailable,
-    }
+        .unwrap_or(Permission::Unavailable)
+}
+fn begin_permission_request() -> oneshot::Receiver<bool> {
+    let (tx, rx) = oneshot::channel();
+    let tx = Mutex::new(Some(tx));
+    let callback =
+        block2::RcBlock::new(move |granted: objc2::runtime::Bool, _error: *mut NSError| {
+            if let Ok(mut tx) = tx.lock()
+                && let Some(tx) = tx.take()
+            {
+                let _ = tx.send(granted.as_bool());
+            }
+        });
+    UNUserNotificationCenter::currentNotificationCenter()
+        .requestAuthorizationWithOptions_completionHandler(
+            UNAuthorizationOptions::Alert
+                | UNAuthorizationOptions::Sound
+                | UNAuthorizationOptions::Badge,
+            &callback,
+        );
+    rx
 }
 pub async fn request_permission() -> Permission {
     if !bundled() {
         return Permission::Unavailable;
     }
-    let receiver = begin_permission_request();
-    match receiver.await {
+    initialize();
+    match begin_permission_request().await {
         Ok(true) => Permission::Granted,
         Ok(false) => Permission::Denied,
         Err(_) => Permission::Unavailable,
     }
+}
+fn begin_notify(
+    id: &str,
+    notification: &Notification,
+) -> Result<oneshot::Receiver<bool>, NotificationError> {
+    let content = UNMutableNotificationContent::new();
+    content.setTitle(&NSString::from_str(&notification.title));
+    content.setBody(&NSString::from_str(&notification.body));
+    if notification.sound {
+        content.setSound(Some(&UNNotificationSound::defaultSound()));
+    }
+    if let Some(launch) = &notification.launch {
+        let key = NSString::from_str(PAYLOAD_KEY);
+        let payload = NSString::from_str(&launch.encode()?);
+        let info = NSDictionary::<NSString, NSString>::from_slices(&[&*key], &[&*payload]);
+        // SAFETY: this dictionary contains only NSString keys and values, which
+        // satisfy UserNotifications' property-list requirement. Erasure widens
+        // the static object types; it does not reinterpret the stored objects.
+        unsafe {
+            content.setUserInfo(info.cast_unchecked::<AnyObject, AnyObject>());
+        }
+    }
+    let request = UNNotificationRequest::requestWithIdentifier_content_trigger(
+        &NSString::from_str(id),
+        &content,
+        None,
+    );
+    let (tx, rx) = oneshot::channel();
+    let tx = Mutex::new(Some(tx));
+    let callback = block2::RcBlock::new(move |error: *mut NSError| {
+        if let Ok(mut tx) = tx.lock()
+            && let Some(tx) = tx.take()
+        {
+            let _ = tx.send(error.is_null());
+        }
+    });
+    UNUserNotificationCenter::currentNotificationCenter()
+        .addNotificationRequest_withCompletionHandler(&request, Some(&callback));
+    Ok(rx)
 }
 pub async fn notify(
     id: String,
@@ -40,61 +204,55 @@ pub async fn notify(
     if !bundled() {
         return Err(NotificationError);
     }
-    let content = un::Notification::new()
-        .id(&id)
-        .title(notification.title)
-        .message(notification.body)
-        .maybe_sound(notification.sound.then(|| un::sound::DEFAULT.to_owned()))
-        .timeout(std::time::Duration::from_secs(24 * 60 * 60));
-    let handle = content.send().await.map_err(|_| NotificationError)?;
+    initialize();
+    let (sender, receiver) = oneshot::channel();
+    {
+        let mut map = pending().lock().map_err(|_| NotificationError)?;
+        if map.len() >= 64
+            && let Some(old) = map.keys().next().cloned()
+        {
+            map.remove(&old);
+        }
+        map.insert(id.clone(), (sender, notification.target.clone()));
+    }
+    let result = begin_notify(&id, &notification)?.await.unwrap_or(false);
+    if !result {
+        if let Ok(mut map) = pending().lock() {
+            map.remove(&id);
+        }
+        return Err(NotificationError);
+    }
     Ok(PendingNotification {
         id,
-        response: Box::pin(async move {
-            let response = handle.response().await.ok()?;
-            response.is_default_action().then_some(notification.target)
-        }),
+        response: Box::pin(async move { receiver.await.ok() }),
     })
 }
 pub async fn dismiss(id: &str) {
+    if let Ok(mut map) = pending().lock() {
+        map.remove(id);
+    }
     if bundled() {
-        un::close_delivered(id).await;
+        UNUserNotificationCenter::currentNotificationCenter()
+            .removeDeliveredNotificationsWithIdentifiers(&NSArray::from_slice(&[
+                &*NSString::from_str(id),
+            ]));
+    }
+}
+pub(super) fn clear_delivered() {
+    if let Ok(mut map) = pending().lock() {
+        map.clear();
+    }
+    if bundled() {
+        UNUserNotificationCenter::currentNotificationCenter().removeAllDeliveredNotifications();
     }
 }
 pub async fn set_badge(count: u64) -> Result<(), NotificationError> {
-    if !bundled() {
-        return Ok(());
+    if bundled() {
+        UNUserNotificationCenter::currentNotificationCenter()
+            .setBadgeCount_withCompletionHandler(count.min(isize::MAX as u64) as isize, None);
     }
-    objc2_user_notifications::UNUserNotificationCenter::currentNotificationCenter()
-        .setBadgeCount_withCompletionHandler(count.min(isize::MAX as u64) as isize, None);
     Ok(())
 }
 pub fn open_settings() -> Result<(), NotificationError> {
-    std::process::Command::new("/usr/bin/open")
-        .arg("x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=com.matrixclient.desktop.development")
-        .spawn().map(|_| ()).map_err(|_| NotificationError)
-}
-
-fn begin_permission_request() -> tokio::sync::oneshot::Receiver<bool> {
-    use objc2_user_notifications::{UNAuthorizationOptions, UNUserNotificationCenter};
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    let sender = std::sync::Mutex::new(Some(sender));
-    let callback = block2::RcBlock::new(
-        move |granted: objc2::runtime::Bool, _error: *mut objc2_foundation::NSError| {
-            if let Ok(mut sender) = sender.lock()
-                && let Some(sender) = sender.take()
-            {
-                let _ = sender.send(granted.as_bool());
-            }
-        },
-    );
-    UNUserNotificationCenter::currentNotificationCenter()
-        .requestAuthorizationWithOptions_completionHandler(
-            UNAuthorizationOptions::Alert
-                | UNAuthorizationOptions::Sound
-                | UNAuthorizationOptions::Badge,
-            &callback,
-        );
-    // Drop the non-Send block before awaiting; the OS retains its own copy.
-    drop(callback);
-    receiver
+    std::process::Command::new("/usr/bin/open").arg("x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=com.matrixclient.desktop.development").spawn().map(|_|()).map_err(|_|NotificationError)
 }

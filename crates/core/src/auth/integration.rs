@@ -272,6 +272,8 @@ async fn encrypted_delivery_profile_and_same_device_store_restore() {
         "PASS: application send queue, encrypted server event and decrypted recipient timeline"
     );
 
+    let notification_identity = bob.notification_identity();
+    let previous_instance = bob.instance_id();
     bob_sync.abort();
     let _ = bob_sync.await;
     drop(bob);
@@ -298,6 +300,34 @@ async fn encrypted_delivery_profile_and_same_device_store_restore() {
     let restored_sync = sync(&restored);
     wait_for_room(&restored, &room_id).await;
     wait_for_message(&restored, room_id.to_string(), &body).await;
+    assert!(restored.instance_id() != previous_instance);
+    assert!(restored.notification_identity() == notification_identity);
+    use crate::notifications::ActivationState;
+    assert!(
+        restored.validate_notification_target(&notification_identity, room_id.as_str(), None)
+            == ActivationState::Ready
+    );
+    assert!(
+        restored.validate_notification_target(
+            &alice.notification_identity(),
+            room_id.as_str(),
+            None
+        ) == ActivationState::Rejected
+    );
+    assert!(
+        restored.validate_notification_target(
+            &notification_identity,
+            room_id.as_str(),
+            Some("invalid")
+        ) == ActivationState::Rejected
+    );
+    assert!(
+        restored.validate_notification_target(
+            &notification_identity,
+            "!not-yet-synced:example.org",
+            None
+        ) == ActivationState::Pending
+    );
     eprintln!("PASS: same-device encrypted store reopen and history decryption");
 
     // Revoke only these generated test sessions; never call Account::logout,
