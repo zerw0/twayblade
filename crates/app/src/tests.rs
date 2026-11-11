@@ -1590,6 +1590,44 @@ fn live_scheme_controls_preserve_room_draft_timeline_and_thread(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
+fn theme_editor_preset_loading_and_custom_palette(cx: &mut TestAppContext) {
+    use gpui_kit::AppContext;
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_settings(crate::ui::settings::Section::Appearance, cx);
+        });
+        window.render_frame(cx);
+    })
+    .unwrap();
+    let handle = cx.update(|cx| app.read(cx).settings.as_ref().unwrap().0);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("preset-catppuccin", cx);
+    })
+    .unwrap();
+    cx.update(|cx| {
+        let main = app.read(cx);
+        assert_eq!(main.preferences.appearance.scheme, crate::preferences::Scheme::Custom);
+        assert!(main.preferences.appearance.custom_theme.is_some());
+        let custom = main.preferences.appearance.custom_theme.unwrap();
+        let [bg, ..] = crate::theme::surfaces(crate::preferences::Scheme::Catppuccin, false);
+        assert_eq!(custom.background, bg);
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("reset-custom-theme", cx);
+    })
+    .unwrap();
+    cx.update(|cx| {
+        let main = app.read(cx);
+        assert_eq!(main.preferences.appearance.scheme, crate::preferences::Scheme::Custom);
+        let custom = main.preferences.appearance.custom_theme.unwrap();
+        assert_eq!(custom, crate::preferences::CustomTheme::default());
+    });
+}
+
+#[gpui_kit::test]
 fn scale_changes_real_layout_and_missing_fonts_fall_back(cx: &mut TestAppContext) {
     use gpui_kit::AppContext;
     let (window, app) = preview_window(cx);

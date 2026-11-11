@@ -99,6 +99,11 @@ pub(super) struct MatrixApp {
     pub preference_revision: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub preference_write_lock: std::sync::Arc<std::sync::Mutex<()>>,
     pub accent_picker: Entity<color_picker::ColorPickerState>,
+    pub theme_bg_picker: Entity<color_picker::ColorPickerState>,
+    pub theme_sidebar_picker: Entity<color_picker::ColorPickerState>,
+    pub theme_text_picker: Entity<color_picker::ColorPickerState>,
+    pub theme_secondary_picker: Entity<color_picker::ColorPickerState>,
+    pub theme_border_picker: Entity<color_picker::ColorPickerState>,
     pub font_selectors: [Entity<select::SelectState<select::SearchableVec<String>>>; 3],
     pub settings_status: String,
     pub notification_busy: bool,
@@ -374,8 +379,99 @@ impl MatrixApp {
                 this.appearance_changed(window, cx);
             },
         ));
+        let theme_bg_picker = cx.new(|cx| color_picker::ColorPickerState::new(window, cx));
+        let theme_sidebar_picker = cx.new(|cx| color_picker::ColorPickerState::new(window, cx));
+        let theme_text_picker = cx.new(|cx| color_picker::ColorPickerState::new(window, cx));
+        let theme_secondary_picker = cx.new(|cx| color_picker::ColorPickerState::new(window, cx));
+        let theme_border_picker = cx.new(|cx| color_picker::ColorPickerState::new(window, cx));
+
+        subscriptions.push(cx.subscribe_in(
+            &theme_bg_picker,
+            window,
+            |this, _, event: &color_picker::ColorPickerEvent, window, cx| {
+                let color_picker::ColorPickerEvent::Change(value) = event;
+                if let Some(color) = value {
+                    let [r, g, b] = crate::theme::accent_bytes(*color);
+                    let hex = ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
+                    let mut custom = this.preferences.appearance.custom_theme.unwrap_or_default();
+                    custom.background = hex;
+                    this.preferences.appearance.custom_theme = Some(custom);
+                    this.preferences.appearance.scheme = crate::preferences::Scheme::Custom;
+                    this.appearance_changed(window, cx);
+                }
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
+            &theme_sidebar_picker,
+            window,
+            |this, _, event: &color_picker::ColorPickerEvent, window, cx| {
+                let color_picker::ColorPickerEvent::Change(value) = event;
+                if let Some(color) = value {
+                    let [r, g, b] = crate::theme::accent_bytes(*color);
+                    let hex = ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
+                    let mut custom = this.preferences.appearance.custom_theme.unwrap_or_default();
+                    custom.sidebar = hex;
+                    this.preferences.appearance.custom_theme = Some(custom);
+                    this.preferences.appearance.scheme = crate::preferences::Scheme::Custom;
+                    this.appearance_changed(window, cx);
+                }
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
+            &theme_text_picker,
+            window,
+            |this, _, event: &color_picker::ColorPickerEvent, window, cx| {
+                let color_picker::ColorPickerEvent::Change(value) = event;
+                if let Some(color) = value {
+                    let [r, g, b] = crate::theme::accent_bytes(*color);
+                    let hex = ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
+                    let mut custom = this.preferences.appearance.custom_theme.unwrap_or_default();
+                    custom.text = hex;
+                    this.preferences.appearance.custom_theme = Some(custom);
+                    this.preferences.appearance.scheme = crate::preferences::Scheme::Custom;
+                    this.appearance_changed(window, cx);
+                }
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
+            &theme_secondary_picker,
+            window,
+            |this, _, event: &color_picker::ColorPickerEvent, window, cx| {
+                let color_picker::ColorPickerEvent::Change(value) = event;
+                if let Some(color) = value {
+                    let [r, g, b] = crate::theme::accent_bytes(*color);
+                    let hex = ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
+                    let mut custom = this.preferences.appearance.custom_theme.unwrap_or_default();
+                    custom.secondary = hex;
+                    this.preferences.appearance.custom_theme = Some(custom);
+                    this.preferences.appearance.scheme = crate::preferences::Scheme::Custom;
+                    this.appearance_changed(window, cx);
+                }
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
+            &theme_border_picker,
+            window,
+            |this, _, event: &color_picker::ColorPickerEvent, window, cx| {
+                let color_picker::ColorPickerEvent::Change(value) = event;
+                if let Some(color) = value {
+                    let [r, g, b] = crate::theme::accent_bytes(*color);
+                    let hex = ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
+                    let mut custom = this.preferences.appearance.custom_theme.unwrap_or_default();
+                    custom.border = hex;
+                    this.preferences.appearance.custom_theme = Some(custom);
+                    this.preferences.appearance.scheme = crate::preferences::Scheme::Custom;
+                    this.appearance_changed(window, cx);
+                }
+            },
+        ));
         let mut this = Self {
             accent_picker,
+            theme_bg_picker,
+            theme_sidebar_picker,
+            theme_text_picker,
+            theme_secondary_picker,
+            theme_border_picker,
             font_selectors,
             preference_revision: Default::default(),
             preference_write_lock: Default::default(),

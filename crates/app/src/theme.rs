@@ -113,7 +113,7 @@ fn tint(background: Rgba, accent: Rgba, amount: f32) -> Hsla {
 }
 
 /// Curated surfaces and contrast-safe text; colour literals stay in this module.
-fn surfaces(scheme: Scheme, dark: bool) -> [u32; 6] {
+pub(crate) fn surfaces(scheme: Scheme, dark: bool) -> [u32; 6] {
     match (scheme, dark) {
         (Scheme::HighContrast, false) => {
             [0xffffff, 0xf5f5f5, 0x000000, 0x333333, 0xe8e8e8, 0x555555]
@@ -127,13 +127,31 @@ fn surfaces(scheme: Scheme, dark: bool) -> [u32; 6] {
         (Scheme::Gruvbox, true) => [0x282828, 0x32302f, 0xfbf1c7, 0xbdae93, 0x3c3836, 0x7c6f64],
         (Scheme::Nord, false) => [0xeceff4, 0xe5e9f0, 0x2e3440, 0x4c566a, 0xd8dee9, 0x929bab],
         (Scheme::Nord, true) => [0x2e3440, 0x343b49, 0xeceff4, 0xb8c5d7, 0x3b4252, 0x616e88],
+        (Scheme::Catppuccin, false) => [0xeff1f5, 0xe6e9ef, 0x4c4f69, 0x585b73, 0xdce0e8, 0xccd0da],
+        (Scheme::Custom, false) => [0xeff1f5, 0xe6e9ef, 0x4c4f69, 0x585b73, 0xdce0e8, 0xccd0da],
+        (Scheme::Custom, true) => [0x1e1e2e, 0x181825, 0xcdd6f4, 0xa6adc8, 0x313244, 0x45475a],
         (_, false) => [0xffffff, 0xf3f3f5, 0x1c1c1e, 0x66666e, 0xebebef, 0xdcdce0],
         (_, true) => [0x1c1c1e, 0x252527, 0xf2f2f7, 0xa0a0a7, 0x353538, 0x3a3a3e],
     }
 }
 /// Background, sidebar and text colours for a scheme's preview tile in Settings.
-pub(super) fn scheme_preview(scheme: Scheme, dark: bool) -> [Hsla; 3] {
-    let [background, sidebar, text, ..] = surfaces(scheme, dark);
+pub(super) fn scheme_preview(
+    scheme: Scheme,
+    dark: bool,
+    custom: Option<crate::preferences::CustomTheme>,
+) -> [Hsla; 3] {
+    let [background, sidebar, text, ..] = if scheme == Scheme::Custom && let Some(custom) = custom {
+        [
+            custom.background,
+            custom.sidebar,
+            custom.text,
+            custom.muted,
+            custom.secondary,
+            custom.border,
+        ]
+    } else {
+        surfaces(scheme, dark)
+    };
     [
         rgb(background).into(),
         rgb(sidebar).into(),
@@ -220,7 +238,18 @@ pub(super) fn apply(cx: &mut App) {
     Theme::update(cx, |theme| {
         let dark = theme.is_dark();
         let [background, sidebar, text, muted, secondary, border] =
-            surfaces(preferences.scheme, dark);
+            if preferences.scheme == Scheme::Custom && let Some(custom) = preferences.custom_theme {
+                [
+                    custom.background,
+                    custom.sidebar,
+                    custom.text,
+                    custom.muted,
+                    custom.secondary,
+                    custom.border,
+                ]
+            } else {
+                surfaces(preferences.scheme, dark)
+            };
         // macOS system text size; Kit scales controls from this.
         theme.font_size = px(13.);
         theme.font_family = interface_font;
@@ -234,7 +263,14 @@ pub(super) fn apply(cx: &mut App) {
         let accent: Rgba = custom
             .or(system)
             .map(|[r, g, b]| Rgba { r, g, b, a: 1. })
-            .unwrap_or_else(|| rgb(if dark { 0x0070df } else { 0x0064d2 }));
+            .unwrap_or_else(|| {
+                rgb(match (preferences.scheme, dark) {
+                    (Scheme::Catppuccin, true) => 0xcba6f7,
+                    (Scheme::Catppuccin, false) => 0x8839ef,
+                    _ if dark => 0x0070df,
+                    _ => 0x0064d2,
+                })
+            });
         let accent = effective_accent(accent, preferences.scheme == Scheme::HighContrast);
         let primary: Hsla = accent.into();
         let on_primary = foreground(accent);
@@ -431,6 +467,10 @@ mod tests {
     palette_test!(gruvbox_dark, Gruvbox, true);
     palette_test!(nord_light, Nord, false);
     palette_test!(nord_dark, Nord, true);
+    palette_test!(catppuccin_light, Catppuccin, false);
+    palette_test!(catppuccin_dark, Catppuccin, true);
+    palette_test!(custom_light, Custom, false);
+    palette_test!(custom_dark, Custom, true);
     #[test]
     fn accent_text_is_readable_for_light_and_dark_accents() {
         let white = Rgba {
