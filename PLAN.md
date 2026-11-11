@@ -158,6 +158,33 @@ here are reflected in Element for the same account.
   (summary or world-readable history) before joining where the server allows
   it, and knock for knock-only rooms. Never auto-join; joining a space opens
   its hierarchy.
+- *Message editing.* Edit your own text messages (including formatted ones and
+  thread replies): Edit in the message menu and ↑ in an empty composer edit
+  the latest one; the composer shows "Editing" with Escape to cancel; Return
+  saves. Sent as an SDK `m.replace` edit (keeping encryption and the plain
+  fallback); the timeline shows the latest version with "Edited", and a failed
+  edit keeps the draft for retry. No edit history view in 1.0.
+- *Stacked attachments.* Add several files at once (picker, drag and drop,
+  paste) to the composer, remove any before sending, and send them with the
+  text using Return or Send.
+- *Image size in the timeline.* Settings › Appearance offers Default (images
+  as compact previews, capped in size) or Large (images fill the message
+  column up to a maximum height), shown as two live previews with radio
+  buttons. Applies to the timeline and threads in every chat style; the
+  viewer is unchanged. Thumbnails are requested at the size the setting needs.
+- *Keyboard shortcuts.* A Keyboard section in Settings lists every shortcut by
+  area (Composer, Navigation, Calls when M5 lands), drawn with key caps, and
+  the same list is reachable from Help › Keyboard Shortcuts (⌘/). Composer
+  shortcuts to implement with it: Return sends, ⇧Return adds a line; ⌘B bold,
+  ⌘I italic, ⌘⇧> quote, ⌘⇧L link, ⌘E code (wrap the selection in the
+  Markdown the composer already sends); ⌘Z / ⌘⇧Z undo and redo; ⌘↑ / ⌘↓ (⌘Home
+  / ⌘End) to the composer's start and end; Escape cancels a reply or edit; ↑
+  and ↓ in an empty composer step through your own messages to edit; ⌃⌥↑ and
+  ⌃⌥↓ step through what you sent before (composer history, kept per room in
+  memory only, never on disk). Use platform modifiers (Ctrl on Linux and
+  Windows). The list is generated from the actual key bindings so it cannot
+  drift; no custom rebinding in 1.0. Sticker shortcuts are out of scope
+  (stickers are deferred past 1.0).
 
 **M5 — calls (5–7 weeks).** Start with a macOS call-runtime spike, then the
 complete lifecycle and Linux/Windows. Exit: encrypted direct and group calls with
@@ -196,7 +223,8 @@ Linux and Windows CI passed on `36f850a`; macOS CI was switched to `macos-15`
    Notification OS permission/delivery/click/badge acceptance and Element comparison
    remain. Linux accent observation now retains its portal connection.
 5. **M4b chat polish.** Search, room media gallery, presence, motion, typing
-   indicator, formatting and room discovery (see Milestones).
+   indicator, formatting, room discovery, message editing, stacked
+   attachments, timeline image size and keyboard shortcuts (see Milestones).
 6. **M5 calls.** Element Call runtime, direct and group calls.
 7. **M6 release.** Accessibility pass, packaging, signing, updates.
 
@@ -543,6 +571,11 @@ Review of M4b core 2 (2026-11-11, `fix/core-2-review`):
 - Gallery thumbnails are fetched only in the Images tab. Without an event thumbnail, only `image/*` originals are scaled. Encrypted originals with an unknown size are rejected before download, which closes an unbounded buffered download.
 - A status message of only whitespace clears the status instead of sending an empty string.
 - Checks: fmt, strict Clippy and the workspace tests pass. The isolated Synapse directory, viewer/gallery and presence (enabled/disabled) runs pass. No physical or Element checks.
+
+Stacked attachments and sync restart (2026-11-11):
+- The composer keeps up to 10 attachments (256 MB in total, since drafts are held in memory until sent) as tiles above the message field: image thumbnails or file name and size, each with a Remove button, and an "Adding…" tile while a file is read. The picker allows several files; drag and drop and paste add every file. The "Send attachment?" confirmation is gone: Return or Send sends the attachments in order and then the text, if any. Sending waits until every tile is ready. If an attachment fails, the rest stay stacked and the error appears in the status line. Room or account changes clear the stack.
+- The SDK sync service stops for good after an error or unexpected termination. While the session is active it is now restarted with backoff (1 s, doubling up to 60 s), showing "Offline · reconnecting…". Previously the app stayed disconnected until relaunched.
+- Checks: fmt, strict Clippy and the workspace tests pass (offline UI test for the tray and its removal; restart backoff unit test). Isolated Synapse sync service tests pass. Sending stacked attachments to a live server, and the restart path against a real failing server, have not been exercised.
 
 Not yet verified:
 - Physical GUI checks of logout, pagination, IME and VoiceOver.

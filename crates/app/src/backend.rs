@@ -700,7 +700,7 @@ impl Backend {
             snapshot.members_state = MembersState::Loading;
             snapshot.typing.clear();
             snapshot.typing_others = 0;
-            snapshot.timeline_status = "Loading messages…".into();
+            snapshot.timeline_status = LOADING_STATUS.into();
         });
         let shared = self.state.clone();
         let updates = self.updates.clone();
