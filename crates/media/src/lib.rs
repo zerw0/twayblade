@@ -21,7 +21,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, AtomicU8, Ordering},
+        atomic::{AtomicU8, AtomicU64, Ordering},
     },
 };
 use tokio::{sync::mpsc, task::JoinHandle};
@@ -85,24 +85,32 @@ impl VideoFrame {
         })
     }
 }
+#[derive(Default)]
+struct FrameSlot {
+    frame: Option<Arc<VideoFrame>>,
+    retired: bool,
+}
 #[derive(Clone, Default)]
-pub struct LatestFrame(Arc<Mutex<Option<Arc<VideoFrame>>>>);
+pub struct LatestFrame(Arc<Mutex<FrameSlot>>);
 impl LatestFrame {
     pub fn latest(&self) -> Option<Arc<VideoFrame>> {
-        self.0.lock().ok()?.clone()
+        self.0.lock().ok()?.frame.clone()
     }
-    pub fn replace(&self, frame: VideoFrame) {
+    fn replace(&self, frame: VideoFrame) {
         if let Ok(mut slot) = self.0.lock()
+            && !slot.retired
             && slot
+                .frame
                 .as_ref()
                 .is_none_or(|f| frame.timestamp_us >= f.timestamp_us)
         {
-            *slot = Some(Arc::new(frame));
+            slot.frame = Some(Arc::new(frame));
         }
     }
-    pub fn clear(&self) {
+    fn clear(&self) {
         if let Ok(mut slot) = self.0.lock() {
-            *slot = None;
+            slot.retired = true;
+            slot.frame = None;
         }
     }
 }
@@ -120,8 +128,10 @@ impl VideoTracks {
     }
     fn insert(&self, id: String) -> LatestFrame {
         let frame = LatestFrame::default();
-        if let Ok(mut tracks) = self.0.lock() {
-            tracks.insert(id, frame.clone());
+        if let Ok(mut tracks) = self.0.lock()
+            && let Some(previous) = tracks.insert(id, frame.clone())
+        {
+            previous.clear();
         }
         frame
     }
@@ -150,7 +160,7 @@ pub struct Evidence {
     pub video_pattern_frames: Arc<AtomicU64>,
 }
 
-/// These values match Element Call v0.17.0 MatrixKeyProvider + livekit-client.
+/// These values match Element Call v0.28.2 MatrixKeyProvider + livekit-client.
 pub fn matrix_key_provider() -> KeyProvider {
     KeyProvider::new(KeyProviderOptions {
         ratchet_window_size: 10,
@@ -174,7 +184,7 @@ pub struct NativeMedia {
     capture: Option<camera::Camera>,
     consumers: HashMap<String, JoinHandle<()>>,
     event_pump: JoinHandle<()>,
-    sender_index:AtomicU8,
+    sender_index: AtomicU8,
 }
 impl NativeMedia {
     pub async fn connect(
@@ -183,13 +193,13 @@ impl NativeMedia {
         keys: KeyProvider,
         http: reqwest::Client,
     ) -> Result<Self, MediaError> {
-        let trust = transport::bind(url, http).map_err(|_| MediaError::Connection)?;
+        let trust = transport::bind(url, jwt, http).map_err(|_| MediaError::Connection)?;
         let mut options = RoomOptions::default();
         options.encryption = Some(E2eeOptions {
             encryption_type: EncryptionType::Gcm,
             key_provider: keys.clone(),
         });
-        options.auto_subscribe=false;
+        options.auto_subscribe = false;
         options.join_retries = 0;
         options.single_peer_connection = false;
         let (room, events) = Room::connect(url, jwt, options)
@@ -199,13 +209,17 @@ impl NativeMedia {
             let _ = room.close().await;
             return Err(MediaError::E2eeRequired);
         }
-        for peer in room.remote_participants().values(){
-            for publication in peer.track_publications().values(){
-                if publication.encryption_type()!=EncryptionType::Gcm{let _=room.close().await;return Err(MediaError::E2eeRequired);}
+        for peer in room.remote_participants().values() {
+            for publication in peer.track_publications().values() {
+                if publication.encryption_type() != EncryptionType::Gcm {
+                    let _ = room.close().await;
+                    return Err(MediaError::E2eeRequired);
+                }
                 publication.set_subscribed(true);
             }
         }
         let room = Arc::new(room);
+        trust.attach(&room);
         let (send, bounded) = mpsc::channel(64);
         let pump_room = room.clone();
         let mut events = events;
@@ -214,17 +228,21 @@ impl NativeMedia {
                 // The native cryptor can report each undecryptable frame while
                 // an authenticated participant's key is still in flight. SDK
                 // state owns these transitions; they are not UI snapshots.
-                if matches!(event,RoomEvent::E2eeStateChanged{..}){continue;}
+                if matches!(event, RoomEvent::E2eeStateChanged { .. }) {
+                    continue;
+                }
                 if send.try_send(event).is_err() {
                     drop(send);
-                    let _=tokio::time::timeout(std::time::Duration::from_secs(5),pump_room.close()).await;
+                    let _ =
+                        tokio::time::timeout(std::time::Duration::from_secs(5), pump_room.close())
+                            .await;
                     break;
                 }
             }
         });
         Ok(Self {
             event_pump,
-            sender_index:AtomicU8::new(0),
+            sender_index: AtomicU8::new(0),
             _trust: trust,
             room,
             events: bounded,
@@ -303,15 +321,7 @@ impl NativeMedia {
     }
     pub async fn configure_camera(&mut self, id: Option<&str>) -> Result<(), MediaError> {
         let Some(id) = id else {
-            if let Some(track) = self.camera.take() {
-                let _ = self
-                    .room
-                    .local_participant()
-                    .unpublish_track(&track.sid())
-                    .await;
-                self.video.remove(&format!("local:{}", track.sid()));
-            }
-            self.capture = None;
+            self.configure_camera_off().await;
             return Ok(());
         };
         let capture = camera::Camera::start(id).await?;
@@ -327,7 +337,7 @@ impl NativeMedia {
                 .local_participant()
                 .unpublish_track(&track.sid())
                 .await;
-            self.video.remove(&format!("local:{}", track.sid()));
+            self.stop_track(&format!("local:{}", track.sid()));
         }
         self.capture = None;
     }
@@ -394,25 +404,40 @@ impl NativeMedia {
         }
         Ok(())
     }
-    async fn activate_sender(&self,sid:&livekit::id::TrackSid)->Result<(),MediaError>{
-        let own=self.room.local_participant().identity();
-        for _ in 0..20{
-            if let Some(cryptor)=self.room.e2ee_manager().frame_cryptors().get(&(own.clone(),sid.clone())){
+    async fn activate_sender(&self, sid: &livekit::id::TrackSid) -> Result<(), MediaError> {
+        let own = self.room.local_participant().identity();
+        for _ in 0..20 {
+            if let Some(cryptor) = self
+                .room
+                .e2ee_manager()
+                .frame_cryptors()
+                .get(&(own.clone(), sid.clone()))
+            {
                 cryptor.set_key_index(self.sender_index.load(Ordering::Relaxed) as i32);
-                if cryptor.enabled(){return Ok(());}
+                if cryptor.enabled() {
+                    return Ok(());
+                }
             }
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
         Err(MediaError::E2eeRequired)
     }
     pub fn set_sender_index(&self, index: u8) {
-        self.sender_index.store(index,Ordering::Relaxed);
+        self.sender_index.store(index, Ordering::Relaxed);
         let own = self.room.local_participant().identity();
         for ((identity, _), cryptor) in self.room.e2ee_manager().frame_cryptors() {
             if identity == own {
                 cryptor.set_key_index(index as i32);
             }
         }
+    }
+    fn stop_track(&mut self, id: &str) {
+        if let Some(task) = self.consumers.remove(id) {
+            task.abort();
+        }
+        // Retiring the slot prevents an already-running decoder from writing
+        // one final frame after removal, even if a UI still holds the handle.
+        self.video.remove(id);
     }
     pub fn handle_event(&mut self, event: &RoomEvent) {
         match event {
@@ -422,6 +447,7 @@ impl NativeMedia {
                 }
                 RemoteTrack::Audio(track) => {
                     let id = track.sid().to_string();
+                    self.stop_track(&id);
                     let evidence = self.evidence.clone();
                     let mut stream = NativeAudioStream::new(track.rtc_track(), 48000, 1);
                     self.consumers.insert(
@@ -442,15 +468,13 @@ impl NativeMedia {
             },
             RoomEvent::TrackUnsubscribed { track, .. } => {
                 let id = track.sid().to_string();
-                if let Some(task) = self.consumers.remove(&id) {
-                    task.abort();
-                }
-                self.video.remove(&id);
+                self.stop_track(&id);
             }
             _ => {}
         }
     }
     fn consume_video(&mut self, id: String, track: livekit::webrtc::video_track::RtcVideoTrack) {
+        self.stop_track(&id);
         let slot = self.video.insert(id.clone());
         let evidence = self.evidence.clone();
         let mut stream = NativeVideoStream::new(track);
@@ -542,6 +566,15 @@ mod tests {
         let frame = slot.latest().unwrap();
         assert_eq!(Arc::strong_count(&frame), 2);
         tracks.remove("track");
+        assert!(slot.latest().is_none());
+        slot.replace(VideoFrame::new(1, 1, 0, 1001, vec![0; 4]).unwrap());
+        assert!(
+            slot.latest().is_none(),
+            "late decoder cannot revive a retired handle"
+        );
+        let replacement = tracks.insert("track".into());
+        replacement.replace(VideoFrame::new(1, 1, 0, 1, vec![0; 4]).unwrap());
+        assert_eq!(replacement.latest().unwrap().timestamp_us, 1);
         assert!(slot.latest().is_none());
         assert_eq!(Arc::strong_count(&frame), 1);
         assert!(VideoFrame::new(4000, 1, 0, 0, vec![]).is_err());

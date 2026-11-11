@@ -61,6 +61,9 @@ impl Sink {
         let Some(pixel) = (unsafe { sample.image_buffer() }) else {
             return;
         };
+        if CVPixelBufferGetPixelFormatType(&pixel) != kCVPixelFormatType_32BGRA {
+            return;
+        }
         let width = CVPixelBufferGetWidth(&pixel);
         let height = CVPixelBufferGetHeight(&pixel);
         let stride = CVPixelBufferGetBytesPerRow(&pixel);

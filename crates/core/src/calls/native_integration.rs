@@ -108,7 +108,13 @@ async fn native_matrixrtc_audio_and_video() {
         .await,
         "two memberships, participant lists, bidirectional keys and decrypted audio",
     );
-    verify_livekit_pair(accounts.iter().map(|a|format!("{}:{}",a.user_id(),a.client.device_id().unwrap())).collect()).await;
+    verify_livekit_pair(
+        accounts
+            .iter()
+            .map(|a| format!("{}:{}", a.user_id(), a.client.device_id().unwrap()))
+            .collect(),
+    )
+    .await;
     println!(
         "native-native audio: memberships=2, lists=2, encrypted key exchange=bidirectional, decrypted signal frames=both"
     );
@@ -122,6 +128,38 @@ async fn native_matrixrtc_audio_and_video() {
         }
     }).await,"decrypted video test pattern in both native clients");
     println!("native-native video: decrypted test pattern frames=both");
+    assert!(
+        matches!(
+            NativeCall::start(&accounts[0], room.room_id().as_str(), false).await,
+            Err(CallError::AlreadyActive)
+        ),
+        "one call per account is enforced before any permission prompt"
+    );
+    assert!(
+        matches!(
+            accounts[0]
+                .prepare_native_call(room.room_id().as_str(), false)
+                .await,
+            Err(CallError::MediaE2eeRequired)
+        ),
+        "encrypted room cannot disable media E2EE"
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(75);
+    checked(timeout(Duration::from_secs(90),async{
+        loop{
+            tokio::select!{r=call_a.updates.changed()=>checked(r,"Alice sustained call"),r=call_b.updates.changed()=>checked(r,"Bob sustained call"),_=tokio::time::sleep_until(deadline)=>break}
+            for call in [&call_a,&call_b]{assert!(!matches!(call.updates.borrow().phase,CallPhase::Ended(_)),"membership/media refresh must preserve the call");assert_eq!(call.updates.borrow().participants.len(),2);}
+        }
+    }).await,"sustained call across expiry refresh and delayed-event renewal");
+    verify_livekit_pair(
+        accounts
+            .iter()
+            .map(|a| format!("{}:{}", a.user_id(), a.client.device_id().unwrap()))
+            .collect(),
+    )
+    .await;
+    println!("native-native sustained call: membership refresh and delayed leave remained active");
+
     checked(call_a.leave().await, "Alice leave");
     checked(call_b.leave().await, "Bob leave");
 }
@@ -244,8 +282,7 @@ async fn publish_pattern(call: &mut CallHandle, tasks: &mut Tasks) {
         false,
     );
     checked(
-        call
-            .publish_video(RtcVideoSource::Native(source.clone()))
+        call.publish_video(RtcVideoSource::Native(source.clone()))
             .await,
         "publish encrypted test pattern",
     );
@@ -346,9 +383,9 @@ async fn native_matrixrtc_element_audio_and_video() {
             }
         }
     }));
-    let mut call=call.drive();
+    let mut call = call.drive();
     let mut browser = serde_json::Value::Null;
-    let mut report=std::time::Instant::now();
+    let mut report = std::time::Instant::now();
     let audio_result=timeout(Duration::from_secs(90),async{
         loop{
             tokio::select!{
@@ -366,13 +403,41 @@ async fn native_matrixrtc_element_audio_and_video() {
             if browser["audio"].as_u64().unwrap_or(0)>10 && browser["keys"].as_u64().unwrap_or(0)>0 && browser["participants"]==2 && call.keys_received()>0 && call.updates.borrow().participants.len()==2 && call.evidence().audio_signal_frames.load(Ordering::Relaxed)>20 {break;}
         }
     }).await;
-    if audio_result.is_err(){eprintln!("Interop counts: native_participants={}, native_keys={}, native_signal={}, browser_participants={}, browser_keys={}, browser_audio={}",call.updates.borrow().participants.len(),call.keys_received(),call.evidence().audio_signal_frames.load(Ordering::Relaxed),browser["participants"],browser["keys"],browser["audio"]);}
-    checked(audio_result,"Element/native bidirectional decrypted audio, key exchange and participants");
-    verify_livekit_pair(vec![format!("{}:{}",accounts[0].user_id(),accounts[0].client.device_id().unwrap()),format!("{}:{}",ready["user_id"].as_str().unwrap(),ready["device_id"].as_str().unwrap())]).await;
+    if audio_result.is_err() {
+        eprintln!(
+            "Interop counts: native_participants={}, native_keys={}, native_signal={}, browser_participants={}, browser_keys={}, browser_audio={}",
+            call.updates.borrow().participants.len(),
+            call.keys_received(),
+            call.evidence().audio_signal_frames.load(Ordering::Relaxed),
+            browser["participants"],
+            browser["keys"],
+            browser["audio"]
+        );
+    }
+    checked(
+        audio_result,
+        "Element/native bidirectional decrypted audio, key exchange and participants",
+    );
+    verify_livekit_pair(vec![
+        format!(
+            "{}:{}",
+            accounts[0].user_id(),
+            accounts[0].client.device_id().unwrap()
+        ),
+        format!(
+            "{}:{}",
+            ready["user_id"].as_str().unwrap(),
+            ready["device_id"].as_str().unwrap()
+        ),
+    ])
+    .await;
     println!(
         "native-Element Call audio: two participant lists, bidirectional encrypted keys and decrypted signal frames passed"
     );
-    checked(input.write_all(b"{\"video\":true}\n").await,"enable browser video");
+    checked(
+        input.write_all(b"{\"video\":true}\n").await,
+        "enable browser video",
+    );
     publish_pattern(&mut call, &mut tasks).await;
     checked(timeout(Duration::from_secs(60),async{
         loop{
@@ -390,10 +455,37 @@ async fn native_matrixrtc_element_audio_and_video() {
     .expect("browser wait");
 }
 
-async fn verify_livekit_pair(identities:Vec<String>){
+async fn verify_livekit_pair(identities: Vec<String>) {
     use tokio::io::AsyncWriteExt;
-    let mut child=checked(tokio::process::Command::new("python3").arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/integration/livekit-evidence.py")).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::inherit()).kill_on_drop(true).spawn(),"LiveKit server evidence process");
-    let mut input=child.stdin.take().unwrap();checked(input.write_all(serde_json::to_string(&identities).unwrap().as_bytes()).await,"LiveKit identities private input");drop(input);
-    let output=checked(child.wait_with_output().await,"LiveKit server evidence");assert!(output.status.success(),"LiveKit server must contain exactly both expected participants");
-    let counts:serde_json::Value=checked(serde_json::from_slice(&output.stdout),"LiveKit evidence counts");assert_eq!(counts["livekit_participants"],2);
+    let mut child = checked(
+        tokio::process::Command::new("python3")
+            .arg(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../tests/integration/livekit-evidence.py"),
+            )
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .kill_on_drop(true)
+            .spawn(),
+        "LiveKit server evidence process",
+    );
+    let mut input = child.stdin.take().unwrap();
+    checked(
+        input
+            .write_all(serde_json::to_string(&identities).unwrap().as_bytes())
+            .await,
+        "LiveKit identities private input",
+    );
+    drop(input);
+    let output = checked(child.wait_with_output().await, "LiveKit server evidence");
+    assert!(
+        output.status.success(),
+        "LiveKit server must contain exactly both expected participants"
+    );
+    let counts: serde_json::Value = checked(
+        serde_json::from_slice(&output.stdout),
+        "LiveKit evidence counts",
+    );
+    assert_eq!(counts["livekit_participants"], 2);
 }

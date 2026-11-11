@@ -6,7 +6,7 @@ use futures_util::{
 };
 use livekit_net::{Header, TransportError, WsClient, WsConnectResult, WsConnection};
 use std::sync::{
-    Arc, Mutex, Once, OnceLock,
+    Arc, Mutex, Once, OnceLock, Weak,
     atomic::{AtomicU64, Ordering},
 };
 use tokio::sync::Mutex as AsyncMutex;
@@ -22,13 +22,34 @@ use tokio_tungstenite::{
 struct Binding {
     id: u64,
     origin: String,
+    initial_token: String,
+    room: Weak<livekit::Room>,
     http: reqwest::Client,
+}
+impl Binding {
+    fn matches(&self, origin: &str, token: &str) -> bool {
+        self.origin == origin
+            && (self.initial_token == token
+                || self
+                    .room
+                    .upgrade()
+                    .is_some_and(|room| room.token() == token))
+    }
 }
 fn bindings() -> &'static Mutex<Vec<Binding>> {
     static BINDINGS: OnceLock<Mutex<Vec<Binding>>> = OnceLock::new();
     BINDINGS.get_or_init(Mutex::default)
 }
 pub(crate) struct TrustBinding(u64);
+impl TrustBinding {
+    pub fn attach(&self, room: &Arc<livekit::Room>) {
+        if let Ok(mut list) = bindings().lock()
+            && let Some(binding) = list.iter_mut().find(|b| b.id == self.0)
+        {
+            binding.room = Arc::downgrade(room);
+        }
+    }
+}
 impl Drop for TrustBinding {
     fn drop(&mut self) {
         if let Ok(mut list) = bindings().lock() {
@@ -36,7 +57,11 @@ impl Drop for TrustBinding {
         }
     }
 }
-pub(crate) fn bind(url: &str, http: reqwest::Client) -> Result<TrustBinding, TransportError> {
+pub(crate) fn bind(
+    url: &str,
+    token: &str,
+    http: reqwest::Client,
+) -> Result<TrustBinding, TransportError> {
     static INIT: Once = Once::new();
     static NEXT: AtomicU64 = AtomicU64::new(1);
     INIT.call_once(|| {
@@ -51,7 +76,13 @@ pub(crate) fn bind(url: &str, http: reqwest::Client) -> Result<TrustBinding, Tra
     if list.len() >= 8 {
         return Err(error());
     }
-    list.push(Binding { id, origin, http });
+    list.push(Binding {
+        id,
+        origin,
+        initial_token: token.to_owned(),
+        room: Weak::new(),
+        http,
+    });
     Ok(TrustBinding(id))
 }
 fn error() -> TransportError {
@@ -68,12 +99,21 @@ impl WsClient for AccountTransport {
     ) -> Result<WsConnectResult, TransportError> {
         let mut parsed = url::Url::parse(&url).map_err(|_| error())?;
         let origin = parsed.origin().ascii_serialization();
+        // The SDK registry is process-wide. Origin alone would mix two
+        // accounts' custom roots when they call the same SFU. Match the exact
+        // SDK bearer token, including its authenticated server refresh, too.
+        let token = headers
+            .iter()
+            .find(|h| h.name.eq_ignore_ascii_case("authorization"))
+            .and_then(|h| h.value.strip_prefix("Bearer "))
+            .filter(|token| !token.is_empty())
+            .ok_or_else(error)?;
         let http = bindings()
             .lock()
             .map_err(|_| error())?
             .iter()
             .rev()
-            .find(|b| b.origin == origin)
+            .find(|b| b.matches(&origin, token))
             .map(|b| b.http.clone())
             .ok_or_else(error)?;
         if parsed.scheme() != "wss" {
@@ -147,5 +187,24 @@ impl WsConnection for Connection {
     }
     async fn close(&self) {
         let _ = self.send.lock().await.close().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn same_sfu_accounts_cannot_borrow_each_others_trust_binding() {
+        let binding = Binding {
+            id: 1,
+            origin: "wss://sfu.test".into(),
+            initial_token: "fixture-account-a".into(),
+            room: Weak::new(),
+            http: reqwest::Client::new(),
+        };
+        assert!(binding.matches("wss://sfu.test", "fixture-account-a"));
+        assert!(!binding.matches("wss://sfu.test", "fixture-account-b"));
+        assert!(!binding.matches("wss://other.test", "fixture-account-a"));
+        assert!(!binding.matches("wss://sfu.test", ""));
     }
 }

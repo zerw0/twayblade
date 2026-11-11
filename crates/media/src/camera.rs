@@ -13,7 +13,9 @@ pub fn devices() -> Vec<Device> {
     Vec::new()
 }
 #[cfg(not(target_os = "macos"))]
-pub struct Camera { _private: () }
+pub struct Camera {
+    _private: (),
+}
 #[cfg(not(target_os = "macos"))]
 impl Camera {
     pub async fn start(_id: &str) -> Result<Self, MediaError> {

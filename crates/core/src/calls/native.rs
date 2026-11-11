@@ -1,4 +1,4 @@
-//! Native MatrixRTC signalling, targeting Element Call 0.17.0's state-event mode.
+//! Native MatrixRTC signalling, targeting Element Call 0.28.2 Compatibility mode.
 use super::CallError;
 use crate::auth::Account;
 use matrix_sdk::{
@@ -42,8 +42,14 @@ pub fn state_key(user: OwnedUserId, device: &str, room_version: &str) -> CallMem
     CallMemberStateKey::new(
         user,
         Some(format!("{device}_m.call")),
-        !room_version.starts_with("org.matrix.msc3757")
-            && !room_version.starts_with("org.matrix.msc3779"),
+        !["org.matrix.msc3757", "org.matrix.msc3779"]
+            .iter()
+            .any(|prefix| {
+                room_version == *prefix
+                    || room_version
+                        .strip_prefix(prefix)
+                        .is_some_and(|suffix| suffix.starts_with('.'))
+            }),
     )
 }
 
@@ -221,12 +227,16 @@ impl Account {
         let token = self
             .client
             .send(request_openid_token::v3::Request::new(user.clone()))
-            .with_request_config(matrix_sdk::config::RequestConfig::new().timeout(Duration::from_secs(10)).retry_limit(0))
+            .with_request_config(
+                matrix_sdk::config::RequestConfig::new()
+                    .timeout(Duration::from_secs(10))
+                    .retry_limit(0),
+            )
             .await
             .map_err(|_| CallError::TransportFailed)?;
         #[cfg(test)]
         eprintln!("Native fixture: OpenID obtained");
-        // Use the account's SDK HTTP client: same explicitly supplied fixture CA,
+        // Build a separate HTTP client with the account's explicit fixture CA,
         // no Matrix bearer token on this request and no redirects to other origins.
         let body = json!({"room":alias,"openid_token":{"access_token":token.access_token,"token_type":token.token_type,"matrix_server_name":token.matrix_server_name,"expires_in":token.expires_in.as_secs()},"device_id":device});
         let mut http = matrix_sdk::reqwest::Client::builder()
@@ -285,11 +295,17 @@ impl Account {
         );
         let now = u64::from(MilliSecondsSinceUnixEpoch::now().0);
         let content = membership_content(&device, &service, &alias, now);
-        let (changed,membership_updates)=tokio::sync::watch::channel(0u64);
-        let handler=room.client().add_room_event_handler(room.room_id(),move |_event:matrix_sdk::ruma::events::call::member::SyncCallMemberEvent|{
-            let changed=changed.clone();async move{changed.send_modify(|n|*n=n.wrapping_add(1));}
-        });
-        let membership_handler=room.client().event_handler_drop_guard(handler);
+        let (changed, membership_updates) = tokio::sync::watch::channel(0u64);
+        let handler = room.client().add_room_event_handler(
+            room.room_id(),
+            move |_event: matrix_sdk::ruma::events::call::member::SyncCallMemberEvent| {
+                let changed = changed.clone();
+                async move {
+                    changed.send_modify(|n| *n = n.wrapping_add(1));
+                }
+            },
+        );
+        let membership_handler = room.client().event_handler_drop_guard(handler);
         Ok((
             Signalling {
                 room,
@@ -305,9 +321,9 @@ impl Account {
                 content,
                 delayed: None,
                 closed: false,
-                lease:None,
+                lease: None,
                 membership_updates,
-                _membership_handler:membership_handler,
+                _membership_handler: membership_handler,
             },
             SfuCredentials { url, jwt, http },
         ))
@@ -318,10 +334,27 @@ fn membership_content(device: &str, service: &str, alias: &str, now: u64) -> Val
         "focus_active":{"type":"livekit","focus_selection":"oldest_membership"},"foci_preferred":[{"type":"livekit","livekit_service_url":service,"livekit_alias":alias}]})
 }
 impl Signalling {
-    async fn write(&self,content:Value)->Result<(),CallError>{
-        if self.room.state()!=RoomState::Joined{return Err(CallError::InvalidRoom);}
-        tokio::time::timeout(Duration::from_secs(5),self.room.send_state_event_raw(MEMBER_EVENT,self.state_key.as_ref(),content)).await.map_err(|_|CallError::TransportFailed)?
-        .map_err(|error|if matches!(error.client_api_error_kind(),Some(matrix_sdk::ruma::api::error::ErrorKind::Forbidden)){CallError::MembershipForbidden}else{CallError::TransportFailed})?;
+    async fn write(&self, content: Value) -> Result<(), CallError> {
+        if self.room.state() != RoomState::Joined {
+            return Err(CallError::InvalidRoom);
+        }
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            self.room
+                .send_state_event_raw(MEMBER_EVENT, self.state_key.as_ref(), content),
+        )
+        .await
+        .map_err(|_| CallError::TransportFailed)?
+        .map_err(|error| {
+            if matches!(
+                error.client_api_error_kind(),
+                Some(matrix_sdk::ruma::api::error::ErrorKind::Forbidden)
+            ) {
+                CallError::MembershipForbidden
+            } else {
+                CallError::TransportFailed
+            }
+        })?;
         Ok(())
     }
 
@@ -347,27 +380,54 @@ impl Signalling {
                         .cast_unchecked(),
                 ),
             )
-            .with_request_config(matrix_sdk::config::RequestConfig::new().timeout(Duration::from_secs(5)).retry_limit(0))
+            .with_request_config(
+                matrix_sdk::config::RequestConfig::new()
+                    .timeout(Duration::from_secs(5))
+                    .retry_limit(0),
+            )
             .await
             .ok()
             .map(|r| r.delay_id);
+    }
+    async fn restart_leave(&self, id: &str) -> Result<bool, CallError> {
+        match self
+            .room
+            .client()
+            .send(
+                delayed_events::update_delayed_event::unstable_v1::Request::new(
+                    id.to_owned(),
+                    UpdateAction::Restart,
+                ),
+            )
+            .with_request_config(
+                matrix_sdk::config::RequestConfig::new()
+                    .timeout(Duration::from_secs(5))
+                    .retry_limit(0),
+            )
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(error)
+                if matches!(
+                    error.client_api_error_kind(),
+                    Some(matrix_sdk::ruma::api::error::ErrorKind::NotFound)
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(_) => Err(CallError::TransportFailed),
+        }
     }
     pub async fn maintain(&mut self) -> Result<(), CallError> {
         if self.closed {
             return Err(CallError::StaleRequest);
         }
-        if let Some(id) = &self.delayed {
-            self.room
-                .client()
-                .send(
-                    delayed_events::update_delayed_event::unstable_v1::Request::new(
-                        id.clone(),
-                        UpdateAction::Restart,
-                    ),
-                )
-                .with_request_config(matrix_sdk::config::RequestConfig::new().timeout(Duration::from_secs(5)).retry_limit(0))
-                .await
-                .map_err(|_| CallError::TransportFailed)?;
+        if let Some(id) = &self.delayed
+            && !self.restart_leave(id).await?
+        {
+            // A lost/fired delayed event may already have removed membership.
+            // End rather than silently resurrecting an unprotected session.
+            return Err(CallError::TransportFailed);
         }
         let now = u64::from(MilliSecondsSinceUnixEpoch::now().0);
         let expires = self.content["expires"]
@@ -377,9 +437,16 @@ impl Signalling {
             self.content["expires"] =
                 json!(now.saturating_sub(self.own.created_ms) + EXPIRY.as_millis() as u64);
             self.write(self.content.clone()).await?;
-            // Synapse cancels a device's pending state write when that device
-            // writes the same state key. Register a fresh delayed leave.
-            self.schedule_leave().await;
+            // Some servers retain the delayed leave across a state write,
+            // others cancel it. Keep restarting the existing ID when it still
+            // exists: replacing it unconditionally leaves an orphan that later
+            // removes the refreshed membership.
+            if let Some(id) = &self.delayed
+                && !self.restart_leave(id).await?
+            {
+                self.delayed = None;
+                self.schedule_leave().await;
+            }
         }
         Ok(())
     }
@@ -396,7 +463,11 @@ impl Signalling {
                         UpdateAction::Cancel,
                     ),
                 )
-                .with_request_config(matrix_sdk::config::RequestConfig::new().timeout(Duration::from_secs(5)).retry_limit(0))
+                .with_request_config(
+                    matrix_sdk::config::RequestConfig::new()
+                        .timeout(Duration::from_secs(5))
+                        .retry_limit(0),
+                )
                 .await;
         }
         Ok(())
@@ -409,7 +480,7 @@ impl Drop for Signalling {
         }
         // Task cancellation/account replacement must also leave. A bounded
         // best-effort cleanup complements the server delayed event/expiry.
-        let lease=self.lease.take();
+        let lease = self.lease.take();
         let room = self.room.clone();
         let key = self.state_key.as_ref().to_owned();
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
@@ -436,6 +507,10 @@ mod tests {
             "_@a:example.org_D_m.call"
         );
         assert_eq!(
+            state_key(user.clone(), "D", "org.matrix.msc37570").as_ref(),
+            "_@a:example.org_D_m.call"
+        );
+        assert_eq!(
             state_key(user, "D", "org.matrix.msc3757.10").as_ref(),
             "@a:example.org_D_m.call"
         );
@@ -459,6 +534,31 @@ mod tests {
             )
             .unwrap(),
             ("https://good".into(), "!r:e.org".into())
+        );
+    }
+    #[test]
+    fn existing_focus_comes_from_oldest_membership_or_fails_without_forking() {
+        let older = Member {
+            user_id: matrix_sdk::ruma::user_id!("@a:example.org").to_owned(),
+            device_id: "A".into(),
+            member_id: "a".into(),
+            created_ms: 1,
+            service_url: Some("https://oldest.test".into()),
+            alias: Some("shared".into()),
+        };
+        let mut newer = older.clone();
+        newer.created_ms = 2;
+        newer.service_url = Some("https://newer.test".into());
+        let fallback = vec!["https://discovered.test".into()];
+        assert_eq!(
+            select_focus(&[newer.clone(), older.clone()], &fallback, "!r:example.org").unwrap(),
+            ("https://oldest.test".into(), "shared".into())
+        );
+        let mut unusable = older;
+        unusable.service_url = None;
+        assert_eq!(
+            select_focus(&[newer, unusable], &fallback, "!r:example.org"),
+            Err(CallError::NoFoci)
         );
     }
     #[test]

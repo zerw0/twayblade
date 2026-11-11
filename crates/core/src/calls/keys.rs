@@ -3,7 +3,10 @@ use super::{
     CallError,
     native::{KEY_EVENT, Member, members},
 };
-use base64::{Engine, engine::general_purpose::{STANDARD,STANDARD_NO_PAD}};
+use base64::{
+    Engine,
+    engine::general_purpose::{STANDARD, STANDARD_NO_PAD},
+};
 use matrix_sdk::{
     Room,
     deserialized_responses::{AlgorithmInfo, EncryptionInfo},
@@ -128,12 +131,16 @@ fn accept(
     current: &[Member],
     now: u64,
 ) -> Option<ReceivedKey> {
-    let info=info?;
+    let info = info?;
     if content.room_id != room_id
-        || content.session.as_ref().is_some_and(|s|s.application!="m.call"||!s.call_id.is_empty()||s.scope!="m.room")
+        || content.session.as_ref().is_some_and(|s| {
+            s.application != "m.call" || !s.call_id.is_empty() || s.scope != "m.room"
+        })
         || sender != info.sender.as_str()
         || info.forwarder.is_some()
-        || content.sent_ts.is_some_and(|ts|ts>now.saturating_add(30_000)||now.saturating_sub(ts)>120_000)
+        || content
+            .sent_ts
+            .is_some_and(|ts| ts > now.saturating_add(30_000) || now.saturating_sub(ts) > 120_000)
     {
         return None;
     }
@@ -153,15 +160,36 @@ fn accept(
     // Element Call 0.17's state-event mode publishes user:device as
     // membershipID, but sends a per-join UUID in this to-device member.id.
     // Bind to the authenticated user/device and room call, not this claim.
-    if content.sent_ts.is_some_and(|ts|ts.saturating_add(30_000)<member.created_ms){return None;}
-    if content.session.is_none() && content.member_id.as_ref().or(content.member.id.as_ref()).is_some_and(|id|id!=&member.member_id){return None;}
-    let entry=content.media_key.as_ref().or(content.keys.as_ref())?;
+    if content
+        .sent_ts
+        .is_some_and(|ts| ts.saturating_add(30_000) < member.created_ms)
+    {
+        return None;
+    }
+    // The current transport's explicit member_id must match even when a
+    // sender also includes the legacy session object. Modern messages require
+    // an incarnation claim; only legacy member.id may be an opaque UUID.
+    if content
+        .member_id
+        .as_ref()
+        .is_some_and(|id| id != &member.member_id)
+        || (content.session.is_none()
+            && content.member_id.as_ref().or(content.member.id.as_ref()) != Some(&member.member_id))
+    {
+        return None;
+    }
+    let entry = content.media_key.as_ref().or(content.keys.as_ref())?;
     // Device identity must be linked to the Olm sender, not just claimed by its
     // plaintext. SDK supplies sender_device only after resolving the sender key.
     if entry.key.len() > 24 {
         return None;
     }
-    let decoded = Zeroizing::new(STANDARD_NO_PAD.decode(&entry.key).or_else(|_|STANDARD.decode(&entry.key)).ok()?);
+    let decoded = Zeroizing::new(
+        STANDARD_NO_PAD
+            .decode(&entry.key)
+            .or_else(|_| STANDARD.decode(&entry.key))
+            .ok()?,
+    );
     let key = MediaKey(decoded.as_slice().try_into().ok()?);
     Some(ReceivedKey {
         identity: member.identity(),
@@ -232,7 +260,10 @@ impl SenderKeys {
                 application: "m.call".into(),
                 scope: "m.room".into(),
             }),
-            media_key: Some(KeyEntry {key:STANDARD.encode(self.key.bytes()),index:self.index}),
+            media_key: Some(KeyEntry {
+                key: STANDARD.encode(self.key.bytes()),
+                index: self.index,
+            }),
             member_id: Some(own.member_id.clone()),
             keys: Some(KeyEntry {
                 key: STANDARD_NO_PAD.encode(self.key.bytes()),
@@ -280,12 +311,18 @@ mod tests {
         let mut keys = SenderKeys::new().unwrap();
         let initial = keys.key.0;
         assert!(keys.update_members(&own, &[a.clone(), b.clone()]).unwrap());
-        assert!(keys.key.0==initial,"joining does not disclose earlier key generations");
+        assert!(
+            keys.key.0 == initial,
+            "joining preserves the current sender key generation"
+        );
         assert!(!keys.update_members(&own, &[a.clone(), b.clone()]).unwrap());
         assert!(keys.update_members(&own, &[b]).unwrap());
-        assert!(keys.key.0!=initial,"departure rotates key material");
+        assert!(keys.key.0 != initial, "departure rotates key material");
         assert_eq!(keys.index, 1);
-        assert!(MediaKey::generate().unwrap().0!=keys.key.0,"independent keys differ");
+        assert!(
+            MediaKey::generate().unwrap().0 != keys.key.0,
+            "independent keys differ"
+        );
     }
     #[test]
     fn key_acceptance_binds_authenticated_device_room_call_and_membership() {
@@ -320,20 +357,77 @@ mod tests {
             sent_ts: Some(1000),
         };
         let check = |c: &Content, current: &[Member]| {
-            accept(c, "@a:example.org", Some(&info), "!r:example.org", current, 1000).is_some()
+            accept(
+                c,
+                "@a:example.org",
+                Some(&info),
+                "!r:example.org",
+                current,
+                1000,
+            )
+            .is_some()
         };
         assert!(check(&content, std::slice::from_ref(&a)));
-        content.keys.as_mut().unwrap().key=STANDARD.encode([7;16]);
-        assert!(check(&content, std::slice::from_ref(&a)),"Element Call RTCEncryptionManager uses padded base64");
+        content.keys.as_mut().unwrap().key = STANDARD.encode([7; 16]);
+        assert!(
+            check(&content, std::slice::from_ref(&a)),
+            "Element Call RTCEncryptionManager uses padded base64"
+        );
         assert!(!check(&content, &[]));
-        assert!(accept(&content,"@a:example.org",None,"!r:example.org",std::slice::from_ref(&a),1000).is_none(),"clear to-device key rejected");
-        let mut unknown=info.clone();unknown.sender_device=None;
-        assert!(accept(&content,"@a:example.org",Some(&unknown),"!r:example.org",std::slice::from_ref(&a),1000).is_none(),"unlinked Olm sender rejected");
-        content.sent_ts=Some(200_000);assert!(!check(&content,std::slice::from_ref(&a)),"future replay rejected");content.sent_ts=Some(1000);
-        content.member.id=Some("Element-per-join-UUID".into());assert!(check(&content,std::slice::from_ref(&a)),"state-mode keys bind authenticated device, not opaque UUID claim");
+        assert!(
+            accept(
+                &content,
+                "@a:example.org",
+                None,
+                "!r:example.org",
+                std::slice::from_ref(&a),
+                1000
+            )
+            .is_none(),
+            "clear to-device key rejected"
+        );
+        let mut unknown = info.clone();
+        unknown.sender_device = None;
+        assert!(
+            accept(
+                &content,
+                "@a:example.org",
+                Some(&unknown),
+                "!r:example.org",
+                std::slice::from_ref(&a),
+                1000
+            )
+            .is_none(),
+            "unlinked Olm sender rejected"
+        );
+        content.sent_ts = Some(200_000);
+        assert!(
+            !check(&content, std::slice::from_ref(&a)),
+            "future replay rejected"
+        );
+        content.sent_ts = Some(1000);
+        content.member.id = Some("Element-per-join-UUID".into());
+        assert!(
+            check(&content, std::slice::from_ref(&a)),
+            "state-mode keys bind authenticated device, not opaque UUID claim"
+        );
 
-        let modern:Content=serde_json::from_value(serde_json::json!({"room_id":"!r:example.org","member_id":a.member_id,"member":{"claimed_device_id":"A"},"media_key":{"index":1,"key":STANDARD.encode([7;16])}})).unwrap();
-        assert!(check(&modern,std::slice::from_ref(&a)),"current Element keys omit session and sent_ts and may omit deprecated keys");
+        let mut modern:Content=serde_json::from_value(serde_json::json!({"room_id":"!r:example.org","member_id":a.member_id,"member":{"claimed_device_id":"A"},"media_key":{"index":1,"key":STANDARD.encode([7;16])}})).unwrap();
+        assert!(
+            check(&modern, std::slice::from_ref(&a)),
+            "current Element keys omit session and sent_ts and may omit deprecated keys"
+        );
+        modern.member_id = Some("wrong-incarnation".into());
+        assert!(!check(&modern, std::slice::from_ref(&a)));
+        modern.session = Some(Session {
+            call_id: String::new(),
+            application: "m.call".into(),
+            scope: "m.room".into(),
+        });
+        assert!(
+            !check(&modern, std::slice::from_ref(&a)),
+            "legacy fields cannot override an explicit wrong member_id"
+        );
         content.member.claimed_device_id = "B".into();
         assert!(!check(&content, std::slice::from_ref(&a)));
         content.member.claimed_device_id = "A".into();
