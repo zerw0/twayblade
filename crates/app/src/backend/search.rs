@@ -3,7 +3,7 @@
     reason = "Search contracts consumed by the separately implemented UI"
 )]
 use super::*;
-use matrix_client_core::search::{SearchError, SearchQuery, SearchResult, SearchToken};
+use twayblade_core::search::{SearchError, SearchQuery, SearchResult, SearchToken};
 #[derive(Clone, Default)]
 pub(crate) struct SearchState {
     pub query: Option<SearchQuery>,

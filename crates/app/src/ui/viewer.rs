@@ -13,8 +13,8 @@ use gpui_kit::{
     },
     *,
 };
-use matrix_client_core::conversation::{ImageError, ViewerImage};
 use std::sync::Arc;
+use twayblade_core::conversation::{ImageError, ViewerImage};
 
 gpui_kit::actions!(
     matrix_viewer,
@@ -31,7 +31,7 @@ gpui_kit::actions!(
         RevealImage
     ]
 );
-pub(super) fn bindings() -> Vec<KeyBinding> {
+pub(crate) fn bindings() -> Vec<KeyBinding> {
     vec![
         KeyBinding::new("escape", CloseViewer, Some("ImageViewer")),
         KeyBinding::new("left", PreviousImage, Some("ImageViewer")),
@@ -120,11 +120,11 @@ pub(super) fn bindings() -> Vec<KeyBinding> {
     ]
 }
 #[derive(Clone)]
-pub(super) struct ImageEntry {
+pub(crate) struct ImageEntry {
     pub message: Message,
     pub in_thread: bool,
 }
-pub(super) enum ImageLoad {
+pub(crate) enum ImageLoad {
     Loading,
     Ready {
         image: Arc<ViewerImage>,
@@ -132,7 +132,7 @@ pub(super) enum ImageLoad {
     },
     Failed(ImageError),
 }
-pub(super) struct Viewer {
+pub(crate) struct Viewer {
     pub room: String,
     pub entries: Vec<ImageEntry>,
     pub index: usize,
@@ -185,7 +185,7 @@ impl Viewer {
             rendered,
         )
     }
-    pub(super) fn clamp_pan(&mut self, window: &Window) {
+    pub(crate) fn clamp_pan(&mut self, window: &Window) {
         let (viewport, image) = self.geometry(window);
         let max_x = ((image.width - viewport.width) / 2.).max(px(0.));
         let max_y = ((image.height - viewport.height) / 2.).max(px(0.));
@@ -219,7 +219,7 @@ impl MatrixApp {
                 && let Some(attachment) = &mut message.attachment
             {
                 attachment.preview_png = Some(Arc::new(
-                    include_bytes!("../assets/attachment-sample.png").to_vec(),
+                    include_bytes!("../../assets/attachment-sample.png").to_vec(),
                 ));
             }
         }
@@ -305,8 +305,8 @@ impl MatrixApp {
         let room = viewer.room.clone();
         let id = viewer.entries[viewer.index].message.id.clone();
         if self.preview {
-            let result = matrix_client_core::conversation::decode_viewer_image(
-                include_bytes!("../assets/attachment-sample.png").to_vec(),
+            let result = twayblade_core::conversation::decode_viewer_image(
+                include_bytes!("../../assets/attachment-sample.png").to_vec(),
                 "Sample landscape.png",
             )
             .map(|mut image| {
@@ -660,6 +660,9 @@ impl MatrixApp {
             .absolute()
             .inset_0()
             .size_full()
+            // Swallow pointer events so a click here never also reaches the
+            // window chrome underneath (e.g. the account button behind Close).
+            .occlude()
             .bg(cx.theme().background)
             .track_focus(&v.focus)
             .key_context("ImageViewer")

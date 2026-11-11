@@ -37,8 +37,8 @@ impl Drop for Cleanup {
         }
     }
 }
-use matrix_client_core::notifications::{NotificationContext, NotificationItem};
-use matrix_client_platform::notifications as os;
+use twayblade_core::notifications::{NotificationContext, NotificationItem};
+use twayblade_platform::notifications as os;
 
 #[derive(Clone, Default, PartialEq, Eq)]
 pub(crate) struct NotificationConfig {
@@ -67,7 +67,7 @@ pub(super) fn presentation(item: &NotificationItem, preview: bool) -> (String, S
     let display = item.preview(preview);
     match (display.sender, display.body) {
         (Some(sender), Some(body)) => (format!("{sender} · {}", item.room_name), body),
-        _ => ("Matrix Client".into(), "New message".into()),
+        _ => ("Twayblade".into(), "New message".into()),
     }
 }
 
@@ -108,7 +108,7 @@ pub(super) async fn run(
             let timed_out = launch_started
                 .as_ref()
                 .is_some_and(|(_, start)| start.elapsed() > std::time::Duration::from_secs(60));
-            use matrix_client_core::notifications::ActivationState;
+            use twayblade_core::notifications::ActivationState;
             let validation = account.validate_notification_target(
                 &target.identity,
                 &target.room,
@@ -178,15 +178,15 @@ pub(super) async fn run(
                 if let Ok(Some(target)) = result
                     && let Ok(state) = shared.lock() && state.epoch == epoch
                         && target.account == account.instance_id()
-                        && account.validate_notification_target(&account.notification_identity(),&target.room,target.thread.as_deref()) == matrix_client_core::notifications::ActivationState::Ready {
+                        && account.validate_notification_target(&account.notification_identity(),&target.room,target.thread.as_deref()) == twayblade_core::notifications::ActivationState::Ready {
                         publish_click(&updates,target);
                 }
             }
             item = stream.next() => {
                 let Some(item) = item else { publish_state(permission, true); break; };
                 let live = config.borrow().clone();
-                if !matrix_client_core::notifications::should_notify(false, false, &item.room, &live.context) || !live.device.enabled { continue; }
-                if updates.borrow().notifications.room_mode(&item.room) == matrix_client_core::notifications::RoomMode::Mute { continue; }
+                if !twayblade_core::notifications::should_notify(false, false, &item.room, &live.context) || !live.device.enabled { continue; }
+                if updates.borrow().notifications.room_mode(&item.room) == twayblade_core::notifications::RoomMode::Mute { continue; }
                 let (title, body) = presentation(&item, live.device.preview);
                 let launch = os::LaunchActivation::new(account.notification_identity(),item.room.clone(),item.thread.clone());
                 let notification = os::Notification { title, body, sound: live.device.sound, action_label: "Open", target: os::Activation { account: account.instance_id(), room: item.room, thread: item.thread },launch:Some(launch) };
@@ -238,7 +238,7 @@ mod tests {
         };
         assert_eq!(
             presentation(&item, false),
-            ("Matrix Client".into(), "New message".into())
+            ("Twayblade".into(), "New message".into())
         );
         assert!(presentation(&item, true).0.contains("Sample sender"));
         assert_eq!(presentation(&item, true).1, "Sample body");

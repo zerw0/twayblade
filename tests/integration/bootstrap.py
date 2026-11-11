@@ -30,10 +30,10 @@ def generate():
             return
     ROOT.mkdir(parents=True, exist_ok=True)
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'Matrix Client local test')])
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'Twayblade local test')])
     now = datetime.datetime.now(datetime.timezone.utc)
     ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'Matrix Client test CA')])
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'Twayblade test CA')])
     ca_cert = (x509.CertificateBuilder().subject_name(ca_name).issuer_name(ca_name)
                .public_key(ca_key.public_key()).serial_number(x509.random_serial_number())
                .not_valid_before(now - datetime.timedelta(minutes=5))
@@ -64,7 +64,7 @@ def generate():
         print('Refreshed isolated TLS certificates; accounts and configuration retained.')
         return
     registration_secret = secrets.token_hex(32)
-    (ROOT / 'homeserver.yaml').write_text(f'''server_name: matrixclient.test
+    (ROOT / 'homeserver.yaml').write_text(f'''server_name: twayblade.test
 public_baseurl: {URL}/
 pid_file: /data/homeserver.pid
 report_stats: false
@@ -199,7 +199,7 @@ def oauth_config():
     import yaml
     shared = secrets.token_hex(32)
     config = yaml.safe_load((ROOT / 'homeserver.yaml').read_text())
-    config['server_name'] = 'oauth.matrixclient.test'
+    config['server_name'] = 'oauth.twayblade.test'
     for key in ['enable_registration', 'registration_shared_secret', 'macaroon_secret_key']:
         config.pop(key, None)
     config['matrix_authentication_service'] = {'enabled': True, 'endpoint': 'http://mas:8080/', 'secret': shared}
@@ -217,7 +217,7 @@ def oauth_config():
     (ROOT / 'sso-client-secret').chmod(0o600)
     mas['clients'] = [{'client_id': '01H8PKNWKKRPCBW4YGH1RWV279', 'client_auth_method': 'client_secret_post', 'client_secret': sso_secret, 'redirect_uris': ['https://127.0.0.1:20448/_synapse/client/oidc/callback'], 'grant_types': ['authorization_code'], 'response_types': ['code']}]
     mas['database'] = {'host': 'mas-db', 'port': 5432, 'username': 'postgres', 'database': 'mas', 'ssl_mode': 'disable'}
-    mas['matrix'] = {'kind': 'synapse', 'homeserver': 'oauth.matrixclient.test', 'endpoint': 'http://mas-synapse:8008', 'secret': shared}
+    mas['matrix'] = {'kind': 'synapse', 'homeserver': 'oauth.twayblade.test', 'endpoint': 'http://mas-synapse:8008', 'secret': shared}
     mas['policy'] = {'data': {'client_registration': {'allow_insecure_uris': True, 'allow_host_mismatch': True}}}
     mas['rate_limiting'] = {'registration': {'burst': 1000, 'per_second': 100}, 'login': {'per_ip': {'burst': 1000, 'per_second': 100}, 'per_account': {'burst': 1000, 'per_second': 100}}}
     mas['experimental'] = {'access_token_ttl': 5}
@@ -232,7 +232,7 @@ def oauth_config():
 def sso_config():
     import yaml
     config = yaml.safe_load((ROOT / 'homeserver.yaml').read_text())
-    config['server_name'] = 'sso.matrixclient.test'
+    config['server_name'] = 'sso.twayblade.test'
     config['oidc_providers'] = [{
         'idp_id': 'fixture', 'idp_name': 'Local OIDC',
         'issuer': 'https://127.0.0.1:19449/', 'discover': False,

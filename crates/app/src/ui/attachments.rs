@@ -5,7 +5,7 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{component::*, *};
 use std::{path::PathBuf, sync::Arc};
 
-pub(super) enum AttachmentSource {
+pub(crate) enum AttachmentSource {
     File(PathBuf),
     Bytes(String, Vec<u8>),
 }
@@ -15,7 +15,7 @@ struct Thumbnails(std::collections::HashMap<usize, (std::sync::Weak<Vec<u8>>, Ar
 impl Global for Thumbnails {}
 /// Core supplies bounded PNGs. Decode once into render data, keyed by the
 /// shared buffer's address so scrolling never copies, hashes or re-decodes.
-pub(super) fn render_png(bytes: &Arc<Vec<u8>>, cx: &mut App) -> Option<Arc<RenderImage>> {
+pub(crate) fn render_png(bytes: &Arc<Vec<u8>>, cx: &mut App) -> Option<Arc<RenderImage>> {
     let key = Arc::as_ptr(bytes) as usize;
     // The weak handle guards against a freed buffer's address being reused.
     if let Some((_, image)) = cx
@@ -48,7 +48,7 @@ pub(super) fn render_png(bytes: &Arc<Vec<u8>>, cx: &mut App) -> Option<Arc<Rende
 struct SmallImages(std::collections::HashMap<u64, Arc<RenderImage>>);
 impl Global for SmallImages {}
 /// For a handful of tiny images (sign-in provider icons) without a shared buffer.
-pub(super) fn render_small_png(bytes: &[u8], cx: &mut App) -> Option<Arc<RenderImage>> {
+pub(crate) fn render_small_png(bytes: &[u8], cx: &mut App) -> Option<Arc<RenderImage>> {
     let image = Image::from_bytes(ImageFormat::Png, bytes.to_vec());
     let id = image.id();
     if let Some(image) = cx
@@ -66,13 +66,13 @@ pub(super) fn render_small_png(bytes: &[u8], cx: &mut App) -> Option<Arc<RenderI
 }
 
 impl MatrixApp {
-    pub(super) fn clear_attachment(&mut self) {
+    pub(crate) fn clear_attachment(&mut self) {
         self.attachment_request = self.attachment_request.wrapping_add(1);
         self.attachment_busy = false;
         self.attachment_sample = false;
         self.attachment_draft = None;
     }
-    pub(super) fn choose_attachment(&mut self, window: &Window, cx: &mut Context<Self>) {
+    pub(crate) fn choose_attachment(&mut self, window: &Window, cx: &mut Context<Self>) {
         let room = self.snapshot.selected_room.clone();
         let account = self.snapshot.account_instance;
         let paths = cx.prompt_for_paths(PathPromptOptions {
@@ -96,7 +96,7 @@ impl MatrixApp {
         })
         .detach();
     }
-    pub(super) fn prepare_attachment(
+    pub(crate) fn prepare_attachment(
         &mut self,
         source: AttachmentSource,
         window: &Window,
@@ -128,7 +128,7 @@ impl MatrixApp {
         );
         cx.notify();
     }
-    pub(super) fn send_file(&mut self, window: &Window, cx: &mut Context<Self>) {
+    pub(crate) fn send_file(&mut self, window: &Window, cx: &mut Context<Self>) {
         let Some(draft) = self.attachment_draft.take() else {
             return;
         };
@@ -148,7 +148,7 @@ impl MatrixApp {
         );
         cx.notify();
     }
-    pub(super) fn save_attachment(
+    pub(crate) fn save_attachment(
         &mut self,
         message: String,
         filename: String,
@@ -161,7 +161,7 @@ impl MatrixApp {
         }
         let room = self.snapshot.selected_room.clone();
         let account = self.snapshot.account_instance;
-        let filename = matrix_client_core::conversation::sanitize_filename(&filename);
+        let filename = twayblade_core::conversation::sanitize_filename(&filename);
         let selected = cx.prompt_for_new_path(&PathBuf::from("."), Some(&filename));
         cx.spawn_in(window, async move |view, cx| {
             if let Ok(Ok(Some(path))) = selected.await {
@@ -191,7 +191,7 @@ impl MatrixApp {
         })
         .detach();
     }
-    pub(super) fn cancel_upload(
+    pub(crate) fn cancel_upload(
         &mut self,
         message: String,
         window: &Window,
@@ -212,7 +212,7 @@ impl MatrixApp {
             },
         );
     }
-    pub(super) fn paste_attachment(
+    pub(crate) fn paste_attachment(
         &mut self,
         clipboard: &ClipboardItem,
         window: &Window,
@@ -239,7 +239,7 @@ impl MatrixApp {
         }
         false
     }
-    pub(super) fn attachment_confirmation(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn attachment_confirmation(&self, cx: &mut Context<Self>) -> AnyElement {
         let (filename, size, preview_png) = if let Some(draft) = &self.attachment_draft {
             (
                 draft.filename.clone(),
@@ -251,7 +251,7 @@ impl MatrixApp {
                 "Sample landscape.png".into(),
                 2480,
                 Some(Arc::new(
-                    include_bytes!("../assets/attachment-sample.png").to_vec(),
+                    include_bytes!("../../assets/attachment-sample.png").to_vec(),
                 )),
             )
         } else {

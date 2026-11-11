@@ -62,7 +62,7 @@ async fn presence_enabled_and_disabled_server_evidence() {
         accounts.push(Account::new(
             client,
             path,
-            matrix_client_platform::SessionStore::new("matrix-client.integration.presence-unused"),
+            twayblade_platform::SessionStore::new("twayblade.integration.presence-unused"),
             Arc::new(Mutex::new(())),
         ));
     }

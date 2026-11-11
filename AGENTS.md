@@ -1,4 +1,4 @@
-# Matrix Client contributor instructions
+# Twayblade contributor instructions
 
 ## Product and scope
 - Read `PLAN.md` before implementation. Work through its milestones and keep its progress section accurate.
@@ -10,7 +10,7 @@
 - Modern MatrixRTC direct calls and legacy `m.call.*` calls are separate compatibility targets.
 
 ## Architecture
-- `gpui`: the only frontend (GPUI + GPUI Kit). `macos/` holds only the development bundle helper. The earlier Iced and SwiftUI frontends were deleted; do not reintroduce parallel frontends.
+- `app` (crate `twayblade`): the only frontend (GPUI + GPUI Kit). `src/ui/` holds the views (one module per area); `app.rs`, `backend/`, `model.rs`, `preferences.rs` and `theme.rs` hold state, services and tokens. `macos/` holds only the development bundle helper. The earlier Iced and SwiftUI frontends were deleted; do not reintroduce parallel frontends.
 - GPUI is custom-rendered. Use semantic GPUI Kit components/tokens and platform conventions. Do not claim AppKit widgets, Liquid Glass or full accessibility without implementing and verifying them. Keep SDK services independent of GPUI.
 - Keep SDK clients and credentials out of public UI snapshots. Bound update queues, cancel account/selection tasks, and reject stale snapshots.
 - `core`: Matrix SDK integration, authentication, messaging, crypto, and session lifecycle. It owns Matrix state.
@@ -40,7 +40,7 @@
 - Do not spawn subagents unless explicitly requested by the user.
 
 ## Branches and collaboration
-- Division of work: Claude owns UI design and GPUI view code (layout, styling, motion, copy, captures); Codex owns the technical layer (`core`, `platform`, `gpui/src/backend*`, snapshot types, actions, tests). Technical tasks expose data contracts and add at most minimal, clearly marked placeholder wiring; they do not build or restyle views.
+- Division of work: Claude owns UI design and GPUI view code (layout, styling, motion, copy, captures); Codex owns the technical layer (`core`, `platform`, `app/src/backend*`, snapshot types, actions, tests). Technical tasks expose data contracts and add at most minimal, clearly marked placeholder wiring; they do not build or restyle views.
 - Create and switch to a dedicated branch before starting each feature: `feature/<short-name>`. Use `fix/<short-name>` for fixes and `docs/<short-name>` for documentation-only work. Do not implement features directly on `main`.
 - Base new feature branches on `main` unless the task specifies another base. Keep each branch focused on one feature, including its related tests and documentation.
 - Inspect Git status before switching or editing. Preserve existing work; never reset, discard or stash someone else's changes to make room for your task. Use a separate worktree when unrelated work or another contributor occupies the current checkout.

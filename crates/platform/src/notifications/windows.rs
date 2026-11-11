@@ -1,11 +1,13 @@
 use super::*;
+// Explicit, so it wins over the Windows SDK's own `Notification` glob import.
+use super::Notification;
 use ::windows::{
     Data::Xml::Dom::XmlDocument,
     Foundation::TypedEventHandler,
     UI::Notifications::*,
     core::{HSTRING, IInspectable},
 };
-const APP_ID: &str = "com.matrixclient.desktop";
+const APP_ID: &str = "com.twayblade.desktop";
 fn notifier() -> ::windows::core::Result<ToastNotifier> {
     ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_ID))
 }

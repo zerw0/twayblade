@@ -11,10 +11,10 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use matrix_client_core::security::{VerificationPhase, VerificationView};
+use twayblade_core::security::{VerificationPhase, VerificationView};
 
 impl MatrixApp {
-    pub(super) fn perform_security(
+    pub(crate) fn perform_security(
         &mut self,
         action: SecurityAction,
         window: &mut Window,
@@ -89,7 +89,7 @@ impl MatrixApp {
         value
     }
 
-    pub(super) fn show_security_notice(&self) -> bool {
+    pub(crate) fn show_security_notice(&self) -> bool {
         let security = &self.snapshot.security;
         let incoming = security
             .verification
@@ -103,7 +103,7 @@ impl MatrixApp {
     }
 
     /// A quiet one-line strip under the toolbar, like Mail's account notices.
-    pub(super) fn security_notice(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn security_notice(&self, cx: &mut Context<Self>) -> AnyElement {
         let security = &self.snapshot.security;
         let incoming = security
             .verification
@@ -158,7 +158,7 @@ impl MatrixApp {
             .into_any_element()
     }
 
-    pub(super) fn security_view(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn security_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let security = &self.snapshot.security;
         let muted = cx.theme().muted_foreground;
         let mut body = v_flex().id("security-content").w_full().gap(px(12.));

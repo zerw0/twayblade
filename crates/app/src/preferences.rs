@@ -193,7 +193,7 @@ impl Default for Chat {
 impl Preferences {
     pub fn path() -> Option<PathBuf> {
         Some(
-            directories::ProjectDirs::from("", "MatrixClient", "MatrixClient")?
+            directories::ProjectDirs::from("", "Twayblade", "Twayblade")?
                 .config_dir()
                 .join("preferences.json"),
         )

@@ -1,7 +1,6 @@
 //! Password and OAuth sessions backed by encrypted SDK stores and OS secret storage.
 
 use directories::ProjectDirs;
-use matrix_client_platform as secrets;
 use matrix_sdk::{
     AuthSession, Client,
     authentication::{
@@ -17,6 +16,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
+use twayblade_platform as secrets;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -191,8 +191,38 @@ pub enum AuthError {
 /// two connected instances would corrupt each other. Released by the OS on exit.
 pub struct InstanceLock(#[allow(dead_code)] std::fs::File);
 
+/// One-time move of local data from the pre-rename "MatrixClient" folders to
+/// "Twayblade" (sessions/encrypted stores, preferences). Skipped when the new
+/// folders already exist or the old app still holds its instance lock.
+pub fn migrate_legacy_storage() {
+    let (Some(old), Some(new)) = (
+        ProjectDirs::from("", "MatrixClient", "MatrixClient"),
+        ProjectDirs::from("", "Twayblade", "Twayblade"),
+    ) else {
+        return;
+    };
+    if let Ok(lock) = std::fs::File::open(old.data_local_dir().join("instance.lock"))
+        && lock.try_lock().is_err()
+    {
+        return;
+    }
+    let pairs = [
+        (old.data_local_dir(), new.data_local_dir()),
+        (old.data_dir(), new.data_dir()),
+        (old.config_dir(), new.config_dir()),
+    ];
+    for (from, to) in pairs {
+        if from.exists() && !to.exists() {
+            if let Some(parent) = to.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::rename(from, to);
+        }
+    }
+}
+
 pub fn lock_instance() -> Result<InstanceLock, AuthError> {
-    let dirs = ProjectDirs::from("", "MatrixClient", "MatrixClient").ok_or(AuthError::Storage)?;
+    let dirs = ProjectDirs::from("", "Twayblade", "Twayblade").ok_or(AuthError::Storage)?;
     let dir = dirs.data_local_dir();
     std::fs::create_dir_all(dir).map_err(|_| AuthError::Storage)?;
     let file = std::fs::File::create(dir.join("instance.lock")).map_err(|_| AuthError::Storage)?;
@@ -213,8 +243,7 @@ struct AuthContext {
 
 impl AuthContext {
     fn application() -> Result<Self, AuthError> {
-        let dirs =
-            ProjectDirs::from("", "MatrixClient", "MatrixClient").ok_or(AuthError::Storage)?;
+        let dirs = ProjectDirs::from("", "Twayblade", "Twayblade").ok_or(AuthError::Storage)?;
         Ok(Self {
             session_store: secrets::SessionStore::default(),
             data_dir: dirs.data_local_dir().to_owned(),
@@ -355,7 +384,7 @@ async fn login_password_in(
     let login = client
         .matrix_auth()
         .login_username(username.trim(), &password)
-        .initial_device_display_name("Matrix Client desktop")
+        .initial_device_display_name("Twayblade desktop")
         .await;
     let session = login.ok().and_then(|_| client.matrix_auth().session());
     let Some(session) = session else {

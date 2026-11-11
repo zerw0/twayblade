@@ -11,8 +11,8 @@ the version that is built and tested.
 
 ```sh
 rustup component add rustfmt clippy
-git clone https://github.com/zerw0/matrixclient.git
-cd matrixclient
+git clone https://github.com/zerw0/twayblade.git
+cd twayblade
 git switch -c feature/my-feature
 ```
 
@@ -34,7 +34,7 @@ ran with the installed Command Line Tools; other configurations may need Xcode.
 Run from a logged-in graphical session:
 
 ```sh
-cargo run --locked -p matrix-client-gpui
+cargo run --locked -p twayblade
 ```
 
 Or build and launch an ad-hoc signed development app:
@@ -48,7 +48,7 @@ bash macos/build.sh --release --run
 Release builds use a separate credential entry from debug builds, so sign in
 once per build type.
 
-Output: `target/debug/bundle/Matrix Client.app`. The script uses Cargo from the
+Output: `target/debug/bundle/Twayblade.app`. The script uses Cargo from the
 current shell and resolves Apple signing tools in a clean environment, including
 when invoked inside Nix/direnv. The bundle is for local development. Transitive
 Nix library dependencies, clean-machine packaging, signing/notarization and
@@ -57,7 +57,7 @@ minimum macOS-version acceptance remain release work.
 To reopen the existing bundle without rebuilding or signing it again:
 
 ```sh
-open "target/debug/bundle/Matrix Client.app"
+open "target/debug/bundle/Twayblade.app"
 ```
 
 The build helper reuses a running instance for a normal launch. Offline previews
@@ -70,10 +70,10 @@ again after each rebuild. Create a local signing identity once:
 bash macos/create-dev-certificate.sh
 ```
 
-It adds a self-signed "Matrix Client Development" code-signing certificate to
+It adds a self-signed "Twayblade Development" code-signing certificate to
 your login keychain (it never leaves this Mac and is not valid for
 distribution). `macos/build.sh` then signs with it automatically, or with
-`MATRIX_CLIENT_SIGN_IDENTITY` when set. Approve the first prompt with Always
+`TWAYBLADE_SIGN_IDENTITY` when set. Approve the first prompt with Always
 Allow for this app's session item; later builds keep the same designated
 requirement and stop prompting. Do not grant access to all applications.
 Without the identity, the build falls back to ad-hoc signing and prints a hint.
@@ -93,7 +93,7 @@ sudo apt-get install -y build-essential pkg-config cmake libdbus-1-dev \
   libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-dev \
   libxcursor-dev libxi-dev libxrandr-dev libgl1-mesa-dev libvulkan-dev \
   libfontconfig1-dev libfreetype6-dev libssl-dev libxcb1-dev libxkbfile-dev
-cargo run --locked -p matrix-client-gpui
+cargo run --locked -p twayblade
 ```
 
 Run from Wayland or X11 with usable graphics drivers and fonts. GPUI uses its
@@ -117,7 +117,7 @@ From PowerShell in the checkout:
 
 ```powershell
 rustup component add rustfmt clippy
-cargo run --locked -p matrix-client-gpui
+cargo run --locked -p twayblade
 ```
 
 Windows uses the configured Credential Manager backend, with no plaintext
@@ -131,18 +131,18 @@ labeled offline; sending and account operations are disabled. You can type local
 drafts, switch rooms and open sample profiles.
 
 ```sh
-cargo run --locked -p matrix-client-gpui -- --preview
-cargo run --locked -p matrix-client-gpui -- --preview-home
-cargo run --locked -p matrix-client-gpui -- --preview-profile
-cargo run --locked -p matrix-client-gpui -- --preview-details
-cargo run --locked -p matrix-client-gpui -- --preview-signin
-cargo run --locked -p matrix-client-gpui -- --preview-thread
-cargo run --locked -p matrix-client-gpui -- --preview-settings notifications
-cargo run --locked -p matrix-client-gpui -- --preview-notification
-cargo run --locked -p matrix-client-gpui -- --preview-directory
-cargo run --locked -p matrix-client-gpui -- --preview-invites
-cargo run --locked -p matrix-client-gpui -- --preview-viewer
-cargo run --locked -p matrix-client-gpui -- --preview-large
+cargo run --locked -p twayblade -- --preview
+cargo run --locked -p twayblade -- --preview-home
+cargo run --locked -p twayblade -- --preview-profile
+cargo run --locked -p twayblade -- --preview-details
+cargo run --locked -p twayblade -- --preview-signin
+cargo run --locked -p twayblade -- --preview-thread
+cargo run --locked -p twayblade -- --preview-settings notifications
+cargo run --locked -p twayblade -- --preview-notification
+cargo run --locked -p twayblade -- --preview-directory
+cargo run --locked -p twayblade -- --preview-invites
+cargo run --locked -p twayblade -- --preview-viewer
+cargo run --locked -p twayblade -- --preview-large
 ```
 
 `--preview-notification --preview-no-message-preview` shows the private “New message”
@@ -155,7 +155,7 @@ scroller. It is a smoke fixture, not a measured performance guarantee.
 To capture only the app's rendered content and exit:
 
 ```sh
-cargo run --locked -p matrix-client-gpui --features capture -- \
+cargo run --locked -p twayblade --features capture -- \
   --preview --capture /tmp/matrix-gpui.png
 ```
 
@@ -174,7 +174,7 @@ bash macos/build.sh --run --preview --capture /tmp/matrix-gpui.png
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace --all-features
-cargo build --locked -p matrix-client-gpui
+cargo build --locked -p twayblade
 ```
 
 GPUI interaction tests run through Kit's headless test windows: actual buttons,
@@ -203,7 +203,7 @@ plus Linux display, font and DBus inputs. Keep flake.lock committed.
 
 ```sh
 nix develop
-cargo run --locked -p matrix-client-gpui
+cargo run --locked -p twayblade
 # macOS development bundle, in the same shell:
 bash macos/build.sh --run
 ```
@@ -212,7 +212,7 @@ Without an interactive shell:
 
 ```sh
 nix develop --command cargo test --locked --workspace --all-features
-nix develop --command cargo run --locked -p matrix-client-gpui -- --preview
+nix develop --command cargo run --locked -p twayblade -- --preview
 ```
 
 Optional direnv: inspect `.envrc`, enable your existing direnv/nix-direnv setup,
@@ -233,9 +233,9 @@ GPUI Kit APIs. Do not apply web landing-page output to the desktop app.
 
 ## Local state and troubleshooting
 
-The app uses credential service `matrix-client.development`, account
+The app uses credential service `twayblade.development`, account
 `active-session-v1`. SDK stores live under ProjectDirs
-`("", "MatrixClient", "MatrixClient")` in `sessions/<UUID>`, next to the
+`("", "Twayblade", "Twayblade")` in `sessions/<UUID>`, next to the
 `instance.lock` file. The session and store passphrase stay in the OS credential
 store; passwords are not saved. Logout revokes the device, then removes the
 credential record and its store. Revoked-session recovery remains incomplete.

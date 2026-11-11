@@ -9,16 +9,16 @@ use std::time::Duration;
 
 /// Hover/press feedback and small state changes.
 #[allow(dead_code)]
-pub(super) const FAST: Duration = Duration::from_millis(120);
+pub(crate) const FAST: Duration = Duration::from_millis(120);
 /// Panels, popovers and dialogs arriving.
-pub(super) const ENTER: Duration = Duration::from_millis(200);
+pub(crate) const ENTER: Duration = Duration::from_millis(200);
 /// Distance an entering popover rises, in points.
 const RISE: f32 = 6.;
 /// Distance an entering side panel slides, in points.
 const SLIDE: f32 = 16.;
 
 /// Exponential-style ease-out: quick start, gentle stop, no overshoot.
-pub(super) fn ease_out(t: f32) -> f32 {
+pub(crate) fn ease_out(t: f32) -> f32 {
     1. - (1. - t.clamp(0., 1.)).powi(4)
 }
 
@@ -32,7 +32,7 @@ fn entering(id: impl Into<ElementId>) -> Animation {
 }
 
 /// Fade in and rise a few points into place (popovers, dialogs, menus).
-pub(super) fn rise<E>(element: E, id: impl Into<ElementId> + Clone, reduce: bool) -> AnyElement
+pub(crate) fn rise<E>(element: E, id: impl Into<ElementId> + Clone, reduce: bool) -> AnyElement
 where
     E: IntoElement + Styled + 'static,
 {
@@ -47,7 +47,7 @@ where
 }
 
 /// Fade in while sliding from the trailing edge (Info, thread, profile panels).
-pub(super) fn slide_in<E>(element: E, id: impl Into<ElementId> + Clone, reduce: bool) -> AnyElement
+pub(crate) fn slide_in<E>(element: E, id: impl Into<ElementId> + Clone, reduce: bool) -> AnyElement
 where
     E: IntoElement + Styled + 'static,
 {
@@ -62,7 +62,7 @@ where
 }
 
 /// A short crossfade for content that replaces itself (switching rooms).
-pub(super) fn fade_in<E>(element: E, id: impl Into<ElementId> + Clone, reduce: bool) -> AnyElement
+pub(crate) fn fade_in<E>(element: E, id: impl Into<ElementId> + Clone, reduce: bool) -> AnyElement
 where
     E: IntoElement + Styled + 'static,
 {
@@ -80,7 +80,7 @@ where
 
 /// Three dots that pulse in sequence while someone types; static under
 /// Reduce Motion. Throttled to 30 fps since it runs for as long as they type.
-pub(super) fn typing_dots(color: Hsla, reduce: bool) -> AnyElement {
+pub(crate) fn typing_dots(color: Hsla, reduce: bool) -> AnyElement {
     let dot = |index: usize| {
         let base = div().size(px(5.)).rounded_full().bg(color);
         if reduce || SETTLED {

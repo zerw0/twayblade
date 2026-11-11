@@ -13,13 +13,13 @@ use gpui_kit::{
     },
     *,
 };
-use matrix_client_core::space_actions::{
+use std::collections::HashSet;
+use twayblade_core::space_actions::{
     CreateRoom, DirectoryRoom, DirectorySnapshot, JoinAccess, LeaveCandidate,
 };
-use std::collections::HashSet;
 
 #[derive(Clone)]
-pub(super) enum ManageKind {
+pub(crate) enum ManageKind {
     Directory(String),
     Leave(String),
     Create,
@@ -33,7 +33,7 @@ impl ManageKind {
         matches!(self, Self::Create | Self::Dm | Self::JoinSpace)
     }
 }
-pub(super) struct Management {
+pub(crate) struct Management {
     pub _subscriptions: Vec<Subscription>,
     pub kind: ManageKind,
     pub request: u64,

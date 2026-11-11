@@ -1,5 +1,5 @@
 [package]
-name = "matrix-client-gpui"
+name = "twayblade"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,8 +10,8 @@ capture = ["gpui-kit/test-support"]
 
 [dependencies]
 gpui-kit = "=0.9.1"
-matrix-client-core = { path = "../core" }
-matrix-client-platform = { path = "../platform" }
+twayblade-core = { path = "../core" }
+twayblade-platform = { path = "../platform" }
 tokio.workspace = true
 futures-util.workspace = true
 chrono.workspace = true

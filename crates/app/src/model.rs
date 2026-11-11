@@ -123,9 +123,9 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
             .into_iter()
             .collect(),
         }],
-        notifications: matrix_client_core::notifications::RulesSnapshot {
+        notifications: twayblade_core::notifications::RulesSnapshot {
             ready: true,
-            defaults: [matrix_client_core::notifications::DefaultLevel::All; 4],
+            defaults: [twayblade_core::notifications::DefaultLevel::All; 4],
             keywords: vec!["Matrix".into(), "release".into()],
             ..Default::default()
         },
@@ -227,7 +227,7 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
             ];
             message.thread_replies = 4;
             // A formatted (HTML) sample, as sent by Element: bold, code and a link.
-            use matrix_client_core::rich_text::{RichNode, RichText, SpanKind};
+            use twayblade_core::rich_text::{RichNode, RichText, SpanKind};
             let span = |kind, text: &str| RichNode::Span {
                 kind,
                 children: vec![RichNode::Text(text.into())],
@@ -439,8 +439,8 @@ mod room_state_tests {
 /// height. Only groups whose fingerprint changes are re-measured, so typing
 /// notices, receipts and sync ticks don't re-layout the whole history.
 pub(super) fn group_signature(messages: &[Message], range: std::ops::Range<usize>) -> u64 {
-    use matrix_client_core::conversation::ReplyTarget;
     use std::hash::{Hash, Hasher};
+    use twayblade_core::conversation::ReplyTarget;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     // The previous message decides time markers above the group.
     range
@@ -492,7 +492,7 @@ mod rich_tests {
     use super::*;
     #[test]
     fn formatting_only_edits_invalidate_the_message_group_fingerprint() {
-        use matrix_client_core::rich_text::{RichNode, RichText, SpanKind};
+        use twayblade_core::rich_text::{RichNode, RichText, SpanKind};
         let mut message = Message {
             id: "$same".into(),
             body: "same plain text".into(),
@@ -512,7 +512,7 @@ mod rich_tests {
 /// Sanitized rich text (from core) to Markdown for Kit's selectable text view.
 /// Every text run is escaped; only structure produces Markdown syntax, so
 /// message content can never inject formatting or links of its own.
-pub(super) fn rich_markdown(rich: &matrix_client_core::rich_text::RichText) -> String {
+pub(super) fn rich_markdown(rich: &twayblade_core::rich_text::RichText) -> String {
     let mut blocks = Vec::new();
     rich_blocks(&rich.nodes, &mut blocks);
     blocks.join("\n\n")
@@ -534,8 +534,8 @@ fn escape_inline(text: &str) -> String {
     out
 }
 
-fn raw_text(nodes: &[matrix_client_core::rich_text::RichNode], out: &mut String) {
-    use matrix_client_core::rich_text::{RichNode, SpanKind};
+fn raw_text(nodes: &[twayblade_core::rich_text::RichNode], out: &mut String) {
+    use twayblade_core::rich_text::{RichNode, SpanKind};
     for node in nodes {
         match node {
             RichNode::Text(text) => out.push_str(text),
@@ -556,8 +556,8 @@ fn fence(text: &str, minimum: usize) -> String {
     "`".repeat((longest + 1).max(minimum))
 }
 
-fn rich_inline(nodes: &[matrix_client_core::rich_text::RichNode]) -> String {
-    use matrix_client_core::rich_text::{RichNode, SpanKind};
+fn rich_inline(nodes: &[twayblade_core::rich_text::RichNode]) -> String {
+    use twayblade_core::rich_text::{RichNode, SpanKind};
     let mut out = String::new();
     for node in nodes {
         match node {
@@ -616,8 +616,8 @@ fn rich_inline(nodes: &[matrix_client_core::rich_text::RichNode]) -> String {
     out
 }
 
-fn rich_blocks(nodes: &[matrix_client_core::rich_text::RichNode], out: &mut Vec<String>) {
-    use matrix_client_core::rich_text::{BlockKind, RichNode};
+fn rich_blocks(nodes: &[twayblade_core::rich_text::RichNode], out: &mut Vec<String>) {
+    use twayblade_core::rich_text::{BlockKind, RichNode};
     let mut inline: Vec<RichNode> = Vec::new();
     let flush = |inline: &mut Vec<RichNode>, out: &mut Vec<String>| {
         let text = rich_inline(inline);
@@ -732,8 +732,8 @@ fn rich_blocks(nodes: &[matrix_client_core::rich_text::RichNode], out: &mut Vec<
     flush(&mut inline, out);
 }
 
-fn collect_rows(nodes: &[matrix_client_core::rich_text::RichNode], rows: &mut Vec<Vec<String>>) {
-    use matrix_client_core::rich_text::{BlockKind, RichNode};
+fn collect_rows(nodes: &[twayblade_core::rich_text::RichNode], rows: &mut Vec<Vec<String>>) {
+    use twayblade_core::rich_text::{BlockKind, RichNode};
     for node in nodes {
         if let RichNode::Block { kind, children } = node {
             match kind {
@@ -758,8 +758,8 @@ fn collect_rows(nodes: &[matrix_client_core::rich_text::RichNode], rows: &mut Ve
 #[cfg(test)]
 mod rich_markdown_tests {
     use super::rich_markdown;
-    use matrix_client_core::rich_text::incoming;
     use matrix_sdk::ruma::events::room::message::FormattedBody;
+    use twayblade_core::rich_text::incoming;
 
     fn render(html: &str) -> String {
         rich_markdown(&incoming(&FormattedBody::html(html)).unwrap())

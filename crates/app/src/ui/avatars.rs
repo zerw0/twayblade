@@ -13,19 +13,19 @@ const FETCH_PIXELS: u32 = 96;
 /// Plenty for every member and sender on screen; cleared wholesale if exceeded.
 const MAX_ENTRIES: usize = 4096;
 
-pub(super) enum AvatarState {
+pub(crate) enum AvatarState {
     Loading,
     Ready(Arc<RenderImage>),
     Failed,
 }
 
 #[derive(Clone, Default)]
-pub(super) struct AvatarCache(Rc<RefCell<HashMap<String, AvatarState>>>);
+pub(crate) struct AvatarCache(Rc<RefCell<HashMap<String, AvatarState>>>);
 
 impl MatrixApp {
     /// An avatar for `mxc`, falling back to coloured initials of `name`, seeded by
     /// `seed` (a Matrix ID) so the fallback colour is stable.
-    pub(super) fn avatar_image(
+    pub(crate) fn avatar_image(
         &self,
         mxc: Option<&str>,
         seed: &str,
@@ -35,7 +35,7 @@ impl MatrixApp {
         cx: &Context<Self>,
     ) -> Div {
         let fallback = || {
-            crate::workspace::avatar(
+            crate::ui::avatar(
                 &theme::initials(name),
                 theme::avatar_color(seed),
                 size,
@@ -95,7 +95,7 @@ impl MatrixApp {
     }
 
     /// Avatar URL for a user from the loaded room members, if any.
-    pub(super) fn member_avatar(&self, user_id: &str) -> Option<&str> {
+    pub(crate) fn member_avatar(&self, user_id: &str) -> Option<&str> {
         if user_id == self.snapshot.user_id
             && let Some(own) = self.own_avatar.as_deref()
         {

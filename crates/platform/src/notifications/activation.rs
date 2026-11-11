@@ -1,5 +1,6 @@
 //! Relaunch metadata contains only non-secret identifiers, never message content.
-use super::*;
+#[cfg(target_os = "macos")]
+use super::NotificationError;
 use serde::{Deserialize, Serialize};
 use std::{
     sync::OnceLock,

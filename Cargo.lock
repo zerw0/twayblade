@@ -337,7 +337,6 @@ dependencies = [
  "getrandom 0.4.3",
  "serde",
  "serde_repr",
- "tokio",
  "wayland-backend",
  "wayland-client",
  "wayland-protocols",
@@ -5197,74 +5196,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "matrix-client-core"
-version = "0.1.0"
-dependencies = [
- "async-stream",
- "directories",
- "futures-util",
- "image",
- "imbl",
- "matrix-client-platform",
- "matrix-sdk",
- "matrix-sdk-ui",
- "mime",
- "mime_guess",
- "ruma-html",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
- "url",
- "uuid",
- "zeroize",
-]
-
-[[package]]
-name = "matrix-client-gpui"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "directories",
- "emojis",
- "futures-util",
- "gpui-kit",
- "matrix-client-core",
- "matrix-client-platform",
- "matrix-sdk",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
- "url",
- "zeroize",
-]
-
-[[package]]
-name = "matrix-client-platform"
-version = "0.1.0"
-dependencies = [
- "ashpd",
- "block2 0.6.2",
- "futures-util",
- "keyring",
- "mac-usernotifications",
- "objc2 0.6.5",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
- "objc2-user-notifications",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
- "uuid",
- "windows 0.62.2",
- "zbus 5.19.0",
- "zeroize",
-]
-
-[[package]]
 name = "matrix-pickle"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9178,10 +9109,8 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
- "signal-hook-registry",
  "socket2",
  "tokio-macros",
- "tracing",
  "windows-sys 0.61.2",
 ]
 
@@ -9472,6 +9401,74 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
 dependencies = [
  "core_maths",
+]
+
+[[package]]
+name = "twayblade"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "directories",
+ "emojis",
+ "futures-util",
+ "gpui-kit",
+ "matrix-sdk",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "twayblade-core",
+ "twayblade-platform",
+ "url",
+ "zeroize",
+]
+
+[[package]]
+name = "twayblade-core"
+version = "0.1.0"
+dependencies = [
+ "async-stream",
+ "directories",
+ "futures-util",
+ "image",
+ "imbl",
+ "matrix-sdk",
+ "matrix-sdk-ui",
+ "mime",
+ "mime_guess",
+ "ruma-html",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "twayblade-platform",
+ "url",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "twayblade-platform"
+version = "0.1.0"
+dependencies = [
+ "ashpd",
+ "block2 0.6.2",
+ "futures-util",
+ "keyring",
+ "mac-usernotifications",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "objc2-user-notifications",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "uuid",
+ "windows 0.62.2",
+ "zbus 5.19.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -11290,7 +11287,6 @@ dependencies = [
  "rustix",
  "serde",
  "serde_repr",
- "tokio",
  "tracing",
  "uds_windows",
  "uuid",

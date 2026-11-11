@@ -17,7 +17,7 @@ use crate::{
 };
 
 gpui_kit::actions!(
-    matrix_client,
+    twayblade,
     [
         Quit,
         OpenSettings,
@@ -45,7 +45,10 @@ pub(super) struct ProfilePage {
 }
 
 pub(super) struct MatrixApp {
-    pub settings: Option<(AnyWindowHandle, WeakEntity<crate::settings::SettingsWindow>)>,
+    pub settings: Option<(
+        AnyWindowHandle,
+        WeakEntity<crate::ui::settings::SettingsWindow>,
+    )>,
     pub preferences: crate::preferences::Preferences,
     pub preferences_writable: bool,
     pub preference_revision: std::sync::Arc<std::sync::atomic::AtomicU64>,
@@ -99,12 +102,12 @@ pub(super) struct MatrixApp {
     /// The DM partners and members last handed to the presence observer.
     pub(super) presence_observed: Vec<String>,
     /// A destructive member action waiting for its second click: (user, action).
-    pub(super) member_confirm: Option<(String, matrix_client_core::room_state::MemberAction)>,
+    pub(super) member_confirm: Option<(String, twayblade_core::room_state::MemberAction)>,
     /// Per-group content fingerprints matching `groups`, for targeted re-measure.
     group_signatures: Vec<u64>,
     /// Latest timeline event and your latest message, derived once per snapshot.
     latest_cache: std::cell::RefCell<Option<LatestIds>>,
-    pub(super) avatars: crate::avatars::AvatarCache,
+    pub(super) avatars: crate::ui::avatars::AvatarCache,
     /// The signed-in user's avatar URL, fetched once per account.
     pub own_avatar: Option<String>,
     /// Pressed inside a toolbar row; the next mouse move starts a window drag.
@@ -112,10 +115,10 @@ pub(super) struct MatrixApp {
     /// The security reminder strip was dismissed for this session.
     pub security_notice_dismissed: bool,
     pub confirm_session_reset: bool,
-    pub emoji_picker: Option<crate::emoji::Picker>,
+    pub emoji_picker: Option<crate::ui::emoji::Picker>,
     pub emoji_search: Entity<InputState>,
-    pub emoji_preferences: crate::emoji::Preferences,
-    pub attachment_draft: Option<matrix_client_core::conversation::AttachmentDraft>,
+    pub emoji_preferences: crate::ui::emoji::Preferences,
+    pub attachment_draft: Option<twayblade_core::conversation::AttachmentDraft>,
     pub attachment_busy: bool,
     pub attachment_sample: bool,
     pub attachment_request: u64,
@@ -138,12 +141,12 @@ pub(super) struct MatrixApp {
     receipt_pending: Option<(String, String)>,
     last_receipt: Option<(String, String)>,
     receipt_retry_after: std::time::Instant,
-    pub thread: Option<crate::threads::ThreadPanel>,
+    pub thread: Option<crate::ui::threads::ThreadPanel>,
     pub thread_drafts: HashMap<(String, String), (Entity<TextareaState>, Subscription)>,
     pub thread_request: u64,
-    pub management: Option<crate::spaces_ui::Management>,
+    pub management: Option<crate::ui::spaces::Management>,
     pub management_request: u64,
-    pub viewer: Option<crate::viewer::Viewer>,
+    pub viewer: Option<crate::ui::viewer::Viewer>,
     pub viewer_request: u64,
     pub reveal_image: Option<String>,
     pub image_focus: std::cell::RefCell<HashMap<String, FocusHandle>>,
@@ -384,7 +387,7 @@ impl MatrixApp {
             emoji_preferences: if preview {
                 Default::default()
             } else {
-                crate::emoji::Preferences::load()
+                crate::ui::emoji::Preferences::load()
             },
             attachment_draft: None,
             attachment_busy: false,
@@ -891,7 +894,7 @@ impl MatrixApp {
 
     pub(super) fn activate_notification(
         &mut self,
-        target: matrix_client_platform::notifications::Activation,
+        target: twayblade_platform::notifications::Activation,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1571,18 +1574,18 @@ impl MatrixApp {
             return;
         }
         self.perform_security(crate::backend::SecurityAction::VerifyUser(user), window, cx);
-        self.open_settings(crate::settings::Section::Security, cx);
+        self.open_settings(crate::ui::settings::Section::Security, cx);
     }
 
     /// Ignore, kick, ban or (un)mute. Destructive ones need a second click.
     pub(super) fn member_action(
         &mut self,
         user: String,
-        action: matrix_client_core::room_state::MemberAction,
+        action: twayblade_core::room_state::MemberAction,
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        use matrix_client_core::room_state::MemberAction;
+        use twayblade_core::room_state::MemberAction;
         let destructive = matches!(
             action,
             MemberAction::Kick | MemberAction::Ban | MemberAction::Ignore
@@ -1628,7 +1631,7 @@ impl MatrixApp {
     #[allow(dead_code, reason = "Gallery UI entry point")]
     pub fn load_media(
         &mut self,
-        kind: matrix_client_core::media::MediaKind,
+        kind: twayblade_core::media::MediaKind,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1652,12 +1655,12 @@ impl MatrixApp {
         }
         let _ = window;
     }
-    fn gallery_entries(&self) -> Vec<crate::viewer::ImageEntry> {
+    fn gallery_entries(&self) -> Vec<crate::ui::viewer::ImageEntry> {
         self.snapshot
             .media
             .items
             .iter()
-            .map(|item| crate::viewer::ImageEntry {
+            .map(|item| crate::ui::viewer::ImageEntry {
                 message: crate::backend::Message {
                     id: item.event_id.clone(),
                     event_id: Some(item.event_id.clone()),
@@ -1678,10 +1681,10 @@ impl MatrixApp {
     }
     #[allow(dead_code, reason = "Gallery UI entry point")]
     pub fn open_media_image(&mut self, event: &str, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::viewer::{ImageLoad, Viewer};
+        use crate::ui::viewer::{ImageLoad, Viewer};
         if self.navigation.selected_room.as_deref() != Some(self.snapshot.media.room.as_str())
             || self.snapshot.media.room != self.snapshot.selected_room
-            || self.snapshot.media.kind != matrix_client_core::media::MediaKind::Images
+            || self.snapshot.media.kind != twayblade_core::media::MediaKind::Images
         {
             return;
         }
@@ -1714,9 +1717,9 @@ impl MatrixApp {
         });
         self.load_viewer(window, cx);
     }
-    pub(super) fn image_entries(&self) -> Vec<crate::viewer::ImageEntry> {
+    pub(super) fn image_entries(&self) -> Vec<crate::ui::viewer::ImageEntry> {
         if self.snapshot.media.room == self.snapshot.selected_room
-            && self.snapshot.media.kind == matrix_client_core::media::MediaKind::Images
+            && self.snapshot.media.kind == twayblade_core::media::MediaKind::Images
             && self.viewer.as_ref().is_some_and(|v| {
                 self.snapshot.media.items.iter().any(|i| {
                     Some(&i.event_id)
@@ -1734,7 +1737,7 @@ impl MatrixApp {
             .iter()
             .filter(|m| m.kind == crate::backend::MessageKind::Image && m.event_id.is_some())
             .cloned()
-            .map(|message| crate::viewer::ImageEntry {
+            .map(|message| crate::ui::viewer::ImageEntry {
                 message,
                 in_thread: false,
             })
@@ -1757,7 +1760,7 @@ impl MatrixApp {
                     .unwrap_or(entries.len());
                 entries.insert(
                     ix,
-                    crate::viewer::ImageEntry {
+                    crate::ui::viewer::ImageEntry {
                         message: message.clone(),
                         in_thread: true,
                     },
@@ -1775,7 +1778,7 @@ impl MatrixApp {
 impl MatrixApp {
     pub fn search_messages(
         &mut self,
-        query: matrix_client_core::search::SearchQuery,
+        query: twayblade_core::search::SearchQuery,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1810,7 +1813,7 @@ impl MatrixApp {
     }
     pub fn set_presence(
         &mut self,
-        state: matrix_client_core::presence::State,
+        state: twayblade_core::presence::State,
         status: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1841,7 +1844,7 @@ impl MatrixApp {
             .filter(|room| !room.is_empty())
             .and_then(|room| room.try_into().ok());
         self.search_messages(
-            matrix_client_core::search::SearchQuery {
+            twayblade_core::search::SearchQuery {
                 text,
                 room,
                 sender: None,

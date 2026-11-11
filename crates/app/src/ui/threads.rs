@@ -17,7 +17,7 @@ use gpui_kit::{
 };
 use std::ops::Range;
 
-pub(super) struct ThreadPanel {
+pub(crate) struct ThreadPanel {
     pub room: String,
     pub root: Message,
     pub request: u64,
@@ -50,7 +50,7 @@ impl MatrixApp {
         self.open_thread_root(root, window, cx);
     }
 
-    pub(super) fn open_thread_event(
+    pub(crate) fn open_thread_event(
         &mut self,
         root: String,
         window: &mut Window,
