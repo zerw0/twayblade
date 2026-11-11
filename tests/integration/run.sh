@@ -19,11 +19,10 @@ case "${1:-test}" in
         mkdir -p test-data/local/integration
         "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py generate
         "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py call-config
-        trap '"${compose[@]}" --profile call stop call-proxy lk-jwt-service livekit synapse' EXIT
-        "${compose[@]}" --profile call up -d --wait --wait-timeout 90 synapse livekit lk-jwt-service call-proxy
+        trap '"${compose[@]}" --profile call stop element-call call-proxy lk-jwt-service livekit synapse' EXIT
+        "${compose[@]}" --profile call up -d --wait --wait-timeout 90 synapse livekit lk-jwt-service element-call call-proxy
         "${compose[@]}" exec -T synapse python /bootstrap.py register-pair
-        bash macos/build-call-host.sh
-        cargo test --locked -p twayblade-core --all-features element_call_runtime_signalling -- --ignored --nocapture
+        cargo test --locked -p twayblade-core --all-features "${MATRIX_TEST_CALL_FILTER:-native_matrixrtc}" -- --ignored --nocapture --test-threads=1
         ;;
     presence)
         mkdir -p test-data/local/integration

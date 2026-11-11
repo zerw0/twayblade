@@ -1,13 +1,20 @@
 {
     auto_https off
     admin off
+    servers {
+        protocols h1
+    }
 }
 https://:8443 {
     tls /fixture/tls.crt /fixture/tls.key
     handle_path /jwt/* {
         reverse_proxy lk-jwt-service:8080
     }
-    handle_path /sfu/* {
-        reverse_proxy livekit:7880
+    handle {
+        reverse_proxy element-call:8080
     }
+}
+https://:22451 {
+    tls /fixture/tls.crt /fixture/tls.key
+    reverse_proxy livekit:7880
 }
