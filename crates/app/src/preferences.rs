@@ -242,6 +242,7 @@ pub(super) enum Timestamps {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct Chat {
+    pub preview_size: twayblade_core::conversation::PreviewSize,
     pub style: ChatStyle,
     pub density: Density,
     pub avatars: bool,
@@ -250,6 +251,7 @@ pub(super) struct Chat {
 impl Default for Chat {
     fn default() -> Self {
         Self {
+            preview_size: Default::default(),
             style: Default::default(),
             density: Default::default(),
             avatars: true,

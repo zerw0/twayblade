@@ -2,7 +2,7 @@
 use super::*;
 use matrix_sdk::{
     attachment::{AttachmentConfig, AttachmentInfo, BaseFileInfo, BaseImageInfo, Thumbnail},
-    media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings},
+    media::{MediaFormat, MediaRequestParameters},
     ruma::events::room::MediaSource,
 };
 use std::{
@@ -222,28 +222,13 @@ impl Conversation {
         }
     }
     pub async fn attachment_thumbnail(&self, id: &str) -> Result<Arc<Vec<u8>>, AttachmentError> {
-        let source = self.media_source(id).await?;
-        let bytes = self
-            .timeline
-            .room()
-            .client()
-            .media()
-            .get_media_content(
-                &MediaRequestParameters {
-                    source,
-                    format: MediaFormat::Thumbnail(MediaThumbnailSettings::new(
-                        512u32.into(),
-                        512u32.into(),
-                    )),
-                },
-                false,
-            )
+        let (_cancel, cancel) = tokio::sync::watch::channel(false);
+        self.attachment_preview(id, super::PreviewSize::Default, cancel)
             .await
-            .map_err(|_| AttachmentError::Download)?;
-        preview(&bytes)
-            .map(|(bytes, _, _)| Arc::new(bytes))
-            .ok_or(AttachmentError::Download)
+            .map(|p| p.png)
+            .map_err(|_| AttachmentError::Download)
     }
+
     pub async fn download_attachment(&self, id: &str, path: &Path) -> Result<(), AttachmentError> {
         let source = self.media_source(id).await?;
         let bytes = self
@@ -689,7 +674,12 @@ mod integration {
             image::DynamicImage::new_rgba8(9000, 1)
                 .write_to(&mut large, image::ImageFormat::Png)
                 .unwrap();
+            let mut preview_size_image = Cursor::new(Vec::new());
+            image::DynamicImage::new_rgba8(2048, 1024)
+                .write_to(&mut preview_size_image, image::ImageFormat::Png)
+                .unwrap();
             for (name, bytes, frames, error) in [
+                ("preview-size.png", preview_size_image.into_inner(), 1, None),
                 ("full.png", png.into_inner(), 1, None),
                 (
                     "animated.gif",
@@ -745,6 +735,28 @@ mod integration {
                     .await,
                     "remote viewer image",
                 );
+                if name == "preview-size.png" {
+                    let mut widths = Vec::new();
+                    for size in [
+                        super::super::PreviewSize::Default,
+                        super::super::PreviewSize::Large,
+                        super::super::PreviewSize::Default,
+                    ] {
+                        let (_cancel, cancel) = tokio::sync::watch::channel(false);
+                        let preview = checked(
+                            conversation.attachment_preview(&id, size, cancel).await,
+                            "timeline preview size",
+                        );
+                        assert!(preview.width <= size.pixels() && preview.height <= size.pixels());
+                        assert_eq!(preview.width, preview.height * 2);
+                        widths.push(preview.width);
+                        assert!(
+                            row(&conversation, name).await == id,
+                            "size changes must preserve timeline identity"
+                        );
+                    }
+                    assert!(widths[1] > widths[0] && widths[0] == widths[2]);
+                }
                 let source = checked(conversation.media_source(&id).await, "viewer source");
                 assert!(
                     matches!(&source, MediaSource::Encrypted(_)) == encrypted,
@@ -865,7 +877,13 @@ mod integration {
                 } else {
                     let image = checked(result, "full-resolution image fetch and decode");
                     assert!(
-                        image.width == 2 && image.height == 2 && image.frames.len() == frames,
+                        (image.width, image.height)
+                            == if name == "preview-size.png" {
+                                (2048, 1024)
+                            } else {
+                                (2, 2)
+                            }
+                            && image.frames.len() == frames,
                         "viewer dimensions/animation frames"
                     );
                     let store = checked(client.media_store().lock().await, "media cache");
@@ -925,13 +943,14 @@ mod integration {
                     "large.png",
                     "animated.webp",
                     "animated.gif",
-                    "full.png"
+                    "full.png",
+                    "preview-size.png"
                 ]
             );
             checked(client.matrix_auth().logout().await, "viewer fixture logout");
         }
         println!(
-            "PASS: plain/encrypted full images, GIF/WebP animation, uncached decrypted media, explicit save, >8k and corrupt failures"
+            "PASS: plain/encrypted 512/1280 timeline previews with stable identities, full images, GIF/WebP animation, uncached decrypted media, explicit save, >8k and corrupt failures"
         );
     }
 }

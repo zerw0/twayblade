@@ -12,6 +12,8 @@ use matrix_sdk_ui::timeline::{
 };
 use std::sync::Arc;
 
+mod previews;
+pub use previews::{PreviewSize, TimelinePreview};
 mod attachments;
 mod unread;
 mod viewer;

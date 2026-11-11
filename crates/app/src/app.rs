@@ -2146,3 +2146,42 @@ impl MatrixApp {
         );
     }
 }
+
+// Technical contracts only; Claude owns Settings and viewport wiring.
+#[allow(
+    dead_code,
+    reason = "Timeline image Settings and viewport action contracts"
+)]
+impl MatrixApp {
+    pub fn set_timeline_preview_size(
+        &mut self,
+        size: twayblade_core::conversation::PreviewSize,
+    ) -> Result<(), crate::backend::ServiceError> {
+        let backend =
+            self.backend
+                .as_ref()
+                .ok_or_else(|| crate::backend::ServiceError::Operation {
+                    message: "Settings are unavailable.".into(),
+                })?;
+        backend.set_preview_size(size)?;
+        self.preferences.chat.preview_size = size;
+        Ok(())
+    }
+    pub fn timeline_preview_viewport(
+        &self,
+        thread_root: Option<String>,
+        message_ids: Vec<String>,
+    ) -> Result<(), crate::backend::ServiceError> {
+        self.backend
+            .as_ref()
+            .ok_or_else(|| crate::backend::ServiceError::Operation {
+                message: "Sign in first.".into(),
+            })?
+            .timeline_preview_viewport(
+                self.snapshot.selected_room.clone(),
+                self.snapshot.account_instance,
+                thread_root,
+                message_ids,
+            )
+    }
+}
