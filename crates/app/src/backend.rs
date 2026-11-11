@@ -17,6 +17,8 @@ pub(super) use twayblade_core::room_state::{Member, MemberRole, MembersState};
 use zeroize::Zeroizing;
 pub(super) mod calls;
 mod directory;
+mod editing;
+pub(super) use editing::Editing;
 mod media;
 use directory::{DirectoryState, PreviewState};
 pub(super) use media::MediaState;
@@ -33,6 +35,9 @@ pub(super) use twayblade_core::{
 
 #[derive(Clone, Default)]
 pub(super) struct Snapshot {
+    pub(super) editing: Option<Editing>,
+    pub(super) edit_error: Option<String>,
+    pub(super) edit_saving: bool,
     pub(super) call: Option<twayblade_core::calls::CallState>,
     pub(super) room_calls: std::collections::HashMap<String, twayblade_core::calls::ActiveCall>,
     pub(super) revision: u64,
@@ -111,6 +116,8 @@ fn failure(message: impl ToString) -> ServiceError {
 
 #[derive(Default)]
 struct State {
+    edit_request: u64,
+    edit_task: Option<JoinHandle<()>>,
     call_request: u64,
     call_video: twayblade_core::calls::VideoTracks,
     call_task: Option<JoinHandle<()>>,
@@ -148,6 +155,7 @@ struct State {
 
 impl State {
     fn stop(&mut self) {
+        self.cancel_edit();
         self.cancel_call();
         self.cancel_discovery();
         self.cancel_media();
@@ -687,6 +695,12 @@ impl Backend {
         state.cancel_media();
         state.cancel_presence();
         state.thread_conversation = None;
+        state.cancel_edit();
+        publish(&self.updates, |view| {
+            view.editing = None;
+            view.edit_error = None;
+            view.edit_saving = false;
+        });
         state.conversation = None;
         if let Some(typing) = &state.typing_intent {
             typing.send_replace(None);
@@ -791,6 +805,12 @@ impl Backend {
         if self.updates.borrow().selected_room != room || request < state.thread_request {
             return Err(failure("Conversation changed."));
         }
+        state.cancel_edit();
+        publish(&self.updates, |view| {
+            view.editing = None;
+            view.edit_error = None;
+            view.edit_saving = false;
+        });
         state.thread_request = request;
         if let Some(task) = state.thread_task.take() {
             task.abort();
@@ -1137,6 +1157,12 @@ impl Backend {
         state.cancel_media();
         state.cancel_presence();
         state.thread_conversation = None;
+        state.cancel_edit();
+        publish(&self.updates, |view| {
+            view.editing = None;
+            view.edit_error = None;
+            view.edit_saving = false;
+        });
         state.conversation = None;
         if let Some(typing) = &state.typing_intent {
             typing.send_replace(None);
@@ -1528,6 +1554,9 @@ impl Backend {
                         }
                         state.stop();
                         publish(&updates, |view| {
+                            view.editing = None;
+                            view.edit_error = None;
+                            view.edit_saving = false;
                             view.session_state = session_state;
                             view.timeline_ready = false;
                             view.sync_status.clear();

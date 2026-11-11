@@ -12,6 +12,8 @@ use matrix_sdk_ui::timeline::{
 };
 use std::sync::Arc;
 
+mod editing;
+pub use editing::EditError;
 mod attachments;
 mod unread;
 mod viewer;
@@ -45,6 +47,8 @@ pub struct MessageRow {
     pub rich: Option<Arc<crate::rich_text::RichText>>,
     pub kind: MessageKind,
     pub edited: bool,
+    /// SDK edit capability, restricted to sent text/notice/emote events.
+    pub editable: bool,
     pub delivery: DeliveryState,
     pub reply: Option<ReplyTarget>,
     pub reactions: Vec<Reaction>,
@@ -432,6 +436,7 @@ fn rows<'a>(
                 edited: content
                     .as_message()
                     .is_some_and(|message| message.is_edited()),
+                editable: editing::editable(event),
                 kind,
                 attachment,
                 delivery: delivery(event.send_state()),
