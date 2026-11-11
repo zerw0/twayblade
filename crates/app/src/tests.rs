@@ -1608,7 +1608,10 @@ fn theme_editor_preset_loading_and_custom_palette(cx: &mut TestAppContext) {
     .unwrap();
     cx.update(|cx| {
         let main = app.read(cx);
-        assert_eq!(main.preferences.appearance.scheme, crate::preferences::Scheme::Custom);
+        assert_eq!(
+            main.preferences.appearance.scheme,
+            crate::preferences::Scheme::Custom
+        );
         assert!(main.preferences.appearance.custom_theme.is_some());
         let custom = main.preferences.appearance.custom_theme.unwrap();
         let [bg, ..] = crate::theme::surfaces(crate::preferences::Scheme::Catppuccin, false);
@@ -1621,7 +1624,10 @@ fn theme_editor_preset_loading_and_custom_palette(cx: &mut TestAppContext) {
     .unwrap();
     cx.update(|cx| {
         let main = app.read(cx);
-        assert_eq!(main.preferences.appearance.scheme, crate::preferences::Scheme::Custom);
+        assert_eq!(
+            main.preferences.appearance.scheme,
+            crate::preferences::Scheme::Custom
+        );
         let custom = main.preferences.appearance.custom_theme.unwrap();
         assert_eq!(custom, crate::preferences::CustomTheme::default());
     });

@@ -127,11 +127,70 @@ pub(crate) fn surfaces(scheme: Scheme, dark: bool) -> [u32; 6] {
         (Scheme::Gruvbox, true) => [0x282828, 0x32302f, 0xfbf1c7, 0xbdae93, 0x3c3836, 0x7c6f64],
         (Scheme::Nord, false) => [0xeceff4, 0xe5e9f0, 0x2e3440, 0x4c566a, 0xd8dee9, 0x929bab],
         (Scheme::Nord, true) => [0x2e3440, 0x343b49, 0xeceff4, 0xb8c5d7, 0x3b4252, 0x616e88],
+        // Catppuccin Latte and Mocha.
         (Scheme::Catppuccin, false) => [0xeff1f5, 0xe6e9ef, 0x4c4f69, 0x585b73, 0xdce0e8, 0xccd0da],
+        (Scheme::Catppuccin, true) => [0x1e1e2e, 0x181825, 0xcdd6f4, 0xa6adc8, 0x313244, 0x45475a],
         (Scheme::Custom, false) => [0xeff1f5, 0xe6e9ef, 0x4c4f69, 0x585b73, 0xdce0e8, 0xccd0da],
         (Scheme::Custom, true) => [0x1e1e2e, 0x181825, 0xcdd6f4, 0xa6adc8, 0x313244, 0x45475a],
         (_, false) => [0xffffff, 0xf3f3f5, 0x1c1c1e, 0x66666e, 0xebebef, 0xdcdce0],
         (_, true) => [0x1c1c1e, 0x252527, 0xf2f2f7, 0xa0a0a7, 0x353538, 0x3a3a3e],
+    }
+}
+/// A custom theme as applied: text and secondary text are corrected when they
+/// fall below 4.5:1 against any surface they are drawn on.
+pub(crate) struct CustomPalette {
+    pub colors: [u32; 6],
+    pub adjusted: bool,
+    pub dark: bool,
+}
+fn hex(color: Rgba) -> u32 {
+    let byte = |c: f32| (c.clamp(0., 1.) * 255.).round() as u32;
+    (byte(color.r) << 16) | (byte(color.g) << 8) | byte(color.b)
+}
+fn mix(a: Rgba, b: Rgba, t: f32) -> Rgba {
+    Rgba {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: 1.,
+    }
+}
+pub(crate) fn custom_palette(custom: crate::preferences::CustomTheme) -> CustomPalette {
+    const MINIMUM: f32 = 4.5;
+    let [background, sidebar, text, muted, secondary, border] = custom.colors();
+    let surfaces = [background, sidebar, secondary].map(rgb);
+    let worst = |color: Rgba| {
+        surfaces
+            .iter()
+            .map(|surface| contrast(color, *surface))
+            .fold(f32::MAX, f32::min)
+    };
+    // Black or white, whichever reads better on every surface.
+    let ink = [rgb(0x000000), rgb(0xffffff)]
+        .into_iter()
+        .max_by(|a, b| worst(*a).total_cmp(&worst(*b)))
+        .unwrap_or(rgb(0xffffff));
+    // Move a colour toward the ink until it is readable, keeping its hue
+    // as long as possible.
+    let readable = |color: Rgba| {
+        (0..=20)
+            .map(|step| mix(color, ink, step as f32 / 20.))
+            .find(|candidate| worst(*candidate) >= MINIMUM)
+            .unwrap_or(ink)
+    };
+    let fixed_text = hex(readable(rgb(text)));
+    let fixed_muted = hex(readable(rgb(muted)));
+    CustomPalette {
+        adjusted: fixed_text != text || fixed_muted != muted,
+        colors: [
+            background,
+            sidebar,
+            fixed_text,
+            fixed_muted,
+            secondary,
+            border,
+        ],
+        dark: luminance(rgb(background)) < 0.18,
     }
 }
 /// Background, sidebar and text colours for a scheme's preview tile in Settings.
@@ -140,15 +199,10 @@ pub(super) fn scheme_preview(
     dark: bool,
     custom: Option<crate::preferences::CustomTheme>,
 ) -> [Hsla; 3] {
-    let [background, sidebar, text, ..] = if scheme == Scheme::Custom && let Some(custom) = custom {
-        [
-            custom.background,
-            custom.sidebar,
-            custom.text,
-            custom.muted,
-            custom.secondary,
-            custom.border,
-        ]
+    let [background, sidebar, text, ..] = if scheme == Scheme::Custom
+        && let Some(custom) = custom
+    {
+        custom_palette(custom).colors
     } else {
         surfaces(scheme, dark)
     };
@@ -205,6 +259,15 @@ pub(super) fn apply(cx: &mut App) {
         Scheme::Light => Some(ThemeMode::Light),
         Scheme::Dark => Some(ThemeMode::Dark),
         Scheme::System => None,
+        // A custom theme's own background decides light or dark, so controls
+        // drawn from the system mode match it.
+        Scheme::Custom => Some(
+            if custom_palette(preferences.custom_theme.unwrap_or_default()).dark {
+                ThemeMode::Dark
+            } else {
+                ThemeMode::Light
+            },
+        ),
         _ => match preferences.variant {
             Variant::System => None,
             Variant::Light => Some(ThemeMode::Light),
@@ -238,15 +301,8 @@ pub(super) fn apply(cx: &mut App) {
     Theme::update(cx, |theme| {
         let dark = theme.is_dark();
         let [background, sidebar, text, muted, secondary, border] =
-            if preferences.scheme == Scheme::Custom && let Some(custom) = preferences.custom_theme {
-                [
-                    custom.background,
-                    custom.sidebar,
-                    custom.text,
-                    custom.muted,
-                    custom.secondary,
-                    custom.border,
-                ]
+            if preferences.scheme == Scheme::Custom {
+                custom_palette(preferences.custom_theme.unwrap_or_default()).colors
             } else {
                 surfaces(preferences.scheme, dark)
             };
@@ -471,6 +527,37 @@ mod tests {
     palette_test!(catppuccin_dark, Catppuccin, true);
     palette_test!(custom_light, Custom, false);
     palette_test!(custom_dark, Custom, true);
+    #[test]
+    fn custom_palettes_keep_readable_text_and_follow_their_background() {
+        use crate::preferences::CustomTheme;
+        let check = |custom: CustomTheme| {
+            let palette = custom_palette(custom);
+            let [background, sidebar, text, muted, secondary, _] = palette.colors;
+            for surface in [background, sidebar, secondary] {
+                assert!(contrast(rgb(text), rgb(surface)) >= 4.5, "{custom:?}");
+                assert!(contrast(rgb(muted), rgb(surface)) >= 4.5, "{custom:?}");
+            }
+            palette
+        };
+        // The default (Catppuccin Mocha) is readable as chosen, and dark.
+        let default = check(CustomTheme::default());
+        assert!(!default.adjusted && default.dark);
+        assert_eq!(default.colors, CustomTheme::default().colors());
+        // Grey on grey and text equal to the background get corrected.
+        for (field, value) in [(2, 0x1e1e2e), (3, 0x313244), (2, 0x777777)] {
+            assert!(check(CustomTheme::default().with(field, value)).adjusted);
+        }
+        // A light background makes the theme light; dark text stays as chosen.
+        let light = check(CustomTheme::from_colors([
+            0xfafafa, 0xf0f0f0, 0x202020, 0x555555, 0xe6e6e6, 0xcccccc,
+        ]));
+        assert!(!light.dark && !light.adjusted);
+        // Colours are clamped to 24 bits.
+        assert_eq!(
+            CustomTheme::default().with(0, 0xff12_3456).background,
+            0x12_3456
+        );
+    }
     #[test]
     fn accent_text_is_readable_for_light_and_dark_accents() {
         let white = Rgba {

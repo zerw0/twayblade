@@ -635,17 +635,11 @@ impl MatrixApp {
                 .update(cx, |picker, cx| picker.set_value(value, window, cx));
         }
         let custom = self.preferences.appearance.custom_theme.unwrap_or_default();
-        let to_hsla = |hex: u32| -> Hsla { crate::theme::swatch(hex) };
-        self.theme_bg_picker
-            .update(cx, |picker, cx| picker.set_value(to_hsla(custom.background), window, cx));
-        self.theme_sidebar_picker
-            .update(cx, |picker, cx| picker.set_value(to_hsla(custom.sidebar), window, cx));
-        self.theme_text_picker
-            .update(cx, |picker, cx| picker.set_value(to_hsla(custom.text), window, cx));
-        self.theme_secondary_picker
-            .update(cx, |picker, cx| picker.set_value(to_hsla(custom.secondary), window, cx));
-        self.theme_border_picker
-            .update(cx, |picker, cx| picker.set_value(to_hsla(custom.border), window, cx));
+        for (picker, value) in self.theme_pickers.iter().zip(custom.colors()) {
+            picker.update(cx, |picker, cx| {
+                picker.set_value(crate::theme::swatch(value), window, cx)
+            });
+        }
         self.scroller.update(cx, |state, cx| state.remeasure(cx));
         if let Some(thread) = &self.thread {
             thread.scroller.update(cx, |state, cx| state.remeasure(cx));
@@ -663,16 +657,9 @@ impl MatrixApp {
         cx: &mut Context<Self>,
     ) {
         let dark = cx.theme().is_dark();
-        let [background, sidebar, text, muted, secondary, border] =
-            crate::theme::surfaces(scheme, dark);
-        self.preferences.appearance.custom_theme = Some(crate::preferences::CustomTheme {
-            background,
-            sidebar,
-            text,
-            muted,
-            secondary,
-            border,
-        });
+        self.preferences.appearance.custom_theme = Some(
+            crate::preferences::CustomTheme::from_colors(crate::theme::surfaces(scheme, dark)),
+        );
         self.preferences.appearance.scheme = Scheme::Custom;
         self.appearance_changed(window, cx);
     }
@@ -921,12 +908,28 @@ impl MatrixApp {
                         .child(div().text_size(px(11.)).text_color(muted).child("Load template:"))
                         .children(presets),
                 ),
-            color_row("bg", "Background", custom_theme.background, &self.theme_bg_picker, cx),
-            color_row("sidebar", "Sidebar", custom_theme.sidebar, &self.theme_sidebar_picker, cx),
-            color_row("text", "Text (Foreground)", custom_theme.text, &self.theme_text_picker, cx),
-            color_row("secondary", "Secondary surface", custom_theme.secondary, &self.theme_secondary_picker, cx),
-            color_row("border", "Border", custom_theme.border, &self.theme_border_picker, cx),
         ];
+        let mut theme_editor_rows = theme_editor_rows;
+        for (((id, label), value), picker) in crate::preferences::CustomTheme::FIELDS
+            .into_iter()
+            .zip(custom_theme.colors())
+            .zip(&self.theme_pickers)
+        {
+            theme_editor_rows.push(color_row(id, label, value, picker, cx));
+        }
+        if crate::theme::custom_palette(custom_theme).adjusted {
+            theme_editor_rows.push(
+                div()
+                    .px(px(12.))
+                    .py(px(8.))
+                    .text_size(px(11.))
+                    .text_color(muted)
+                    .child(
+                        "Some text colours are too faint on these backgrounds, \
+                         so Twayblade shows a more readable shade.",
+                    ),
+            );
+        }
 
         let fonts = ["Interface font", "Message font", "Code font"]
             .into_iter()
