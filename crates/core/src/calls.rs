@@ -1,26 +1,13 @@
-//! MatrixRTC contracts and room-scoped SDK widget driver. No frontend wording.
-#[cfg(all(test, target_os = "macos"))]
-mod integration;
+//! Native MatrixRTC contracts. Matrix state stays in core; no frontend wording.
 mod keys;
 pub mod native;
 #[cfg(test)]
 mod native_integration;
-pub mod policy;
 mod session;
 use crate::auth::Account;
-use matrix_sdk::{
-    Room, RoomState,
-    widget::{
-        ClientProperties, EncryptionSystem, Intent, VirtualElementCallWidgetConfig,
-        VirtualElementCallWidgetProperties, WidgetDriver, WidgetDriverHandle, WidgetSettings,
-    },
-};
-pub use session::{NativeCall, NativeControl, CallHandle};
-use std::{collections::HashMap, path::PathBuf};
-use twayblade_call_host::{
-    Frame, ORIGIN,
-    supervisor::{Exit, Supervisor},
-};
+use matrix_sdk::RoomState;
+pub use session::{CallHandle, NativeCall, NativeControl};
+use std::collections::HashMap;
 pub use twayblade_media::{Device as CallDevice, Devices as CallDevices, LatestFrame, VideoTracks};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -39,12 +26,8 @@ pub enum CallError {
     DeviceUnavailable,
     #[error("call_unsupported_server")]
     UnsupportedServer,
-    #[error("call_widget_rejected")]
-    WidgetRejected,
-    #[error("call_runtime_exited")]
-    RuntimeExited,
-    #[error("call_runtime_hung")]
-    RuntimeHung,
+    #[error("call_session_closed")]
+    SessionClosed,
     #[error("call_permission_denied")]
     PermissionDenied,
     #[error("call_permission_restricted")]
@@ -59,8 +42,6 @@ pub enum CallError {
     StaleRequest,
     #[error("call_control_unavailable")]
     ControlUnavailable,
-    #[error("call_unsupported_runtime")]
-    UnsupportedRuntime,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CallKind {
@@ -72,7 +53,6 @@ pub enum EndReason {
     Left,
     Logout,
     RoomLeft,
-    RuntimeClosed,
     Failed,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -147,136 +127,7 @@ impl CallTicket {
         account == Some(self.account) && request == self.request
     }
 }
-pub struct CallWidget {
-    pub widget_id: String,
-    pub room: Room,
-    pub url: String,
-    pub jwt_service: String,
-    pub handle: WidgetDriverHandle,
-    task: tokio::task::JoinHandle<()>,
-}
-impl Drop for CallWidget {
-    fn drop(&mut self) {
-        self.task.abort();
-    }
-}
-impl CallWidget {
-    pub async fn accepts_message(&self, value: &serde_json::Value) -> bool {
-        if !policy::room_scoped_message(value, self.room.room_id().as_str(), &self.widget_id) {
-            return false;
-        }
-        if value.get("response").is_none() && value["action"] == "send_to_device" {
-            let Some(users) = value["data"]["messages"].as_object() else {
-                return false;
-            };
-            for user in users.keys() {
-                let Ok(user) = matrix_sdk::ruma::UserId::parse(user) else {
-                    return false;
-                };
-                let Ok(Some(member)) = self.room.get_member_no_sync(&user).await else {
-                    return false;
-                };
-                if member.membership()
-                    != &matrix_sdk::ruma::events::room::member::MembershipState::Join
-                {
-                    return false;
-                }
-            }
-        }
-        true
-    }
-}
 impl Account {
-    pub async fn call_widget(
-        &self,
-        room_id: &str,
-        join: bool,
-        video: bool,
-    ) -> Result<CallWidget, CallError> {
-        let id = matrix_sdk::ruma::RoomId::parse(room_id).map_err(|_| CallError::InvalidRoom)?;
-        let room = self
-            .client
-            .get_room(&id)
-            .filter(|r| r.state() == RoomState::Joined)
-            .ok_or(CallError::InvalidRoom)?;
-        if !room
-            .latest_encryption_state()
-            .await
-            .map_err(|_| CallError::UnsupportedServer)?
-            .is_encrypted()
-        {
-            return Err(CallError::UnencryptedRoom);
-        }
-        let foci = tokio::time::timeout(
-            std::time::Duration::from_secs(15),
-            self.client.well_known_rtc_transports(),
-        )
-        .await
-        .map_err(|_| CallError::UnsupportedServer)?
-        .map_err(|_| CallError::UnsupportedServer)?;
-        let jwt_service = foci
-            .iter()
-            .filter(|f| f.transport_type() == "livekit")
-            .filter_map(|f| {
-                f.data()
-                    .get("livekit_service_url")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_owned)
-            })
-            .find(|s| twayblade_call_host::jwt_service(s).is_some())
-            .ok_or(CallError::NoFoci)?;
-        let settings = WidgetSettings::new_virtual_element_call_widget(
-            VirtualElementCallWidgetProperties {
-                element_call_url: format!("{ORIGIN}/index.html"),
-                widget_id: uuid::Uuid::new_v4().to_string(),
-                encryption: EncryptionSystem::PerParticipantKeys,
-                ..Default::default()
-            },
-            VirtualElementCallWidgetConfig {
-                intent: Some(if join {
-                    Intent::JoinExisting
-                } else if video {
-                    Intent::StartCall
-                } else {
-                    Intent::StartCallDmVoice
-                }),
-                confine_to_room: Some(true),
-                // User gesture and OS permission prompts remain in Element Call.
-                skip_lobby: Some(false),
-                ..Default::default()
-            },
-        )
-        .map_err(|_| CallError::WidgetRejected)?;
-        let widget_id = settings.widget_id().to_owned();
-        let url = settings
-            .generate_webview_url(
-                &room,
-                ClientProperties::new("com.twayblade.desktop", None, None),
-            )
-            .await
-            .map_err(|_| CallError::WidgetRejected)?
-            .to_string();
-        let provider = policy::CallCapabilities::new(
-            &self.user_id(),
-            self.client
-                .device_id()
-                .ok_or(CallError::WidgetRejected)?
-                .as_str(),
-        );
-        let (driver, handle) = WidgetDriver::new(settings);
-        let target = room.clone();
-        let task = tokio::spawn(async move {
-            let _ = driver.run(target, provider).await;
-        });
-        Ok(CallWidget {
-            widget_id,
-            room,
-            url,
-            jwt_service,
-            handle,
-            task,
-        })
-    }
     /// SDK-derived nonexpired memberships, including rooms not selected in UI.
     pub async fn room_calls(&self) -> HashMap<String, ActiveCall> {
         let mut calls = HashMap::new();
@@ -284,8 +135,13 @@ impl Account {
             if !room.has_active_room_call() {
                 continue;
             }
+            let members = native::members(&room).await.unwrap_or_default();
+            if members.is_empty() {
+                continue;
+            }
+            let started_ms = members.iter().map(|m| m.created_ms).min();
             let mut participants = Vec::new();
-            for member in native::members(&room).await.unwrap_or_default() {
+            for member in members {
                 let display_name = room
                     .get_member_no_sync(&member.user_id)
                     .await
@@ -306,7 +162,7 @@ impl Account {
                 room.room_id().to_string(),
                 ActiveCall {
                     participants,
-                    started_ms: membership_start(&room).await,
+                    started_ms,
                 },
             );
         }
@@ -318,72 +174,6 @@ impl Account {
             .and_then(|id| self.client.get_room(&id))
             .is_some_and(|r| r.state() == RoomState::Joined)
     }
-}
-async fn membership_start(room: &Room) -> Option<u64> {
-    use matrix_sdk::ruma::events::call::member::CallMemberEventContent;
-    let mut oldest = None;
-    for raw in room
-        .get_state_events_static::<CallMemberEventContent>()
-        .await
-        .ok()?
-    {
-        let Ok(event) = raw.deserialize() else {
-            continue;
-        };
-        let timestamp = event.as_sync().map(|e| e.origin_server_ts());
-        let Some(content) = event.original_content() else {
-            continue;
-        };
-        for member in content.active_memberships(timestamp) {
-            if !member.is_room_call() {
-                continue;
-            }
-            if let Some(time) = member.created_ts().or(timestamp) {
-                let ms = u64::from(time.0);
-                oldest = Some(oldest.map_or(ms, |old: u64| old.min(ms)));
-            }
-        }
-    }
-    oldest
-}
-pub fn runtime_executable() -> Result<PathBuf, CallError> {
-    let exe = std::env::current_exe().map_err(|_| CallError::RuntimeExited)?;
-    let parent = exe.parent().ok_or(CallError::RuntimeExited)?;
-    let bundled = parent.join("../Helpers/Twayblade Call.app/Contents/MacOS/twayblade-call-host");
-    if bundled.is_file() {
-        return Ok(bundled);
-    }
-    let parent = if parent.file_name().is_some_and(|n| n == "deps") {
-        parent.parent().ok_or(CallError::RuntimeExited)?
-    } else {
-        parent
-    };
-    let helper = parent.join("bundle/Twayblade Call.app/Contents/MacOS/twayblade-call-host");
-    if helper.is_file() {
-        return Ok(helper);
-    }
-    Ok(parent.join("twayblade-call-host"))
-}
-pub fn runtime_error(exit: Exit) -> CallError {
-    if exit == Exit::Hung {
-        CallError::RuntimeHung
-    } else {
-        CallError::RuntimeExited
-    }
-}
-
-/// Spawn only after account/ticket admission in the application backend.
-pub async fn spawn_runtime(widget: &CallWidget) -> Result<Supervisor, CallError> {
-    let supervisor =
-        Supervisor::spawn(&runtime_executable()?).map_err(|_| CallError::RuntimeExited)?;
-    supervisor
-        .send
-        .try_send(Frame::Configure {
-            url: widget.url.clone(),
-            jwt_service: widget.jwt_service.clone(),
-        })
-        .map_err(|_| CallError::RuntimeExited)?;
-    Ok(supervisor)
 }
 #[cfg(test)]
 mod tests {

@@ -1,4 +1,5 @@
-//! One native call per account. UI/backend owns this value and must poll it.
+//! One native call per account. A core task owns signalling and media; the
+//! backend watches confirmed state without cancelling in-flight operations.
 use super::{
     keys::{KeyReceiver, SenderKeys},
     native::{Member, Signalling, members},
@@ -85,7 +86,7 @@ impl NativeCall {
         lease: OwnedSemaphorePermit,
     ) -> Result<Self, CallError> {
         let (mut signalling, credentials) = account.prepare_native_call(room, true).await?;
-        signalling.lease=Some(lease);
+        signalling.lease = Some(lease);
         #[cfg(test)]
         eprintln!("Native fixture: focus and JWT obtained");
         let keys = SenderKeys::new()?;
@@ -150,7 +151,7 @@ impl NativeCall {
     }
     pub async fn control(&mut self, control: NativeControl) -> Result<(), CallError> {
         match control {
-            NativeControl::Leave=>return self.leave().await,
+            NativeControl::Leave => return self.leave().await,
             NativeControl::Muted(value) => {
                 self.media.set_muted(value)?;
                 self.state.local.muted = value;
@@ -211,57 +212,92 @@ impl NativeCall {
     }
     /// Poll on the backend runtime. Every accepted key and participant/device
     /// projection is room/call-scoped. No frame payloads enter CallState.
-    async fn next_step(&mut self,commands:&mut tokio::sync::mpsc::Receiver<DriverCommand>) -> Result<(), CallError> {
+    async fn next_step(
+        &mut self,
+        commands: &mut tokio::sync::mpsc::Receiver<DriverCommand>,
+    ) -> Result<(), CallError> {
         tokio::select! {
-            command=commands.recv()=>{
-                match command{
-                    Some(DriverCommand::Control(NativeControl::Leave))|None=>{self.leave().await?;},
-                    Some(DriverCommand::Control(control))=>{self.state.error=self.control(control).await.err();},
+            command = commands.recv() => {
+                match command {
+                    Some(DriverCommand::Control(NativeControl::Leave)) | None => {
+                        self.leave().await?;
+                    }
+                    Some(DriverCommand::Control(control)) => {
+                        self.state.error = self.control(control).await.err();
+                    }
                     #[cfg(test)]
-                    Some(DriverCommand::Video(source,response))=>{let result=self.media.publish_video(source).await.map_err(CallError::from);let _=response.send(result);},
+                    Some(DriverCommand::Video(source, response)) => {
+                        let result = self.media.publish_video(source).await.map_err(CallError::from);
+                        let _ = response.send(result);
+                    }
                 }
-            },
-            _=self.tick.tick()=>{
+            }
+            _ = self.tick.tick() => {
                 self.signalling.maintain().await?;
                 self.refresh_members(true).await?;
-            },
-            changed=self.signalling.membership_updates.changed()=>{
-                changed.map_err(|_|CallError::TransportFailed)?;
+            }
+            changed = self.signalling.membership_updates.changed() => {
+                changed.map_err(|_| CallError::TransportFailed)?;
                 self.refresh_members(false).await?;
-            },
-            key=self.receiver.receive.recv()=>{
-                let key=key.ok_or(CallError::KeyRejected)?;
+            }
+            key = self.receiver.receive.recv() => {
+                let key = key.ok_or(CallError::KeyRejected)?;
                 // Recheck current membership after bounded queue residence.
-                let current=members(&self.signalling.room).await?;
-                if current.iter().any(|m|m.identity()==key.identity){self.media.install_key(&key.identity,key.index,key.key.bytes())?;self.keys_received+=1;}
-            },
-            event=self.media.events.recv()=>{
-                let event=event.ok_or(CallError::TransportFailed)?;
-                if matches!(event,RoomEvent::Disconnected{..}){return Err(CallError::TransportFailed);}
-                if let RoomEvent::TrackSubscribed{publication,..}=&event && publication.encryption_type()!=livekit::e2ee::EncryptionType::Gcm{return Err(CallError::MediaE2eeRequired);}
-                if let RoomEvent::TrackPublished{publication,..}=&event {
-                    if publication.encryption_type()!=livekit::e2ee::EncryptionType::Gcm{return Err(CallError::MediaE2eeRequired);}
+                let current = members(&self.signalling.room).await?;
+                if current.iter().any(|m| m.identity() == key.identity) {
+                    self.media.install_key(&key.identity, key.index, key.key.bytes())?;
+                    self.keys_received += 1;
+                }
+            }
+            event = self.media.events.recv() => {
+                let event = event.ok_or(CallError::TransportFailed)?;
+                if matches!(event, RoomEvent::Disconnected { .. }) {
+                    return Err(CallError::TransportFailed);
+                }
+                if let RoomEvent::TrackSubscribed { publication, .. } = &event
+                    && publication.encryption_type() != livekit::e2ee::EncryptionType::Gcm
+                {
+                    return Err(CallError::MediaE2eeRequired);
+                }
+                if let RoomEvent::TrackPublished { publication, .. } = &event {
+                    if publication.encryption_type() != livekit::e2ee::EncryptionType::Gcm {
+                        return Err(CallError::MediaE2eeRequired);
+                    }
                     publication.set_subscribed(true);
                 }
                 self.media.handle_event(&event);
-                let current=members(&self.signalling.room).await?;
+                let current = members(&self.signalling.room).await?;
                 self.project(&current).await;
             }
         }
         // Connected means encrypted transport is established, not that a person
         // has accepted microphone/camera quality. Evidence counts are separate.
-        if !matches!(self.state.phase,CallPhase::Ended(_)){self.state.phase=CallPhase::Connected;}
+        if !matches!(self.state.phase, CallPhase::Ended(_)) {
+            self.state.phase = CallPhase::Connected;
+        }
         Ok(())
     }
-    async fn refresh_members(&mut self,resend:bool)->Result<(),CallError>{
-        let current=members(&self.signalling.room).await?;
-        let changed=self.keys.update_members(&self.signalling.own,&current)?;
-        if changed||resend{
-            self.media.install_key(&self.signalling.own.identity(),self.keys.index,self.keys.key.bytes())?;
+    async fn refresh_members(&mut self, resend: bool) -> Result<(), CallError> {
+        let current = members(&self.signalling.room).await?;
+        let changed = self.keys.update_members(&self.signalling.own, &current)?;
+        if changed || resend {
+            self.media.install_key(
+                &self.signalling.own.identity(),
+                self.keys.index,
+                self.keys.key.bytes(),
+            )?;
             // Fail closed on departure, even while a remaining device's key
             // delivery is retrying. Never keep encrypting with the departed key.
             self.media.set_sender_index(self.keys.index);
-            if tokio::time::timeout(std::time::Duration::from_secs(5),self.keys.send(&self.signalling.room,&self.signalling.own)).await.is_ok_and(|r|r.is_ok()){self.keys_sent+=1;}
+            if tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                self.keys.send(&self.signalling.room, &self.signalling.own),
+            )
+            .await
+            .is_ok_and(|r| r.is_ok())
+            {
+                self.keys_sent += 1;
+            }
         }
         self.project(&current).await;
         Ok(())
@@ -370,39 +406,89 @@ pub struct CallHandle {
 enum DriverCommand {
     Control(NativeControl),
     #[cfg(test)]
-    Video(twayblade_media::livekit::webrtc::video_source::RtcVideoSource,tokio::sync::oneshot::Sender<Result<(),CallError>>),
+    Video(
+        twayblade_media::livekit::webrtc::video_source::RtcVideoSource,
+        tokio::sync::oneshot::Sender<Result<(), CallError>>,
+    ),
 }
 impl NativeCall {
-    pub fn drive(mut self)->CallHandle {
-        let (commands,mut receive)=tokio::sync::mpsc::channel(32);
-        let (send,updates)=tokio::sync::watch::channel(self.state.clone());
-        let video=self.video_tracks();let evidence=self.evidence();
-        let keys_received=std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));let received=keys_received.clone();
-        let task=tokio::spawn(async move{
-            loop{
-                if let Err(error)=self.next_step(&mut receive).await{self.state.error=Some(error);self.state.phase=CallPhase::Ended(EndReason::Failed);}
-                received.store(self.keys_received,std::sync::atomic::Ordering::Relaxed);
+    pub fn drive(mut self) -> CallHandle {
+        let (commands, mut receive) = tokio::sync::mpsc::channel(32);
+        let (send, updates) = tokio::sync::watch::channel(self.state.clone());
+        let video = self.video_tracks();
+        let evidence = self.evidence();
+        let keys_received = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let received = keys_received.clone();
+        let task = tokio::spawn(async move {
+            loop {
+                if let Err(error) = self.next_step(&mut receive).await {
+                    self.state.error = Some(error);
+                    self.state.phase = CallPhase::Ended(EndReason::Failed);
+                }
+                received.store(self.keys_received, std::sync::atomic::Ordering::Relaxed);
                 send.send_replace(self.state.clone());
-                if matches!(self.state.phase,CallPhase::Ended(_)){break;}
+                if matches!(self.state.phase, CallPhase::Ended(_)) {
+                    break;
+                }
             }
         });
-        CallHandle{updates,commands,video,evidence,keys_received,task}
+        CallHandle {
+            updates,
+            commands,
+            video,
+            evidence,
+            keys_received,
+            task,
+        }
     }
 }
 impl CallHandle {
-    pub fn control(&self,control:NativeControl)->Result<(),CallError>{self.commands.try_send(DriverCommand::Control(control)).map_err(|_|CallError::ControlUnavailable)}
-    pub fn video_tracks(&self)->VideoTracks{self.video.clone()}
-    pub fn evidence(&self)->twayblade_media::Evidence{self.evidence.clone()}
-    pub fn keys_received(&self)->u64{self.keys_received.load(std::sync::atomic::Ordering::Relaxed)}
-    #[cfg(test)]
-    pub(crate) async fn publish_video(&self,source:twayblade_media::livekit::webrtc::video_source::RtcVideoSource)->Result<(),CallError>{
-        let (send,receive)=tokio::sync::oneshot::channel();self.commands.send(DriverCommand::Video(source,send)).await.map_err(|_|CallError::ControlUnavailable)?;receive.await.map_err(|_|CallError::ControlUnavailable)?
+    pub fn control(&self, control: NativeControl) -> Result<(), CallError> {
+        self.commands
+            .try_send(DriverCommand::Control(control))
+            .map_err(|_| CallError::ControlUnavailable)
     }
-    pub async fn leave(&mut self)->Result<(),CallError>{
+    pub fn video_tracks(&self) -> VideoTracks {
+        self.video.clone()
+    }
+    pub fn evidence(&self) -> twayblade_media::Evidence {
+        self.evidence.clone()
+    }
+    pub fn keys_received(&self) -> u64 {
+        self.keys_received
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+    #[cfg(test)]
+    pub(crate) async fn publish_video(
+        &self,
+        source: twayblade_media::livekit::webrtc::video_source::RtcVideoSource,
+    ) -> Result<(), CallError> {
+        let (send, receive) = tokio::sync::oneshot::channel();
+        self.commands
+            .send(DriverCommand::Video(source, send))
+            .await
+            .map_err(|_| CallError::ControlUnavailable)?;
+        receive.await.map_err(|_| CallError::ControlUnavailable)?
+    }
+    pub async fn leave(&mut self) -> Result<(), CallError> {
         self.control(NativeControl::Leave)?;
-        tokio::time::timeout(std::time::Duration::from_secs(10),async{
-            loop{if matches!(self.updates.borrow().phase,CallPhase::Ended(_)){return Ok(());}self.updates.changed().await.map_err(|_|CallError::RuntimeExited)?;}
-        }).await.map_err(|_|CallError::TransportFailed)?
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if matches!(self.updates.borrow().phase, CallPhase::Ended(_)) {
+                    return self.updates.borrow().error.map_or(Ok(()), Err);
+                }
+                self.updates
+                    .changed()
+                    .await
+                    .map_err(|_| CallError::SessionClosed)?;
+            }
+        })
+        .await
+        .map_err(|_| CallError::TransportFailed)?
     }
 }
-impl Drop for CallHandle{fn drop(&mut self){self.task.abort();}}
+impl Drop for CallHandle {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}

@@ -1,6 +1,6 @@
 #![allow(
     dead_code,
-    reason = "Call contracts for the UI contributor; no call views in this spike"
+    reason = "Call contracts for the UI contributor; native call views are owned by the UI contributor"
 )]
 use super::{Account, Backend, Snapshot, State, publish};
 use std::{
@@ -174,7 +174,11 @@ pub(super) fn observe(backend: &Backend, state: &mut State, account: Account) {
                 state.cancel_call();
             }
             publish(&updates, |v| {
-                if let Some(call)=&mut v.call && room_left{call.phase=CallPhase::Ended(EndReason::RoomLeft);}
+                if let Some(call) = &mut v.call
+                    && room_left
+                {
+                    call.phase = CallPhase::Ended(EndReason::RoomLeft);
+                }
                 v.room_calls = calls;
             });
         }
@@ -229,8 +233,10 @@ async fn run(
     loop {
         tokio::select! {
             result=call.updates.changed()=>{
-                result.map_err(|_|CallError::RuntimeExited)?;
-                update(&shared,&updates,ticket,|state|*state=call.updates.borrow().clone())?;
+                result.map_err(|_|CallError::SessionClosed)?;
+                let snapshot=call.updates.borrow().clone();
+                update(&shared,&updates,ticket,|state|*state=snapshot.clone())?;
+                if let CallPhase::Ended(reason)=snapshot.phase{return snapshot.error.map_or(Ok(reason),Err);}
             },
             control=controls.recv()=>{
                 let control=match control{
