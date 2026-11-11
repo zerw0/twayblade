@@ -531,6 +531,10 @@ M4b core 2 — Task 5, spoiler/status/verification contracts (2026-11-11):
 - Compilation: pinned macOS fmt and strict locked all-target/all-feature workspace Clippy passed. Unit tests: locked all-feature workspace suite passed (127 tests; opt-in tests ignored), including spoiler stability and Unicode/status boundaries. Linux/Windows compilation/runtime remain unverified (target standard libraries unavailable locally).
 - Live integration: isolated Synapse 1.164.2 security/SAS/recovery and both presence-enabled/disabled runs passed, including trimmed status, invalid status and clearing. Actual Element interoperability, reveal controls, status-entry UI and physical platform checks remain unverified.
 
+Permissive software license (2026-11-11):
+- Added the MIT license at the user's request, with an SPDX `MIT` workspace license inherited by all three crates and a README link. Third-party dependency licenses remain their own. No snapshot fields, actions or views change.
+- Validation: pinned-shell locked Cargo metadata confirms all three crates inherit MIT; repository diff check passed. This documentation/manifest-only change adds no runtime behavior or integration/platform acceptance claim.
+
 Not yet verified:
 - Physical GUI checks of logout, pagination, IME and VoiceOver.
 - CI on any host; Linux and Windows builds and runs.

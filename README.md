@@ -48,3 +48,8 @@ Explore the interface without an account:
 ```sh
 cargo run -p twayblade -- --preview
 ```
+
+## License
+
+Twayblade is licensed under the [MIT License](LICENSE). Third-party dependencies
+retain their own licenses.

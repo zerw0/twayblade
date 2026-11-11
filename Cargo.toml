@@ -7,6 +7,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
 publish = false
+license = "MIT"
 
 [workspace.dependencies]
 matrix-sdk = { version = "=0.19.1", features = ["bundled-sqlite"] }
