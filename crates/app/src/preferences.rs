@@ -96,6 +96,43 @@ pub(super) struct CustomTheme {
     pub secondary: u32,
     pub border: u32,
 }
+impl CustomTheme {
+    /// Editable colours, in Settings order: (id, label).
+    pub const FIELDS: [(&'static str, &'static str); 6] = [
+        ("bg", "Background"),
+        ("sidebar", "Sidebar"),
+        ("text", "Text"),
+        ("muted", "Secondary text"),
+        ("secondary", "Secondary surface"),
+        ("border", "Border"),
+    ];
+    /// Same order as `FIELDS` and the theme's surface array.
+    pub fn colors(self) -> [u32; 6] {
+        [
+            self.background,
+            self.sidebar,
+            self.text,
+            self.muted,
+            self.secondary,
+            self.border,
+        ]
+    }
+    pub fn from_colors([background, sidebar, text, muted, secondary, border]: [u32; 6]) -> Self {
+        Self {
+            background,
+            sidebar,
+            text,
+            muted,
+            secondary,
+            border,
+        }
+    }
+    pub fn with(self, field: usize, value: u32) -> Self {
+        let mut colors = self.colors();
+        colors[field] = value & 0xff_ffff;
+        Self::from_colors(colors)
+    }
+}
 impl Default for CustomTheme {
     fn default() -> Self {
         Self {
