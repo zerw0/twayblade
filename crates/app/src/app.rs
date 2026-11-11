@@ -163,8 +163,11 @@ pub(super) struct MatrixApp {
     pub emoji_picker: Option<crate::ui::emoji::Picker>,
     pub emoji_search: Entity<InputState>,
     pub emoji_preferences: crate::ui::emoji::Preferences,
-    pub attachment_draft: Option<twayblade_core::conversation::AttachmentDraft>,
-    pub attachment_busy: bool,
+    /// Stacked attachments, in the order they were added, sent with the next message.
+    pub attachment_drafts: Vec<crate::ui::attachments::Staged>,
+    /// Attachments still being read or checked.
+    pub attachment_pending: usize,
+    pub attachment_next_id: u64,
     pub attachment_sample: bool,
     pub attachment_request: u64,
     pub security_open: bool,
@@ -206,6 +209,10 @@ pub(super) struct MatrixApp {
     started: bool,
     _subscriptions: Vec<Subscription>,
     selection_task: Option<Task<()>>,
+    /// Selections queued but not yet applied by the backend.
+    selection_pending: u32,
+    /// Last automatic re-selection, to rate-limit recovery.
+    selection_retry: Option<std::time::Instant>,
 }
 
 impl MatrixApp {
@@ -435,8 +442,9 @@ impl MatrixApp {
             } else {
                 crate::ui::emoji::Preferences::load()
             },
-            attachment_draft: None,
-            attachment_busy: false,
+            attachment_drafts: Vec::new(),
+            attachment_pending: 0,
+            attachment_next_id: 0,
             attachment_sample: false,
             attachment_request: 0,
             security_open: false,
@@ -476,6 +484,8 @@ impl MatrixApp {
             started: preview,
             _subscriptions: subscriptions,
             selection_task: None,
+            selection_pending: 0,
+            selection_retry: None,
         };
         crate::theme::set_appearance(this.preferences.appearance.clone(), cx);
         if let Some(room) = this.navigation.selected_room.clone() {
@@ -632,6 +642,17 @@ impl MatrixApp {
         }
         if self.navigation.reconcile(&snapshot) {
             self.queue_selection(None, window, cx);
+        } else if let Some(room) = self.navigation.selected_room.clone()
+            && !self.preview
+            && self.selection_pending == 0
+            && snapshot.selected_room != room
+            && self
+                .selection_retry
+                .is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(2))
+        {
+            // The backend lost or never applied the shown room; ask again.
+            self.selection_retry = Some(std::time::Instant::now());
+            self.queue_selection(Some(room), window, cx);
         }
         if self.navigation.selected_room.as_deref().unwrap_or_default() != snapshot.selected_room {
             snapshot.messages.clear();
@@ -992,6 +1013,11 @@ impl MatrixApp {
         self.management = None;
         cx.notify();
         if event.is_none() && self.navigation.selected_room.as_ref() == Some(&id) {
+            // Selecting the open room again retries it when it isn't loaded or
+            // loading (failed load, or the backend holds another selection).
+            if !self.preview && !self.timeline_loading_for(&id) {
+                self.queue_selection(Some(id), window, cx);
+            }
             return;
         }
         self.emoji_picker = None;
@@ -1083,6 +1109,12 @@ impl MatrixApp {
         self.composers.insert(room, (state, subscription));
     }
 
+    /// The backend has this room selected and is loading or showing it.
+    fn timeline_loading_for(&self, room: &str) -> bool {
+        self.snapshot.selected_room == room
+            && (self.snapshot.timeline_ready
+                || self.snapshot.timeline_status == crate::backend::LOADING_STATUS)
+    }
     fn queue_selection(&mut self, room: Option<String>, window: &Window, cx: &Context<Self>) {
         self.queue_selection_focus(room, None, window, cx);
     }
@@ -1103,6 +1135,7 @@ impl MatrixApp {
             return;
         };
         let previous = self.selection_task.take();
+        self.selection_pending += 1;
         self.selection_task = Some(cx.spawn_in(window, async move |view, cx| {
             if let Some(previous) = previous {
                 previous.await;
@@ -1120,6 +1153,7 @@ impl MatrixApp {
                 })
                 .await;
             let _ = view.update_in(cx, |this, _, cx| {
+                this.selection_pending = this.selection_pending.saturating_sub(1);
                 if this.navigation.selected_room == target
                     && let Err(error) = result
                 {
@@ -1138,7 +1172,12 @@ impl MatrixApp {
             return;
         };
         let body = self.composer.read(cx).value().to_string();
-        if body.trim().is_empty() || self.sending.contains(&room) {
+        let has_text = !body.trim().is_empty();
+        // Wait for every stacked attachment so none is left behind.
+        if (!has_text && self.attachment_drafts.is_empty())
+            || self.attachment_pending > 0
+            || self.sending.contains(&room)
+        {
             return;
         }
         if let Some(backend) = &self.backend {
@@ -1146,18 +1185,46 @@ impl MatrixApp {
         }
         self.sending.insert(room.clone());
         let account = self.snapshot.user_id.clone();
-        let sent_body = body.clone();
+        let instance = self.snapshot.account_instance;
+        let sent_body = has_text.then(|| body.clone());
         let sent_room = room.clone();
+        let staged = std::mem::take(&mut self.attachment_drafts);
+        let attachment_request = self.attachment_request;
         self.job(
             window,
             cx,
-            move |backend| backend.send_text(sent_room, sent_body),
-            move |this, result, window, cx| {
+            move |backend| {
+                // Attachments first, in order, then the text; stop at the first failure.
+                let mut staged = staged.into_iter();
+                while let Some(item) = staged.next() {
+                    if let Err(error) =
+                        backend.send_attachment(sent_room.clone(), instance, item.draft)
+                    {
+                        return (Err(error), staged.collect::<Vec<_>>());
+                    }
+                }
+                let result = match sent_body {
+                    Some(text) => backend.send_text(sent_room, text),
+                    None => Ok(()),
+                };
+                (result, Vec::new())
+            },
+            move |this, (result, unsent), window, cx| {
                 if this.snapshot.user_id != account {
                     return;
                 }
                 this.sending.remove(&room);
+                // Put unsent attachments back while the same conversation is open.
+                if !unsent.is_empty()
+                    && this.attachment_request == attachment_request
+                    && this.navigation.selected_room.as_ref() == Some(&room)
+                {
+                    let mut restored = unsent;
+                    restored.append(&mut this.attachment_drafts);
+                    this.attachment_drafts = restored;
+                }
                 match result {
+                    Ok(()) if !has_text => {}
                     Ok(()) => {
                         if let Some((state, _)) = this.composers.get(&room)
                             && state.read(cx).value().as_str() == body

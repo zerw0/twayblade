@@ -290,9 +290,11 @@ pub(super) enum TimelineAction {
     Read { event_id: String },
 }
 
+pub(super) const LOADING_STATUS: &str = "Loading messages…";
+
 pub(super) fn timeline_status_text(status: TimelineStatus) -> &'static str {
     match status {
-        TimelineStatus::Loading => "Loading messages…",
+        TimelineStatus::Loading => LOADING_STATUS,
         TimelineStatus::Ready => "",
         TimelineStatus::Unavailable => "This conversation is no longer available.",
         TimelineStatus::Failed => "Messages could not be loaded. Select the conversation to retry.",
@@ -353,7 +355,7 @@ fn sync_status_text(status: SyncStatus) -> &'static str {
         SyncStatus::Syncing => "Syncing conversations…",
         SyncStatus::Connected => "Connected",
         SyncStatus::Offline => "Offline · reconnecting…",
-        SyncStatus::Failed => "Synchronization failed · reconnect to retry",
+        SyncStatus::Failed => "Synchronization couldn't start · restart Twayblade",
         SyncStatus::Stopped => "Synchronization stopped",
     }
 }
@@ -681,7 +683,6 @@ impl Backend {
         if let Some(task) = state.thread_task.take() {
             task.abort();
         }
-        state.cancel_discovery();
         state.cancel_media();
         state.cancel_presence();
         state.thread_conversation = None;
@@ -698,8 +699,6 @@ impl Backend {
             snapshot.media = MediaState::default();
             snapshot.media_thumbnails.clear();
             snapshot.media_thumbnail_order.clear();
-            snapshot.room_preview = PreviewState::default();
-            snapshot.directory.loading = false;
             snapshot.selected_room = room_id.clone();
             snapshot.messages.clear();
             snapshot.thread = None;
@@ -708,7 +707,7 @@ impl Backend {
             snapshot.members_state = MembersState::Loading;
             snapshot.typing.clear();
             snapshot.typing_others = 0;
-            snapshot.timeline_status = "Loading messages…".into();
+            snapshot.timeline_status = LOADING_STATUS.into();
         });
         let shared = self.state.clone();
         let updates = self.updates.clone();
@@ -1134,7 +1133,6 @@ impl Backend {
         if let Some(task) = state.thread_task.take() {
             task.abort();
         }
-        state.cancel_discovery();
         state.cancel_media();
         state.cancel_presence();
         state.thread_conversation = None;
@@ -1150,8 +1148,6 @@ impl Backend {
             snapshot.media = MediaState::default();
             snapshot.media_thumbnails.clear();
             snapshot.media_thumbnail_order.clear();
-            snapshot.room_preview = PreviewState::default();
-            snapshot.directory.loading = false;
             snapshot.selected_room.clear();
             snapshot.messages.clear();
             snapshot.thread = None;
