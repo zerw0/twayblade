@@ -4,6 +4,7 @@
 pub mod auth;
 pub mod avatars;
 pub mod conversation;
+pub mod directory;
 pub mod media;
 pub mod notifications;
 pub mod presence;

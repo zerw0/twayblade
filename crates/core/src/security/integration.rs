@@ -162,10 +162,22 @@ async fn secure_backup_fresh_store_recovery_and_sas() {
     let second_sync = sync(&second);
     let second_security = Security::new(&second);
     wait_room(&second, &room_id).await;
-    wait_security("fresh-store security", &second_security, |snapshot| {
-        snapshot.ready
-    })
+    let fresh = wait_security(
+        "fresh-store security with existing identity",
+        &second_security,
+        |snapshot| snapshot.ready && snapshot.has_identity,
+    )
     .await;
+    // Regression: local trust of the SDK's own device must never imply
+    // verification by the account's cross-signing identity.
+    let own = checked(
+        second.client.encryption().get_own_device().await,
+        "fresh own device",
+    )
+    .unwrap();
+    assert!(own.is_verified(), "SDK own device is locally trusted");
+    assert!(!own.is_cross_signed_by_owner());
+    assert!(!fresh.verified, "fresh device must remain unverified");
     second.select_room(Some(room_id.as_str()));
     let timeline = second.conversation_updates(room_id.to_string(), 1);
     tokio::pin!(timeline);
@@ -231,12 +243,21 @@ async fn secure_backup_fresh_store_recovery_and_sas() {
             .is_some_and(|status| status.is_complete())
     );
 
-    eprintln!("PASS: wrong-key rejection and fresh-store live backup re-decryption");
+    wait_security("owner signature after recovery", &second_security, |s| {
+        s.ready && s.verified
+    })
+    .await;
+    eprintln!("PASS: wrong-key rejection, recovery and owner-signature verification regression");
     let third = login(&root, &fixture, &certificate, "sas").await;
     let third_sync = sync(&third);
     let third_security = Security::new(&third);
     wait_room(&third, &room_id).await;
     checked(third_security.refresh().await, "device query");
+    let fresh = third_security.subscribe().borrow().clone();
+    assert!(
+        fresh.has_identity && !fresh.verified,
+        "fresh SAS device must remain unverified"
+    );
     checked(
         third_security
             .request_verification(second.client.device_id().unwrap().to_string())
@@ -291,6 +312,11 @@ async fn secure_backup_fresh_store_recovery_and_sas() {
             .is_some_and(|flow| flow.phase == VerificationPhase::Done)
     })
     .await;
+    checked(
+        third_security.refresh().await,
+        "refresh owner signature after SAS",
+    );
+    wait_security("owner signature after SAS", &third_security, |s| s.verified).await;
     checked(
         third_security
             .request_verification(second.client.device_id().unwrap().to_string())

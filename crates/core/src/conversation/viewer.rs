@@ -233,6 +233,43 @@ pub(crate) async fn decode_viewer_bytes(
     }
 }
 
+/// First frame only, sharing the viewer/timeline decoder semaphore.
+pub(crate) async fn decode_gallery_thumbnail(
+    bytes: Vec<u8>,
+    mut cancel: tokio::sync::watch::Receiver<bool>,
+) -> Result<Arc<Vec<u8>>, ImageError> {
+    if *cancel.borrow() {
+        return Err(ImageError::Cancelled);
+    }
+    let permit = tokio::select! {
+        _ = cancel.changed() => return Err(ImageError::Cancelled),
+        permit = DECODER.clone().acquire_owned() => permit.map_err(|_| ImageError::Cancelled)?,
+    };
+    let decode = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        thumbnail_png(bytes).map(Arc::new)
+    });
+    tokio::select! {
+        _ = cancel.changed() => Err(ImageError::Cancelled),
+        result = decode => result.map_err(|_| ImageError::Corrupt)?,
+    }
+}
+fn thumbnail_png(bytes: Vec<u8>) -> Result<Vec<u8>, ImageError> {
+    if bytes.len() > 16 * 1024 * 1024 {
+        return Err(ImageError::Limit);
+    }
+    let mut reader = image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|_| ImageError::Corrupt)?;
+    reader.limits(limits_with(64 * 1024 * 1024));
+    let image = reader.decode().map_err(image_error)?.thumbnail(168, 168);
+    let mut out = Cursor::new(Vec::new());
+    image
+        .write_to(&mut out, image::ImageFormat::Png)
+        .map_err(image_error)?;
+    Ok(out.into_inner())
+}
+
 #[cfg(test)]
 pub(crate) fn animated_webp_fixture() -> Vec<u8> {
     fn chunk(out: &mut Vec<u8>, tag: &[u8; 4], data: &[u8]) {
@@ -282,6 +319,24 @@ pub(crate) fn animated_gif_fixture() -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn gallery_thumbnails_bound_encoded_input_decode_and_output() {
+        assert!(matches!(
+            thumbnail_png(vec![0; 16 * 1024 * 1024 + 1]),
+            Err(ImageError::Limit)
+        ));
+        assert!(matches!(
+            thumbnail_png(vec![1, 2, 3]),
+            Err(ImageError::Corrupt)
+        ));
+        let mut png = Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(512, 256)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let bytes = thumbnail_png(png.into_inner()).unwrap();
+        let image = image::load_from_memory(&bytes).unwrap();
+        assert_eq!((image.width(), image.height()), (168, 84));
+    }
     #[test]
     fn animated_webp_keeps_composited_frames_and_delays() {
         let image = decode_viewer_image(animated_webp_fixture(), "sample.webp").unwrap();
@@ -355,11 +410,17 @@ mod tests {
         let task = tokio::spawn(decode_viewer_bytes(
             Vec::new(),
             "cancelled.png".into(),
-            receiver,
+            receiver.clone(),
         ));
+        let thumbnail = tokio::spawn(decode_gallery_thumbnail(Vec::new(), receiver));
         tokio::task::yield_now().await;
         sender.send_replace(true);
         let result = tokio::time::timeout(std::time::Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(result, Err(ImageError::Cancelled)));
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), thumbnail)
             .await
             .unwrap()
             .unwrap();
