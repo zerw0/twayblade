@@ -16,8 +16,8 @@ mod attachments;
 mod unread;
 mod viewer;
 pub use attachments::{AttachmentDraft, AttachmentError, sanitize_filename};
-pub(crate) use viewer::decode_viewer_bytes;
 pub use viewer::{ImageError, ViewerImage, decode_viewer_image};
+pub(crate) use viewer::{decode_gallery_thumbnail, decode_viewer_bytes};
 
 /// What a timeline row represents. The frontend owns the wording.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

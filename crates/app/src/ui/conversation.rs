@@ -40,6 +40,9 @@ impl MatrixApp {
         let ready = self.snapshot.timeline_ready && !self.preview && !self.busy;
         let editable = !self.busy && (self.preview || self.snapshot.timeline_ready);
         let empty = self.composer.read(cx).value().trim().is_empty();
+        let stacked = !self.attachment_drafts.is_empty()
+            || self.attachment_pending > 0
+            || (self.preview && self.attachment_sample);
         let details_shown = self.details_open || self.profile.is_some() || self.thread.is_some();
 
         let room_icon = if room.direct || room.avatar.is_some() {
@@ -247,13 +250,6 @@ impl MatrixApp {
                     self.snapshot.reduce_motion,
                 ))
             })
-            .when(
-                self.attachment_draft.is_some() || self.attachment_sample,
-                |view| view.child(self.attachment_confirmation(cx)),
-            )
-            .when(self.attachment_busy, |view| {
-                view.child(note("Preparing attachment…".into()))
-            })
             // A composer box: the message field, then a quiet toolbar row with
             // attach, emoji and send, as in Slack and Mail.
             .child(
@@ -262,6 +258,7 @@ impl MatrixApp {
                     .border_1()
                     .border_color(cx.theme().border)
                     .bg(palette.field)
+                    .when(stacked, |view| view.child(self.attachment_tray(cx)))
                     .child(
                         div()
                             .id("composer-panel")
@@ -298,7 +295,13 @@ impl MatrixApp {
                                     .icon(IconName::Paperclip)
                                     .accessibility_label("Attach file")
                                     .tooltip("Attach File…")
-                                    .disabled(!editable || self.preview || self.attachment_busy)
+                                    .disabled(
+                                        !editable
+                                            || self.preview
+                                            || self.attachment_drafts.len()
+                                                + self.attachment_pending
+                                                >= crate::ui::attachments::MAX_ATTACHMENTS,
+                                    )
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.choose_attachment(window, cx)
                                     })),
@@ -312,7 +315,7 @@ impl MatrixApp {
                                     .tooltip("Emoji")
                                     .disabled(!editable && !self.preview)
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        this.open_emoji(None, window, cx)
+                                        this.toggle_emoji(window, cx)
                                     })),
                             )
                             .child(
@@ -325,7 +328,12 @@ impl MatrixApp {
                                     .icon(IconName::Send)
                                     .accessibility_label("Send message")
                                     .tooltip("Send  ↩")
-                                    .disabled(!ready || empty || self.sending.contains(&room.id))
+                                    .disabled(
+                                        !ready
+                                            || (empty && self.attachment_drafts.is_empty())
+                                            || self.attachment_pending > 0
+                                            || self.sending.contains(&room.id),
+                                    )
                                     .on_click(
                                         cx.listener(|this, _, window, cx| this.send(window, cx)),
                                     ),
@@ -387,13 +395,7 @@ impl MatrixApp {
             .child(body)
             .child(composer)
             .on_drop::<ExternalPaths>(cx.listener(|this, paths: &ExternalPaths, window, cx| {
-                if let Some(path) = paths.0.first() {
-                    this.prepare_attachment(
-                        crate::ui::attachments::AttachmentSource::File(path.clone()),
-                        window,
-                        cx,
-                    );
-                }
+                this.add_attachments(paths.0.iter().cloned(), window, cx);
             }))
             .into_any_element()
     }

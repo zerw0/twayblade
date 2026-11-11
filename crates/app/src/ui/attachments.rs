@@ -1,7 +1,6 @@
 //! Attachment UI owns file dialogs and wording; the core owns SDK media operations.
 use crate::app::MatrixApp;
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{component::*, *};
 use std::{path::PathBuf, sync::Arc};
 
@@ -65,12 +64,29 @@ pub(crate) fn render_small_png(bytes: &[u8], cx: &mut App) -> Option<Arc<RenderI
     Some(image)
 }
 
+/// One stacked attachment; `id` keeps its identity for removal and focus.
+pub(crate) struct Staged {
+    pub id: u64,
+    pub draft: twayblade_core::conversation::AttachmentDraft,
+}
+
+/// Bounds for one message's stack. Drafts hold their bytes in memory until sent.
+pub(crate) const MAX_ATTACHMENTS: usize = 10;
+const MAX_STACK_BYTES: u64 = 256 * 1024 * 1024;
+
 impl MatrixApp {
     pub(crate) fn clear_attachment(&mut self) {
         self.attachment_request = self.attachment_request.wrapping_add(1);
-        self.attachment_busy = false;
+        self.attachment_pending = 0;
         self.attachment_sample = false;
-        self.attachment_draft = None;
+        self.attachment_drafts.clear();
+    }
+    pub(crate) fn remove_attachment(&mut self, id: u64, cx: &mut Context<Self>) {
+        self.attachment_drafts.retain(|item| item.id != id);
+        cx.notify();
+    }
+    fn attachment_room(&self) -> usize {
+        MAX_ATTACHMENTS.saturating_sub(self.attachment_drafts.len() + self.attachment_pending)
     }
     pub(crate) fn choose_attachment(&mut self, window: &Window, cx: &mut Context<Self>) {
         let room = self.snapshot.selected_room.clone();
@@ -78,23 +94,31 @@ impl MatrixApp {
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
-            multiple: false,
-            prompt: Some("Choose attachment".into()),
+            multiple: true,
+            prompt: Some("Attach".into()),
         });
         cx.spawn_in(window, async move |view, cx| {
-            if let Ok(Ok(Some(paths))) = paths.await
-                && let Some(path) = paths.into_iter().next()
-            {
+            if let Ok(Ok(Some(paths))) = paths.await {
                 let _ = view.update_in(cx, |this, window, cx| {
                     if this.snapshot.selected_room == room
                         && this.snapshot.account_instance == account
                     {
-                        this.prepare_attachment(AttachmentSource::File(path), window, cx);
+                        this.add_attachments(paths, window, cx);
                     }
                 });
             }
         })
         .detach();
+    }
+    pub(crate) fn add_attachments(
+        &mut self,
+        paths: impl IntoIterator<Item = PathBuf>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        for path in paths {
+            self.prepare_attachment(AttachmentSource::File(path), window, cx);
+        }
     }
     pub(crate) fn prepare_attachment(
         &mut self,
@@ -102,11 +126,15 @@ impl MatrixApp {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        if self.preview || self.attachment_busy || !self.snapshot.timeline_ready {
+        if self.preview || !self.snapshot.timeline_ready {
             return;
         }
-        self.clear_attachment();
-        self.attachment_busy = true;
+        if self.attachment_room() == 0 {
+            self.status = format!("You can attach up to {MAX_ATTACHMENTS} files to one message.");
+            cx.notify();
+            return;
+        }
+        self.attachment_pending += 1;
         let request = self.attachment_request;
         let room = self.snapshot.selected_room.clone();
         let account = self.snapshot.account_instance;
@@ -118,32 +146,26 @@ impl MatrixApp {
                 if this.attachment_request != request || this.snapshot.account_instance != account {
                     return;
                 }
-                this.attachment_busy = false;
+                this.attachment_pending = this.attachment_pending.saturating_sub(1);
                 match result {
-                    Ok(draft) => this.attachment_draft = Some(draft),
+                    Ok(draft) => {
+                        let total: u64 = this.attachment_drafts.iter().map(|i| i.draft.size).sum();
+                        if total.saturating_add(draft.size) > MAX_STACK_BYTES {
+                            this.status = format!(
+                                "{} wasn't added: one message can carry up to 256 MB of attachments.",
+                                draft.filename
+                            );
+                        } else {
+                            this.attachment_next_id += 1;
+                            this.attachment_drafts.push(Staged {
+                                id: this.attachment_next_id,
+                                draft,
+                            });
+                        }
+                    }
                     Err(error) => this.status = error.to_string(),
                 }
                 cx.notify();
-            },
-        );
-        cx.notify();
-    }
-    pub(crate) fn send_file(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let Some(draft) = self.attachment_draft.take() else {
-            return;
-        };
-        let room = self.snapshot.selected_room.clone();
-        let account = self.snapshot.account_instance;
-        self.job(
-            window,
-            cx,
-            move |backend| backend.send_attachment(room, account, draft),
-            move |this, result, _, _| {
-                if this.snapshot.account_instance == account
-                    && let Err(error) = result
-                {
-                    this.status = error.to_string();
-                }
             },
         );
         cx.notify();
@@ -228,76 +250,156 @@ impl MatrixApp {
                     );
                     return true;
                 }
-                ClipboardEntry::ExternalPaths(paths) => {
-                    if let Some(path) = paths.0.first() {
-                        self.prepare_attachment(AttachmentSource::File(path.clone()), window, cx);
-                        return true;
-                    }
+                ClipboardEntry::ExternalPaths(paths) if !paths.0.is_empty() => {
+                    self.add_attachments(paths.0.iter().cloned(), window, cx);
+                    return true;
                 }
                 _ => {}
             }
         }
         false
     }
-    pub(crate) fn attachment_confirmation(&self, cx: &mut Context<Self>) -> AnyElement {
-        let (filename, size, preview_png) = if let Some(draft) = &self.attachment_draft {
-            (
-                draft.filename.clone(),
-                draft.size,
-                draft.preview_png.clone(),
-            )
-        } else if self.preview && self.attachment_sample {
-            (
-                "Sample landscape.png".into(),
-                2480,
-                Some(Arc::new(
+    /// Stacked attachments inside the composer box, above the message field.
+    pub(crate) fn attachment_tray(&self, cx: &mut Context<Self>) -> AnyElement {
+        struct Tile {
+            id: Option<u64>,
+            filename: String,
+            size: u64,
+            preview: Option<Arc<Vec<u8>>>,
+        }
+        let mut tiles: Vec<Tile> = self
+            .attachment_drafts
+            .iter()
+            .map(|item| Tile {
+                id: Some(item.id),
+                filename: item.draft.filename.clone(),
+                size: item.draft.size,
+                preview: item.draft.preview_png.clone(),
+            })
+            .collect();
+        if self.preview && self.attachment_sample {
+            tiles.push(Tile {
+                id: None,
+                filename: "Sample landscape.png".into(),
+                size: 2480,
+                preview: Some(Arc::new(
                     include_bytes!("../../assets/attachment-sample.png").to_vec(),
                 )),
-            )
-        } else {
-            return div().into_any_element();
-        };
-        let preview_image = preview_png.and_then(|bytes| render_png(&bytes, cx));
-        v_flex()
-            .id("attachment-confirmation")
+            });
+            tiles.push(Tile {
+                id: None,
+                filename: "Travel notes.pdf".into(),
+                size: 234_567,
+                preview: None,
+            });
+        }
+        let theme = cx.theme();
+        let (border, muted, surface, background) = (
+            theme.border,
+            theme.muted_foreground,
+            theme.muted,
+            theme.background,
+        );
+        let mut row = h_flex()
+            .id("attachment-tray")
+            .flex_wrap()
             .gap(px(6.))
-            .p(px(10.))
-            .border_1()
-            .border_color(cx.theme().border)
-            .rounded(px(8.))
-            .child(
-                div()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("Send attachment?"),
-            )
-            .when_some(preview_image, |view, image| {
-                view.child(
-                    img(image)
-                        .w(px(240.))
-                        .h(px(120.))
-                        .object_fit(ObjectFit::Contain),
-                )
-            })
-            .child(format!("{filename} · {size} bytes"))
-            .child(
-                h_flex()
+            .px(px(8.))
+            .pt(px(8.));
+        for (index, tile) in tiles.into_iter().enumerate() {
+            let key = tile
+                .id
+                .map_or_else(|| format!("sample-{index}"), |id| id.to_string());
+            let size = crate::model::size_label(Some(tile.size));
+            let image = tile.preview.and_then(|bytes| render_png(&bytes, cx));
+            let body = match image {
+                Some(image) => div()
+                    .size(px(56.))
+                    .rounded(px(6.))
+                    .overflow_hidden()
+                    .bg(surface)
+                    .child(img(image).size_full().object_fit(ObjectFit::Cover))
+                    .into_any_element(),
+                None => h_flex()
+                    .h(px(56.))
+                    .max_w(px(200.))
                     .gap(px(8.))
+                    .px(px(10.))
+                    .rounded(px(6.))
+                    .bg(surface)
+                    .child(Icon::new(IconName::File).size(px(18.)).text_color(muted))
                     .child(
-                        Button::new("attachment-confirm")
-                            .primary()
-                            .label("Send attachment")
-                            .disabled(self.preview)
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.send_file(window, cx)),
+                        v_flex()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .truncate()
+                                    .child(tile.filename.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(muted)
+                                    .child(size.clone()),
                             ),
                     )
-                    .child(Button::new("attachment-dismiss").label("Cancel").on_click(
-                        cx.listener(|this, _, _, cx| {
-                            this.clear_attachment();
-                            cx.notify();
-                        }),
-                    )),
-            )
-            .into_any_element()
+                    .into_any_element(),
+            };
+            let remove_id = tile.id;
+            row = row.child(
+                div()
+                    .id(SharedString::from(format!("attachment-{key}")))
+                    .relative()
+                    .border_1()
+                    .border_color(border)
+                    .rounded(px(7.))
+                    .test_support()
+                    .child(body)
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(-6.))
+                            .right(px(-6.))
+                            .rounded_full()
+                            .border_1()
+                            .border_color(border)
+                            .bg(background)
+                            .child(
+                                Button::new(SharedString::from(format!("attachment-remove-{key}")))
+                                    .ghost()
+                                    .size(px(18.))
+                                    .rounded_full()
+                                    .icon(gpui_kit::assets::IconName::X)
+                                    .accessibility_label(format!("Remove {}", tile.filename))
+                                    .on_click(cx.listener(move |this, _, _, cx| match remove_id {
+                                        Some(id) => this.remove_attachment(id, cx),
+                                        None => {
+                                            this.attachment_sample = false;
+                                            cx.notify();
+                                        }
+                                    })),
+                            ),
+                    ),
+            );
+        }
+        for index in 0..self.attachment_pending {
+            row = row.child(
+                div()
+                    .id(SharedString::from(format!("attachment-pending-{index}")))
+                    .size(px(56.))
+                    .rounded(px(7.))
+                    .border_1()
+                    .border_color(border)
+                    .bg(surface)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(11.))
+                    .text_color(muted)
+                    .child("Adding…"),
+            );
+        }
+        row.test_support().into_any_element()
     }
 }

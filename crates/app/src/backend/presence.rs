@@ -107,7 +107,14 @@ impl Backend {
         };
         self.runtime
             .block_on(account.set_presence(presence, status))
-            .map_err(|_| failure("Status could not be changed."))?;
+            .map_err(|e| {
+                failure(match e {
+                    twayblade_core::presence::PresenceError::InvalidStatus => {
+                        "Keep your status to one line of up to 256 characters."
+                    }
+                    _ => "Status could not be changed.",
+                })
+            })?;
         let state = self
             .state
             .lock()

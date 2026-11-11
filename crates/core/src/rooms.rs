@@ -224,6 +224,10 @@ impl Account {
             let rules = account.notification_rules().await.ok();
             let mut rule_changes = rules.as_ref().map(|rules| rules.subscribe());
             let mut rule_snapshot = match &rules { Some(rules) => rules.snapshot().await, None => Default::default() };
+            // The SDK stops for good after an error or termination; restart it
+            // while the session is active, with capped exponential backoff.
+            let mut restart: Option<std::pin::Pin<Box<tokio::time::Sleep>>> = None;
+            let mut failures = 0u32;
             loop {
                 let mut current = snapshot(&rooms, status);
                 current.notifications = rule_snapshot.clone();
@@ -275,12 +279,22 @@ impl Account {
                     }
                     next = state.next() => {
                         status = match next {
-                            Some(State::Running) => SyncStatus::Connected,
+                            Some(State::Running) => { failures = 0; restart = None; SyncStatus::Connected }
                             Some(State::Offline) => SyncStatus::Offline,
-                            Some(State::Error(_)) => SyncStatus::Failed,
-                            Some(State::Idle | State::Terminated) => SyncStatus::Stopped,
+                            Some(State::Error(_) | State::Idle | State::Terminated) => {
+                                if restart.is_none() {
+                                    restart = Some(Box::pin(tokio::time::sleep(restart_delay(failures))));
+                                    failures = failures.saturating_add(1);
+                                }
+                                SyncStatus::Offline
+                            }
                             None => break,
                         };
+                    }
+                    _ = async { match &mut restart { Some(sleep) => sleep.as_mut().await, None => std::future::pending().await } } => {
+                        restart = None;
+                        status = SyncStatus::Connecting;
+                        service.start().await;
                     }
                     next = changes.next() => {
                         let Some(diffs) = next else { break; };
@@ -291,6 +305,11 @@ impl Account {
             }
         }
     }
+}
+
+/// 1 s, doubling up to 60 s.
+fn restart_delay(failures: u32) -> std::time::Duration {
+    std::time::Duration::from_secs(1u64 << failures.min(6)).min(std::time::Duration::from_secs(60))
 }
 
 impl Account {
@@ -312,4 +331,19 @@ pub enum RoomError {
     Unavailable,
     #[error("room_tag_failed")]
     Tag,
+}
+
+#[cfg(test)]
+mod restart_tests {
+    use super::restart_delay;
+    use std::time::Duration;
+    #[test]
+    fn sync_restart_backs_off_exponentially_and_caps() {
+        let delays: Vec<_> = (0..9).map(restart_delay).collect();
+        assert_eq!(delays[0], Duration::from_secs(1));
+        assert_eq!(delays[1], Duration::from_secs(2));
+        assert_eq!(delays[5], Duration::from_secs(32));
+        assert!(delays[6..].iter().all(|d| *d == Duration::from_secs(60)));
+        assert_eq!(restart_delay(u32::MAX), Duration::from_secs(60));
+    }
 }

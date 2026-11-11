@@ -15,7 +15,9 @@ pub(super) use twayblade_core::conversation::{
 use twayblade_core::conversation::{ConversationError, TimelineStatus};
 pub(super) use twayblade_core::room_state::{Member, MemberRole, MembersState};
 use zeroize::Zeroizing;
+mod directory;
 mod media;
+use directory::{DirectoryState, PreviewState};
 pub(super) use media::MediaState;
 mod search;
 pub(super) use search::SearchState;
@@ -47,6 +49,10 @@ pub(super) struct Snapshot {
     pub(super) selected_room: String,
     pub(super) messages: Vec<Message>,
     pub(super) media: MediaState,
+    pub(super) media_thumbnails: std::collections::HashMap<String, Arc<Vec<u8>>>,
+    pub(super) media_thumbnail_order: std::collections::VecDeque<String>,
+    pub(super) directory: DirectoryState,
+    pub(super) room_preview: PreviewState,
     pub(super) search: SearchState,
     pub(super) focused_event: Option<String>,
     pub(super) presence_enabled: bool,
@@ -111,6 +117,13 @@ struct State {
     timeline_task: Option<JoinHandle<()>>,
     media_task: Option<JoinHandle<()>>,
     media_request: u64,
+    media_cancel: Option<watch::Sender<bool>>,
+    discovery_task: Option<JoinHandle<()>>,
+    discovery_request: u64,
+    preview_task: Option<JoinHandle<()>>,
+    preview_request: u64,
+    membership_task: Option<JoinHandle<()>>,
+    membership_request: u64,
     search_task: Option<JoinHandle<()>>,
     search_request: u64,
     presence_task: Option<JoinHandle<()>>,
@@ -128,6 +141,7 @@ struct State {
 
 impl State {
     fn stop(&mut self) {
+        self.cancel_discovery();
         self.cancel_media();
         self.cancel_search();
         self.cancel_presence();
@@ -269,9 +283,11 @@ pub(super) enum TimelineAction {
     Read { event_id: String },
 }
 
+pub(super) const LOADING_STATUS: &str = "Loading messages…";
+
 pub(super) fn timeline_status_text(status: TimelineStatus) -> &'static str {
     match status {
-        TimelineStatus::Loading => "Loading messages…",
+        TimelineStatus::Loading => LOADING_STATUS,
         TimelineStatus::Ready => "",
         TimelineStatus::Unavailable => "This conversation is no longer available.",
         TimelineStatus::Failed => "Messages could not be loaded. Select the conversation to retry.",
@@ -332,7 +348,7 @@ fn sync_status_text(status: SyncStatus) -> &'static str {
         SyncStatus::Syncing => "Syncing conversations…",
         SyncStatus::Connected => "Connected",
         SyncStatus::Offline => "Offline · reconnecting…",
-        SyncStatus::Failed => "Synchronization failed · reconnect to retry",
+        SyncStatus::Failed => "Synchronization couldn't start · restart Twayblade",
         SyncStatus::Stopped => "Synchronization stopped",
     }
 }
@@ -674,6 +690,8 @@ impl Backend {
         publish(&self.updates, |snapshot| {
             snapshot.focused_event = None;
             snapshot.media = MediaState::default();
+            snapshot.media_thumbnails.clear();
+            snapshot.media_thumbnail_order.clear();
             snapshot.selected_room = room_id.clone();
             snapshot.messages.clear();
             snapshot.thread = None;
@@ -682,7 +700,7 @@ impl Backend {
             snapshot.members_state = MembersState::Loading;
             snapshot.typing.clear();
             snapshot.typing_others = 0;
-            snapshot.timeline_status = "Loading messages…".into();
+            snapshot.timeline_status = LOADING_STATUS.into();
         });
         let shared = self.state.clone();
         let updates = self.updates.clone();
@@ -1121,6 +1139,8 @@ impl Backend {
         publish(&self.updates, |snapshot| {
             snapshot.focused_event = None;
             snapshot.media = MediaState::default();
+            snapshot.media_thumbnails.clear();
+            snapshot.media_thumbnail_order.clear();
             snapshot.selected_room.clear();
             snapshot.messages.clear();
             snapshot.thread = None;

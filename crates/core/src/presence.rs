@@ -36,10 +36,26 @@ pub struct PresenceSnapshot {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PresenceError {
+    #[error("presence_invalid_status")]
+    InvalidStatus,
     #[error("presence_invalid_request")]
     InvalidRequest,
     #[error("presence_unavailable")]
     Unavailable,
+}
+/// Whitespace-only input clears the status, like `None`.
+fn validate_status(status: Option<String>) -> Result<Option<String>, PresenceError> {
+    let Some(status) = status else {
+        return Ok(None);
+    };
+    if status.chars().any(char::is_control) {
+        return Err(PresenceError::InvalidStatus);
+    }
+    let status = status.trim();
+    if status.chars().count() > 256 {
+        return Err(PresenceError::InvalidStatus);
+    }
+    Ok((!status.is_empty()).then(|| status.to_owned()))
 }
 fn project(response: api::Response) -> Option<Presence> {
     let state = match response.presence {
@@ -78,9 +94,7 @@ impl Account {
         state: State,
         status_msg: Option<String>,
     ) -> Result<(), PresenceError> {
-        if status_msg.as_ref().is_some_and(|s| s.len() > 1024) {
-            return Err(PresenceError::InvalidRequest);
-        }
+        let status_msg = validate_status(status_msg)?;
         let state = match state {
             State::Online => PresenceState::Online,
             State::Unavailable => PresenceState::Unavailable,
@@ -155,6 +169,38 @@ impl Account {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn status_validation_trims_counts_unicode_and_rejects_controls() {
+        assert_eq!(validate_status(None).unwrap(), None);
+        assert_eq!(
+            validate_status(Some("  status  ".into()))
+                .unwrap()
+                .as_deref(),
+            Some("status")
+        );
+        assert_eq!(validate_status(Some("   ".into())).unwrap(), None);
+        assert_eq!(
+            validate_status(Some("🙂".repeat(256)))
+                .unwrap()
+                .unwrap()
+                .chars()
+                .count(),
+            256
+        );
+        for input in [
+            "a".repeat(257),
+            "🙂".repeat(257),
+            "line\nbreak".into(),
+            "tab\t".into(),
+            "nul\0".into(),
+            "delete\u{7f}".into(),
+        ] {
+            assert_eq!(
+                validate_status(Some(input)),
+                Err(PresenceError::InvalidStatus)
+            );
+        }
+    }
     #[test]
     fn bare_offline_is_unknown_and_real_evidence_is_preserved() {
         assert!(project(api::Response::new(PresenceState::Offline)).is_none());

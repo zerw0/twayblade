@@ -158,6 +158,33 @@ here are reflected in Element for the same account.
   (summary or world-readable history) before joining where the server allows
   it, and knock for knock-only rooms. Never auto-join; joining a space opens
   its hierarchy.
+- *Message editing.* Edit your own text messages (including formatted ones and
+  thread replies): Edit in the message menu and ↑ in an empty composer edit
+  the latest one; the composer shows "Editing" with Escape to cancel; Return
+  saves. Sent as an SDK `m.replace` edit (keeping encryption and the plain
+  fallback); the timeline shows the latest version with "Edited", and a failed
+  edit keeps the draft for retry. No edit history view in 1.0.
+- *Stacked attachments.* Add several files at once (picker, drag and drop,
+  paste) to the composer, remove any before sending, and send them with the
+  text using Return or Send.
+- *Image size in the timeline.* Settings › Appearance offers Default (images
+  as compact previews, capped in size) or Large (images fill the message
+  column up to a maximum height), shown as two live previews with radio
+  buttons. Applies to the timeline and threads in every chat style; the
+  viewer is unchanged. Thumbnails are requested at the size the setting needs.
+- *Keyboard shortcuts.* A Keyboard section in Settings lists every shortcut by
+  area (Composer, Navigation, Calls when M5 lands), drawn with key caps, and
+  the same list is reachable from Help › Keyboard Shortcuts (⌘/). Composer
+  shortcuts to implement with it: Return sends, ⇧Return adds a line; ⌘B bold,
+  ⌘I italic, ⌘⇧> quote, ⌘⇧L link, ⌘E code (wrap the selection in the
+  Markdown the composer already sends); ⌘Z / ⌘⇧Z undo and redo; ⌘↑ / ⌘↓ (⌘Home
+  / ⌘End) to the composer's start and end; Escape cancels a reply or edit; ↑
+  and ↓ in an empty composer step through your own messages to edit; ⌃⌥↑ and
+  ⌃⌥↓ step through what you sent before (composer history, kept per room in
+  memory only, never on disk). Use platform modifiers (Ctrl on Linux and
+  Windows). The list is generated from the actual key bindings so it cannot
+  drift; no custom rebinding in 1.0. Sticker shortcuts are out of scope
+  (stickers are deferred past 1.0).
 
 **M5 — calls (5–7 weeks).** Start with a macOS call-runtime spike, then the
 complete lifecycle and Linux/Windows. Exit: encrypted direct and group calls with
@@ -196,7 +223,8 @@ Linux and Windows CI passed on `36f850a`; macOS CI was switched to `macos-15`
    Notification OS permission/delivery/click/badge acceptance and Element comparison
    remain. Linux accent observation now retains its portal connection.
 5. **M4b chat polish.** Search, room media gallery, presence, motion, typing
-   indicator, formatting and room discovery (see Milestones).
+   indicator, formatting, room discovery, message editing, stacked
+   attachments, timeline image size and keyboard shortcuts (see Milestones).
 6. **M5 calls.** Element Call runtime, direct and group calls.
 7. **M6 release.** Accessibility pass, packaging, signing, updates.
 
@@ -497,6 +525,57 @@ Rename to Twayblade (2026-11-11):
 - One-time migration on first live launch: the pre-rename `MatrixClient` data/config folders are moved (skipped if the new ones exist or the old app is running), and the keychain session is copied from the old service and then deleted. Cold-launch activation from notifications posted before the rename is not carried over.
 - `.github/workflows/build.yml` builds release binaries (macOS arm64 app zip, Linux x86_64 tarball, Windows x86_64 zip) on pushes to main and manual runs, and publishes a GitHub release with checksums for `v*` tags. Builds are unsigned (macOS ad hoc). The workflow has not run yet.
 - Locked fmt, strict Clippy and the workspace tests pass after the rename; the migration has not yet been exercised on the live account.
+
+M4b core 2 — Task 1, public room discovery (2026-11-11):
+- `Account::public_rooms(DirectoryQuery)` uses SDK POST /publicRooms with server/filter/network and 1–100 result pages; remote POST rejection permits GET fallback for Matrix rooms, with bounded local filtering on each GET page. Cursors bind account instance, server, filter, network and transport. Repeated cursors terminate pagination. Typed errors cover invalid input, not found, forbidden, unreachable, invite/knock requirements and unsupported operations. Discovery requests time out after 20 seconds; preview/network/join/knock after 30 seconds.
+- Validated `RoomTarget::parse(input, via)` accepts aliases, IDs, matrix.to and matrix: room/event links, rejects user/external targets and caps routing servers at 16. Preview uses SDK room summary/state fallback, then at most four directory pages; world-readable history is a read-only page capped at 20 text events and 4,096 characters per body. Browsing/preview never joins. Join and knock are explicit; knock does not select a room. Summary guest access is conservatively false when unavailable.
+- UI contract: `Snapshot.directory.{server,filter,network,networks,networks_error,rooms,loading,exhausted,error}`; each room exposes `room_id,alias,name,topic,avatar,members,world_readable,guest_can_join,join_rule,is_space,joined`. `Snapshot.room_preview.{preview,loading,error}`; preview contains `room,messages,history_error`. `MatrixApp::{browse_directory(server,filter),browse_directory_network(server,filter,network),directory_more(),preview_room(target),join_room(target),knock_room(target,reason)}`. Browse debounces 250 ms, caps accumulated rooms at 1,000 and cancels superseded work. Room/account changes cancel requests; account instance and request IDs reject stale completions. Membership operations reserve an account/selection/request ticket synchronously before dispatch, recheck admission/completion and are cancellable. The application action generation also rejects completions delayed in the UI queue after newer actions or room selections. Space joins hand off to the existing hierarchy action, marked placeholder wiring. No views changed.
+- Third-party protocols are available only from the authenticated homeserver's client API; remote network lists are empty. Unsupported local protocol endpoints return empty lists. No speculative remote protocol endpoint is used.
+- Compilation: locked macOS fmt and strict workspace all-target/all-feature Clippy passed. Unit tests: locked workspace all-feature suite passed (123 tests; 22 opt-in service tests ignored). Final queue-admission/completion regression also passed in the 128-test final workspace suite. Linux/Windows cross-target standard libraries are not configured locally; their builds and runtime remain unverified.
+- Live integration: isolated Synapse 1.164.2 directory test passed pagination/filter, account cursor rejection, bounded pages, remote-server error, alias/matrix.to join, world-readable preview without membership and knock. The fixture explicitly permits directory publication (new Synapse defaults deny it). Final rerun passed after cancellation hardening. GET fallback against an actual POST-rejecting federated server, third-party bridges, MSC3266-only servers, Element comparison and physical GUI/platform checks remain unverified. No milestone exit claimed.
+
+M4b core 2 — Task 2, gallery thumbnails (2026-11-11):
+- `Account::gallery_thumbnail(item,cancel)` prefers the event thumbnail source, otherwise requests a 168×168 SDK server thumbnail. Encrypted sources are decrypted only in memory by the SDK; its disk media cache is disabled. The first image frame is decoded with the same single semaphore as timeline/viewer work, capped at 8,192 pixels per dimension, 64 MiB decoder allocation, 16 MiB encoded input and 168 pixels output. Known oversized encrypted originals are rejected before downloading; SDK responses are buffered before the encoded-input check. Fetch timeout is 15 seconds. Failures leave entries absent.
+- UI contract: `Snapshot.media_thumbnails: HashMap<event_id,Arc<Vec<u8>>>` contains PNGs, with a 256-entry recency cache (under 32 MiB of PNG payload). Existing `MatrixApp::load_media` / `load_more_media` actions fetch thumbnails automatically, prioritizing each new page; at most 256 missing items per request, sequential fetching, no hidden pagination. No new UI action or view changes. Room/account changes clear the map/order, signal decoder cancellation, abort work and reject stale account/selection/request completions.
+- Compilation: pinned macOS fmt and strict locked all-target/all-feature workspace Clippy passed. Unit tests: locked all-feature workspace suite passed (125 tests; opt-in tests ignored); bounds, cache eviction and cancellation while waiting for the shared decoder are covered. Linux/Windows target standard libraries are unavailable in the pinned shell; cross-platform compilation/runtime remain unverified.
+- Live integration: isolated Synapse 1.164.2 viewer/gallery run passed, including plain/encrypted preferred and original-source thumbnails, GIF/WebP first-frame thumbnails and SDK media-store absence after fetching. Physical gallery display, actual Element media and platform acceptance remain unverified.
+
+M4b core 2 — Task 3, plain composition (2026-11-11):
+- `rich_text::compose` now returns plain `m.text` when Ruma's Markdown parser returns no formatting. Serialized plain events omit both `format` and `formatted_body`; formatted input retains sanitized HTML and the exact composer fallback. This supersedes the earlier all-HTML composition behavior.
+- UI contract is unchanged: existing `Conversation::send` / MatrixApp send actions; `Message.rich` remains absent for plain input. No new snapshot fields/actions or view changes.
+- Compilation: pinned macOS fmt and strict locked all-target/all-feature workspace Clippy passed. Unit tests: locked all-feature workspace suite passed (125 tests; opt-in tests ignored); plain Unicode, ampersands/newlines, serialized omission and formatted round-trip checks. Linux/Windows builds/runtime remain unverified (target standard libraries unavailable locally).
+- Live integration: all five isolated Synapse 1.164.2 service tests passed, including plain and formatted messages through encrypted SDK timelines. Actual Element-client interoperability and physical platform checks remain unverified.
+
+M4b core 2 — Task 4, cached-search sender names (2026-11-11):
+- Encrypted cached search resolves each distinct room/sender through `Room::get_member_no_sync`, using the SDK member store without member-network fetches. Per-room name lookup caches are bounded by the existing 1,000-result cap. Missing, empty or unreadable display names keep the full Matrix sender ID; no plaintext index or additional persistence.
+- UI contract: existing `Snapshot.search.results[].sender_name` now contains the stored display name where available; `sender` remains the stable ID. `MatrixApp::search_messages` / `search_more` are unchanged; no new fields/actions or view changes.
+- Compilation: pinned macOS fmt and strict locked all-target/all-feature workspace Clippy passed. Unit tests: locked all-feature workspace suite passed (125 tests; opt-in tests ignored). Linux/Windows compilation/runtime remain unverified (target standard libraries unavailable locally).
+- Live integration: isolated Synapse 1.164.2 search regression passed, including encrypted cached display names and fallback to sender IDs after removing the profile name. Actual Element-client interoperability and physical platform checks remain unverified.
+
+M4b core 2 — Task 5, spoiler/status/verification contracts (2026-11-11):
+- Sanitized `SpanKind::Spoiler {index,reason}` now carries a deterministic zero-based preorder index, unique within each message, including nested spans. UI reveal state should use `(message.event_id,index)`; repeated projection keeps indices and each message starts at zero. Existing `Snapshot.messages[].rich` / thread messages carry the data; no new snapshot root fields or reveal views/actions.
+- `Account::set_presence(state,Some(status))` trims whitespace, caps Unicode scalar characters at 256 and rejects all control characters (including edge newlines/tabs) with typed `PresenceError::InvalidStatus`. `None` clears through the SDK. Existing `MatrixApp::set_presence` and `Snapshot.own_presence.status_msg` / `presence[].status_msg` are the UI contracts; frontend backend wording explains invalid status. No status content enters Debug/log output.
+- Kept `SecuritySnapshot.verified` based exclusively on `is_cross_signed_by_owner()`. The real crypto regression asserts an existing cross-signing identity plus locally trusted own device still reports unverified, then becomes verified after recovery; another fresh device remains unverified before SAS and becomes verified afterward. `Snapshot.security.verified` and existing security actions are unchanged.
+- Compilation: pinned macOS fmt and strict locked all-target/all-feature workspace Clippy passed. Unit tests: locked all-feature workspace suite passed (127 tests; opt-in tests ignored), including spoiler stability and Unicode/status boundaries. Linux/Windows compilation/runtime remain unverified (target standard libraries unavailable locally).
+- Live integration: isolated Synapse 1.164.2 security/SAS/recovery and both presence-enabled/disabled runs passed, including trimmed status, invalid status and clearing. Actual Element interoperability, reveal controls, status-entry UI and physical platform checks remain unverified.
+
+Permissive software license (2026-11-11):
+- Added the MIT license at the user's request, with an SPDX `MIT` workspace license inherited by all three crates and a README link. Third-party dependency licenses remain their own. No snapshot fields, actions or views change.
+- Validation: pinned-shell locked Cargo metadata confirms all three crates inherit MIT; repository diff check passed. This documentation/manifest-only change adds no runtime behavior or integration/platform acceptance claim.
+
+Review of M4b core 2 (2026-11-11, `fix/core-2-review`):
+- Switching rooms no longer cancels directory browsing, previews or a join in progress, and no longer clears the preview. Previously the list could be left empty with no loading or error state. A join that finishes after you switch rooms still doesn't navigate to the joined room.
+- Directory networks are kept across filter changes and fetched again only when the server changes or the last fetch failed. Previously each search keystroke cleared the list and refetched it.
+- Joining uses the space/room type already loaded in the preview or directory list and fetches a preview only when the type is unknown.
+- Preview history contains only `m.text`/`m.notice`/`m.emote`, oldest first. Previously it was newest first and included file names from image and file events.
+- Gallery thumbnails are fetched only in the Images tab. Without an event thumbnail, only `image/*` originals are scaled. Encrypted originals with an unknown size are rejected before download, which closes an unbounded buffered download.
+- A status message of only whitespace clears the status instead of sending an empty string.
+- Checks: fmt, strict Clippy and the workspace tests pass. The isolated Synapse directory, viewer/gallery and presence (enabled/disabled) runs pass. No physical or Element checks.
+
+Stacked attachments and sync restart (2026-11-11):
+- The composer keeps up to 10 attachments (256 MB in total, since drafts are held in memory until sent) as tiles above the message field: image thumbnails or file name and size, each with a Remove button, and an "Adding…" tile while a file is read. The picker allows several files; drag and drop and paste add every file. The "Send attachment?" confirmation is gone: Return or Send sends the attachments in order and then the text, if any. Sending waits until every tile is ready. If an attachment fails, the rest stay stacked and the error appears in the status line. Room or account changes clear the stack.
+- The SDK sync service stops for good after an error or unexpected termination. While the session is active it is now restarted with backoff (1 s, doubling up to 60 s), showing "Offline · reconnecting…". Previously the app stayed disconnected until relaunched.
+- Checks: fmt, strict Clippy and the workspace tests pass (offline UI test for the tray and its removal; restart backoff unit test). Isolated Synapse sync service tests pass. Sending stacked attachments to a live server, and the restart path against a real failing server, have not been exercised.
 
 Not yet verified:
 - Physical GUI checks of logout, pagination, IME and VoiceOver.

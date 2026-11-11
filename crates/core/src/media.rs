@@ -236,6 +236,46 @@ impl Account {
             .await
             .map_err(|_| MediaError::Unavailable)
     }
+    /// SDK decryption stays in memory; `false` disables the SDK media disk cache.
+    pub async fn gallery_thumbnail(
+        &self,
+        item: &MediaItem,
+        mut cancel: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<std::sync::Arc<Vec<u8>>, ImageError> {
+        if *cancel.borrow() {
+            return Err(ImageError::Cancelled);
+        }
+        let source = item.thumbnail_source.as_ref().unwrap_or(&item.source);
+        if item.thumbnail_source.is_none() {
+            // Without a thumbnail, only images can be scaled from the original.
+            if !item
+                .mimetype
+                .as_deref()
+                .is_some_and(|m| m.starts_with("image/"))
+            {
+                return Err(ImageError::Unavailable);
+            }
+            // Encrypted originals are downloaded whole: require a known, bounded size.
+            if matches!(source.0, MediaSource::Encrypted(_))
+                && item.size.is_none_or(|s| s > 16 * 1024 * 1024)
+            {
+                return Err(ImageError::Limit);
+            }
+        }
+        let request = MediaRequestParameters {
+            source: source.0.clone(),
+            format: MediaFormat::Thumbnail(matrix_sdk::media::MediaThumbnailSettings::new(
+                168u32.into(),
+                168u32.into(),
+            )),
+        };
+        let media = self.client.media();
+        let bytes = tokio::select! {
+            _ = cancel.changed() => return Err(ImageError::Cancelled),
+            result = tokio::time::timeout(std::time::Duration::from_secs(15), media.get_media_content(&request, false)) => result.map_err(|_| ImageError::Download)?.map_err(|_| ImageError::Download)?,
+        };
+        crate::conversation::decode_gallery_thumbnail(bytes, cancel).await
+    }
     pub async fn gallery_image(
         &self,
         item: &MediaItem,
