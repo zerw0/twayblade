@@ -165,3 +165,5 @@ mod tests {
         );
     }
 }
+
+pub mod media_permissions;

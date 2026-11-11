@@ -11,7 +11,7 @@ image = { version = "=0.25.10", default-features = false, features = ["png", "jp
 mime = "=0.3.17"
 mime_guess = "=2.0.5"
 imbl = "=7.0.2"
-matrix-sdk = { workspace = true, features = ["markdown", "experimental-widgets"] }
+matrix-sdk = { workspace = true, features = ["markdown", "experimental-widgets", "experimental-send-custom-to-device"] }
 twayblade-call-host = { path = "../call-host", default-features = false }
 matrix-sdk-ui.workspace = true
 ruma-html = "=0.9.0"
@@ -28,5 +28,10 @@ uuid.workspace = true
 zeroize.workspace = true
 twayblade-platform = { path = "../platform" }
 
+base64 = "=0.22.1"
+getrandom = "=0.4.3"
+twayblade-media = { path = "../media" }
+
 [lints]
 workspace = true
+
