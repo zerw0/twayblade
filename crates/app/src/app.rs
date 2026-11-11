@@ -161,6 +161,10 @@ pub(super) struct MatrixApp {
     started: bool,
     _subscriptions: Vec<Subscription>,
     selection_task: Option<Task<()>>,
+    /// Selections queued but not yet applied by the backend.
+    selection_pending: u32,
+    /// Last automatic re-selection, to rate-limit recovery.
+    selection_retry: Option<std::time::Instant>,
 }
 
 impl MatrixApp {
@@ -431,6 +435,8 @@ impl MatrixApp {
             started: preview,
             _subscriptions: subscriptions,
             selection_task: None,
+            selection_pending: 0,
+            selection_retry: None,
         };
         crate::theme::set_appearance(this.preferences.appearance.clone(), cx);
         if let Some(room) = this.navigation.selected_room.clone() {
@@ -587,6 +593,17 @@ impl MatrixApp {
         }
         if self.navigation.reconcile(&snapshot) {
             self.queue_selection(None, window, cx);
+        } else if let Some(room) = self.navigation.selected_room.clone()
+            && !self.preview
+            && self.selection_pending == 0
+            && snapshot.selected_room != room
+            && self
+                .selection_retry
+                .is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(2))
+        {
+            // The backend lost or never applied the shown room; ask again.
+            self.selection_retry = Some(std::time::Instant::now());
+            self.queue_selection(Some(room), window, cx);
         }
         if self.navigation.selected_room.as_deref().unwrap_or_default() != snapshot.selected_room {
             snapshot.messages.clear();
@@ -947,6 +964,11 @@ impl MatrixApp {
         self.management = None;
         cx.notify();
         if event.is_none() && self.navigation.selected_room.as_ref() == Some(&id) {
+            // Selecting the open room again retries it when it isn't loaded or
+            // loading (failed load, or the backend holds another selection).
+            if !self.preview && !self.timeline_loading_for(&id) {
+                self.queue_selection(Some(id), window, cx);
+            }
             return;
         }
         self.emoji_picker = None;
@@ -1038,6 +1060,12 @@ impl MatrixApp {
         self.composers.insert(room, (state, subscription));
     }
 
+    /// The backend has this room selected and is loading or showing it.
+    fn timeline_loading_for(&self, room: &str) -> bool {
+        self.snapshot.selected_room == room
+            && (self.snapshot.timeline_ready
+                || self.snapshot.timeline_status == crate::backend::LOADING_STATUS)
+    }
     fn queue_selection(&mut self, room: Option<String>, window: &Window, cx: &Context<Self>) {
         self.queue_selection_focus(room, None, window, cx);
     }
@@ -1058,6 +1086,7 @@ impl MatrixApp {
             return;
         };
         let previous = self.selection_task.take();
+        self.selection_pending += 1;
         self.selection_task = Some(cx.spawn_in(window, async move |view, cx| {
             if let Some(previous) = previous {
                 previous.await;
@@ -1075,6 +1104,7 @@ impl MatrixApp {
                 })
                 .await;
             let _ = view.update_in(cx, |this, _, cx| {
+                this.selection_pending = this.selection_pending.saturating_sub(1);
                 if this.navigation.selected_room == target
                     && let Err(error) = result
                 {

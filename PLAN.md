@@ -535,6 +535,15 @@ Permissive software license (2026-11-11):
 - Added the MIT license at the user's request, with an SPDX `MIT` workspace license inherited by all three crates and a README link. Third-party dependency licenses remain their own. No snapshot fields, actions or views change.
 - Validation: pinned-shell locked Cargo metadata confirms all three crates inherit MIT; repository diff check passed. This documentation/manifest-only change adds no runtime behavior or integration/platform acceptance claim.
 
+Review of M4b core 2 (2026-11-11, `fix/core-2-review`):
+- Switching rooms no longer cancels directory browsing, previews or a join in progress, and no longer clears the preview. Previously the list could be left empty with no loading or error state. A join that finishes after you switch rooms still doesn't navigate to the joined room.
+- Directory networks are kept across filter changes and fetched again only when the server changes or the last fetch failed. Previously each search keystroke cleared the list and refetched it.
+- Joining uses the space/room type already loaded in the preview or directory list and fetches a preview only when the type is unknown.
+- Preview history contains only `m.text`/`m.notice`/`m.emote`, oldest first. Previously it was newest first and included file names from image and file events.
+- Gallery thumbnails are fetched only in the Images tab. Without an event thumbnail, only `image/*` originals are scaled. Encrypted originals with an unknown size are rejected before download, which closes an unbounded buffered download.
+- A status message of only whitespace clears the status instead of sending an empty string.
+- Checks: fmt, strict Clippy and the workspace tests pass. The isolated Synapse directory, viewer/gallery and presence (enabled/disabled) runs pass. No physical or Element checks.
+
 Not yet verified:
 - Physical GUI checks of logout, pagination, IME and VoiceOver.
 - CI on any host; Linux and Windows builds and runs.

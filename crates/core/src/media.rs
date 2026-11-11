@@ -246,11 +246,21 @@ impl Account {
             return Err(ImageError::Cancelled);
         }
         let source = item.thumbnail_source.as_ref().unwrap_or(&item.source);
-        if item.thumbnail_source.is_none()
-            && matches!(source.0, MediaSource::Encrypted(_))
-            && item.size.is_some_and(|s| s > 16 * 1024 * 1024)
-        {
-            return Err(ImageError::Limit);
+        if item.thumbnail_source.is_none() {
+            // Without a thumbnail, only images can be scaled from the original.
+            if !item
+                .mimetype
+                .as_deref()
+                .is_some_and(|m| m.starts_with("image/"))
+            {
+                return Err(ImageError::Unavailable);
+            }
+            // Encrypted originals are downloaded whole: require a known, bounded size.
+            if matches!(source.0, MediaSource::Encrypted(_))
+                && item.size.is_none_or(|s| s > 16 * 1024 * 1024)
+            {
+                return Err(ImageError::Limit);
+            }
         }
         let request = MediaRequestParameters {
             source: source.0.clone(),
