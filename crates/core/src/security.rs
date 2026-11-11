@@ -170,7 +170,7 @@ impl Security {
                 .encryption()
                 .wait_for_e2ee_initialization_tasks()
                 .await;
-            if refresh(&client, &updates).await.is_err() {
+            if refresh(&client, &updates, true).await.is_err() {
                 publish(&updates, |view| view.failed = true);
             }
             let encryption = client.encryption();
@@ -180,9 +180,24 @@ impl Security {
             let backups = encryption.backups();
             let mut backups = Box::pin(backups.state_stream());
             let mut downloaded = false;
+            let mut last = tokio::time::Instant::now();
             loop {
-                tokio::select! { _ = verification.next() => {}, _ = recovery.next() => {}, _ = backups.next() => {} }
-                if refresh(&client, &updates).await.is_err() {
+                // An ended stream yields `None` at once; its branch is then
+                // disabled instead of spinning this loop.
+                tokio::select! {
+                    Some(_) = verification.next() => {}
+                    Some(_) = recovery.next() => {}
+                    Some(_) = backups.next() => {}
+                    else => break,
+                }
+                // Coalesce bursts (backup download, device updates during
+                // sync) into at most one refresh per interval.
+                tokio::time::sleep_until(last + REFRESH_INTERVAL).await;
+                last = tokio::time::Instant::now();
+                // Read the locally tracked identity: querying the server here
+                // updates the store, which re-fires these streams and kept the
+                // crypto store busy enough to stall encrypted room timelines.
+                if refresh(&client, &updates, false).await.is_err() {
                     publish(&updates, |view| view.failed = true);
                 }
                 let verified = updates.borrow().verified;
@@ -198,7 +213,7 @@ impl Security {
         self.updates.subscribe()
     }
     pub async fn refresh(&self) -> Result<(), SecurityError> {
-        refresh(&self.client, &self.updates).await
+        refresh(&self.client, &self.updates, true).await
     }
 
     pub async fn setup_backup(&self) -> Result<Zeroizing<String>, SecurityError> {
@@ -444,27 +459,45 @@ impl Security {
     }
 }
 
+/// Minimum spacing between background security refreshes.
+const REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+/// `query_server` asks the homeserver for our identity (startup, explicit
+/// refresh, after verification); otherwise the SDK's locally tracked copy is
+/// read, which sync keeps current.
 async fn refresh(
     client: &Client,
     updates: &watch::Sender<SecuritySnapshot>,
+    query_server: bool,
 ) -> Result<(), SecurityError> {
     let user = client.user_id().ok_or(SecurityError::Unavailable)?;
-    let identity = client
-        .encryption()
-        .request_user_identity(user)
-        .await
-        .map_err(|_| SecurityError::Unavailable)?;
+    let encryption = client.encryption();
+    let identity = if query_server {
+        encryption
+            .request_user_identity(user)
+            .await
+            .map_err(|_| SecurityError::Unavailable)?
+    } else {
+        encryption
+            .get_user_identity(user)
+            .await
+            .map_err(|_| SecurityError::Unavailable)?
+    };
     let own = client
         .encryption()
         .get_own_device()
         .await
         .map_err(|_| SecurityError::Unavailable)?;
-    let backup_exists = client
-        .encryption()
-        .backups()
-        .fetch_exists_on_server()
-        .await
-        .map_err(|_| SecurityError::Unavailable)?;
+    // A server round trip; background refreshes reuse the last answer.
+    let backup_exists = if query_server {
+        client
+            .encryption()
+            .backups()
+            .fetch_exists_on_server()
+            .await
+            .map_err(|_| SecurityError::Unavailable)?
+    } else {
+        updates.borrow().backup_exists
+    };
     let devices = client
         .devices()
         .await
@@ -623,7 +656,7 @@ async fn watch_sas(
         publish_phase(&updates, &id, phase);
         if done {
             let _ = Security::download_keys_for_client(&client).await;
-            let _ = refresh(&client, &updates).await;
+            let _ = refresh(&client, &updates, true).await;
             return;
         }
         if cancelled {
