@@ -4,10 +4,14 @@
 pub mod auth;
 pub mod avatars;
 pub mod conversation;
+pub mod media;
 pub mod notifications;
+pub mod presence;
 pub mod profile;
+pub mod rich_text;
 pub mod room_state;
 pub mod rooms;
+pub mod search;
 pub mod security;
 pub mod space_actions;
 pub mod spaces;

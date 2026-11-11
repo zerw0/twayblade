@@ -216,3 +216,45 @@ mod tests {
         assert!(item.preview(true).body.is_some());
     }
 }
+
+/// Shared running/relaunch validation, independent of UI selection state.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ActivationState {
+    Ready,
+    Pending,
+    Rejected,
+}
+impl Account {
+    /// Stable across same-device restore; contains public IDs, no credential.
+    pub fn notification_identity(&self) -> String {
+        format!(
+            "{}\n{}\n{}",
+            self.client.homeserver(),
+            self.user_id(),
+            self.client
+                .device_id()
+                .map(|id| id.as_str())
+                .unwrap_or_default()
+        )
+    }
+    pub fn validate_notification_target(
+        &self,
+        identity: &str,
+        room: &str,
+        thread: Option<&str>,
+    ) -> ActivationState {
+        if identity != self.notification_identity()
+            || thread.is_some_and(|id| matrix_sdk::ruma::EventId::parse(id).is_err())
+        {
+            return ActivationState::Rejected;
+        }
+        let Ok(id) = matrix_sdk::ruma::RoomId::parse(room) else {
+            return ActivationState::Rejected;
+        };
+        match self.client.get_room(&id) {
+            Some(room) if room.state() == matrix_sdk::RoomState::Joined => ActivationState::Ready,
+            Some(_) => ActivationState::Rejected,
+            None => ActivationState::Pending,
+        }
+    }
+}

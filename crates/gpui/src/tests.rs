@@ -3,6 +3,26 @@ use gpui_kit::{AppContext, Bounds, TestAppContext, WindowBounds, WindowOptions, 
 
 use crate::app::MatrixApp;
 
+/// Opens your profile through the title-bar account menu.
+fn open_own_profile(cx: &mut TestAppContext, window: gpui_kit::AnyWindowHandle) {
+    use gpui_kit::test::{TestEventExt, TestQueryExt};
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("my-profile", cx);
+    })
+    .expect("open account menu");
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let point = window.find_by_label("Your Profile").bounds().center();
+        window.pointer_move(point, None, cx);
+        window.pointer_down(point, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(point, gpui_kit::MouseButton::Left, cx);
+    })
+    .expect("choose Your Profile");
+    cx.run_until_parked();
+}
+
 #[gpui_kit::test]
 fn navigation_preserves_typed_drafts_through_real_controls(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -76,9 +96,9 @@ fn own_profile_opens_and_closes_through_real_buttons(cx: &mut TestAppContext) {
         )
         .expect("test window")
     });
+    open_own_profile(cx, window);
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
-        window.click("my-profile", cx);
         assert!(window.find("copy-profile-id").visible());
     })
     .expect("open profile");
@@ -121,7 +141,11 @@ fn details_panel_toggles_and_yields_to_profile(cx: &mut TestAppContext) {
         window.render_frame(cx);
         window.click("details", cx);
         assert!(window.find("copy-room-id").visible());
-        window.click("my-profile", cx);
+    })
+    .expect("open details");
+    open_own_profile(cx, window);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
         assert!(window.find("copy-profile-id").visible());
     })
     .expect("open details then profile");
@@ -887,6 +911,31 @@ fn member_actions_follow_power_levels_and_confirm_destructive_steps(cx: &mut Tes
     })
     .expect("confirm kick");
     cx.update(|cx| assert!(app.read(cx).member_confirm.is_none()));
+}
+
+#[gpui_kit::test]
+fn title_search_offers_message_search_and_opens_the_panel(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestEventExt;
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.within("title-search").click("input-state", cx);
+        window.input("rust", cx);
+        window.render_frame(cx);
+        // Typing filters conversations and offers a message search row.
+        assert!(window.find("search-messages").visible());
+        window.key_down("enter", false, cx);
+    })
+    .expect("type a query");
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("close-search").visible());
+        window.click("close-search", cx);
+        window.render_frame(cx);
+    })
+    .expect("message search panel");
+    cx.update(|cx| assert!(!app.read(cx).search_open));
 }
 
 #[gpui_kit::test]

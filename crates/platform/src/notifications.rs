@@ -1,9 +1,18 @@
 //! Native notifications. Titles and bodies deliberately have no Debug output.
 use futures_util::future::BoxFuture;
+mod activation;
+pub use activation::{
+    LaunchActivation, acknowledge_launch, clear_launch_activation, initialize_activation,
+    launch_activations,
+};
 
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
+#[allow(
+    unsafe_code,
+    reason = "Audited native UserNotifications delegate and callback types"
+)]
 mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
@@ -35,6 +44,7 @@ pub struct Notification {
     pub sound: bool,
     pub action_label: &'static str,
     pub target: Activation,
+    pub launch: Option<LaunchActivation>,
 }
 pub struct PendingNotification {
     pub id: String,
@@ -87,7 +97,8 @@ mod tests {
                 body: "Sample".into(),
                 sound: false,
                 action_label: "Open",
-                target: Default::default()
+                target: Default::default(),
+                launch: None,
             })
             .await
             .is_err()

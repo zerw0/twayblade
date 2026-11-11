@@ -87,6 +87,17 @@ pub(super) struct MatrixApp {
     pub(super) info_tab: InfoTab,
     /// The composer's current placeholder, so it is only reset on room change.
     pub(super) composer_placeholder: SharedString,
+    /// The room the Files tab last asked the gallery for, so a failed load is
+    /// retried by the user, not on every frame.
+    pub(super) gallery_requested: String,
+    /// Message search panel and its scope/filter.
+    pub(super) search_open: bool,
+    pub(super) search_all_rooms: bool,
+    pub(super) search_has_file: bool,
+    /// The last focused event scrolled into view, and the one highlighted.
+    pub(super) revealed_event: Option<String>,
+    /// The DM partners and members last handed to the presence observer.
+    pub(super) presence_observed: Vec<String>,
     /// A destructive member action waiting for its second click: (user, action).
     pub(super) member_confirm: Option<(String, matrix_client_core::room_state::MemberAction)>,
     /// Per-group content fingerprints matching `groups`, for targeted re-measure.
@@ -184,8 +195,17 @@ impl MatrixApp {
         };
         let groups = model::grouped(&snapshot.messages);
         let scroller = cx.new(|cx| MessageScrollerState::new(groups.len(), cx));
-        let mut subscriptions =
-            vec![cx.subscribe_in(&search, window, |_, _, _: &InputEvent, _, cx| cx.notify())];
+        let mut subscriptions = vec![cx.subscribe_in(
+            &search,
+            window,
+            |this, _, event: &InputEvent, window, cx| {
+                // Typing filters conversations; Return searches messages.
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    this.run_message_search(window, cx);
+                }
+                cx.notify()
+            },
+        )];
         subscriptions.push(cx.subscribe_in(
             &emoji_search,
             window,
@@ -344,6 +364,12 @@ impl MatrixApp {
             collapsed_sections: Default::default(),
             info_tab: InfoTab::About,
             composer_placeholder: "Message".into(),
+            gallery_requested: String::new(),
+            search_open: false,
+            search_all_rooms: true,
+            search_has_file: false,
+            revealed_event: None,
+            presence_observed: Vec::new(),
             member_confirm: None,
             group_signatures: Vec::new(),
             latest_cache: Default::default(),
@@ -904,9 +930,18 @@ impl MatrixApp {
     }
 
     pub fn select_room(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_room_target(id, None, window, cx);
+    }
+    fn select_room_target(
+        &mut self,
+        id: String,
+        event: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.management = None;
         cx.notify();
-        if self.navigation.selected_room.as_ref() == Some(&id) {
+        if event.is_none() && self.navigation.selected_room.as_ref() == Some(&id) {
             return;
         }
         self.emoji_picker = None;
@@ -938,7 +973,7 @@ impl MatrixApp {
             self.snapshot.selected_room = id.clone();
             self.snapshot.timeline_ready = true;
         }
-        self.queue_selection(Some(id), window, cx);
+        self.queue_selection_focus(Some(id), event, window, cx);
         cx.notify();
     }
 
@@ -999,6 +1034,15 @@ impl MatrixApp {
     }
 
     fn queue_selection(&mut self, room: Option<String>, window: &Window, cx: &Context<Self>) {
+        self.queue_selection_focus(room, None, window, cx);
+    }
+    fn queue_selection_focus(
+        &mut self,
+        room: Option<String>,
+        event: Option<String>,
+        window: &Window,
+        cx: &Context<Self>,
+    ) {
         self.thread = None;
         self.management = None;
         if self.preview {
@@ -1016,7 +1060,10 @@ impl MatrixApp {
             let result = cx
                 .background_spawn(async move {
                     match room {
-                        Some(room) => backend.select_room(room),
+                        Some(room) => match event {
+                            Some(event) => backend.open_event(room, event),
+                            None => backend.select_room(room),
+                        },
                         None => backend.clear_selection(),
                     }
                 })
@@ -1307,6 +1354,11 @@ impl MatrixApp {
             cx.notify();
             return;
         }
+        if self.search_open {
+            self.search_open = false;
+            cx.notify();
+            return;
+        }
         if self.thread.is_some() {
             self.close_thread(cx);
             return;
@@ -1569,5 +1621,235 @@ impl MatrixApp {
                 cx.notify();
             },
         );
+    }
+}
+
+impl MatrixApp {
+    #[allow(dead_code, reason = "Gallery UI entry point")]
+    pub fn load_media(
+        &mut self,
+        kind: matrix_client_core::media::MediaKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(backend) = &self.backend
+            && let Some(room) = &self.navigation.selected_room
+            && let Err(error) = backend.load_media(kind, self.snapshot.account_instance, room)
+        {
+            self.status = error.to_string();
+            cx.notify();
+        }
+        let _ = window;
+    }
+    #[allow(dead_code, reason = "Gallery UI entry point")]
+    pub fn load_more_media(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(backend) = &self.backend
+            && let Some(room) = &self.navigation.selected_room
+            && let Err(error) = backend.load_more_media(self.snapshot.account_instance, room)
+        {
+            self.status = error.to_string();
+            cx.notify();
+        }
+        let _ = window;
+    }
+    fn gallery_entries(&self) -> Vec<crate::viewer::ImageEntry> {
+        self.snapshot
+            .media
+            .items
+            .iter()
+            .map(|item| crate::viewer::ImageEntry {
+                message: crate::backend::Message {
+                    id: item.event_id.clone(),
+                    event_id: Some(item.event_id.clone()),
+                    sender: item.sender.clone(),
+                    display_name: item.sender_name.clone(),
+                    timestamp_ms: item.timestamp_ms,
+                    kind: crate::backend::MessageKind::Image,
+                    attachment: Some(crate::backend::Attachment {
+                        filename: item.filename.clone(),
+                        size: item.size,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                in_thread: false,
+            })
+            .collect()
+    }
+    #[allow(dead_code, reason = "Gallery UI entry point")]
+    pub fn open_media_image(&mut self, event: &str, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::viewer::{ImageLoad, Viewer};
+        if self.navigation.selected_room.as_deref() != Some(self.snapshot.media.room.as_str())
+            || self.snapshot.media.room != self.snapshot.selected_room
+            || self.snapshot.media.kind != matrix_client_core::media::MediaKind::Images
+        {
+            return;
+        }
+        let entries = self.gallery_entries();
+        let Some(index) = entries
+            .iter()
+            .position(|e| e.message.event_id.as_deref() == Some(event))
+        else {
+            return;
+        };
+        if let Some(old) = self.viewer.take() {
+            old.cancel.send_replace(true);
+        }
+        let focus = cx.focus_handle();
+        focus.focus(window, cx);
+        self.viewer_request = self.viewer_request.wrapping_add(1);
+        self.viewer = Some(Viewer {
+            room: self.snapshot.selected_room.clone(),
+            entries,
+            index,
+            request: self.viewer_request,
+            load: ImageLoad::Loading,
+            zoom: 1.,
+            pan: point(gpui_kit::px(0.), gpui_kit::px(0.)),
+            drag: None,
+            focus,
+            cancel: tokio::sync::watch::channel(false).0,
+            status: String::new(),
+            previous_pending: false,
+        });
+        self.load_viewer(window, cx);
+    }
+    pub(super) fn image_entries(&self) -> Vec<crate::viewer::ImageEntry> {
+        if self.snapshot.media.room == self.snapshot.selected_room
+            && self.snapshot.media.kind == matrix_client_core::media::MediaKind::Images
+            && self.viewer.as_ref().is_some_and(|v| {
+                self.snapshot.media.items.iter().any(|i| {
+                    Some(&i.event_id)
+                        == v.entries
+                            .get(v.index)
+                            .and_then(|e| e.message.event_id.as_ref())
+                })
+            })
+        {
+            return self.gallery_entries();
+        }
+        let mut entries: Vec<_> = self
+            .snapshot
+            .messages
+            .iter()
+            .filter(|m| m.kind == crate::backend::MessageKind::Image && m.event_id.is_some())
+            .cloned()
+            .map(|message| crate::viewer::ImageEntry {
+                message,
+                in_thread: false,
+            })
+            .collect();
+        if let Some(thread) = &self.thread {
+            let mut after = 0;
+            for message in std::iter::once(&thread.root)
+                .chain(&thread.messages)
+                .filter(|m| m.kind == crate::backend::MessageKind::Image && m.event_id.is_some())
+            {
+                if let Some(ix) = entries
+                    .iter()
+                    .position(|e| e.message.event_id == message.event_id)
+                {
+                    after = ix + 1;
+                    continue;
+                }
+                let ix = (after..entries.len())
+                    .find(|&ix| entries[ix].message.timestamp_ms > message.timestamp_ms)
+                    .unwrap_or(entries.len());
+                entries.insert(
+                    ix,
+                    crate::viewer::ImageEntry {
+                        message: message.clone(),
+                        in_thread: true,
+                    },
+                );
+                after = ix + 1;
+            }
+        }
+        let mut seen = std::collections::HashSet::new();
+        entries.retain(|e| seen.insert(e.message.event_id.clone()));
+        entries
+    }
+}
+
+#[allow(dead_code, reason = "Message search UI action contracts")]
+impl MatrixApp {
+    pub fn search_messages(
+        &mut self,
+        query: matrix_client_core::search::SearchQuery,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(backend) = &self.backend
+            && let Err(error) = backend.search(query)
+        {
+            self.status = error.to_string();
+            cx.notify();
+        }
+        let _ = window;
+    }
+    pub fn search_more(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.job(window, cx, |b| b.search_more(), |_, _, _, _| {});
+    }
+    pub fn open_event(
+        &mut self,
+        room: String,
+        event: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_room_target(room, Some(event), window, cx);
+    }
+}
+
+#[allow(dead_code, reason = "Presence UI action contracts")]
+impl MatrixApp {
+    pub fn observe_presence(&self, users: Vec<String>) {
+        if let Some(backend) = &self.backend {
+            let _ = backend.observe_presence(users);
+        }
+    }
+    pub fn set_presence(
+        &mut self,
+        state: matrix_client_core::presence::State,
+        status: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.job(
+            window,
+            cx,
+            move |b| b.set_presence(state, status),
+            |_, _, _, _| {},
+        );
+    }
+}
+
+impl MatrixApp {
+    /// Search messages for the title-bar query, in this room or all rooms.
+    pub(super) fn run_message_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.search.read(cx).value().trim().to_owned();
+        if text.is_empty() {
+            return;
+        }
+        self.search_open = true;
+        if self.preview {
+            cx.notify();
+            return;
+        }
+        let room = (!self.search_all_rooms)
+            .then(|| self.snapshot.selected_room.clone())
+            .filter(|room| !room.is_empty())
+            .and_then(|room| room.try_into().ok());
+        self.search_messages(
+            matrix_client_core::search::SearchQuery {
+                text,
+                room,
+                sender: None,
+                has_file: self.search_has_file,
+            },
+            window,
+            cx,
+        );
+        cx.notify();
     }
 }

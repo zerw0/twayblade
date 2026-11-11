@@ -238,48 +238,6 @@ impl MatrixApp {
             .or_insert_with(|| cx.focus_handle().tab_stop(true))
             .clone()
     }
-    fn image_entries(&self) -> Vec<ImageEntry> {
-        let mut entries: Vec<_> = self
-            .snapshot
-            .messages
-            .iter()
-            .filter(|m| m.kind == MessageKind::Image && m.event_id.is_some())
-            .cloned()
-            .map(|message| ImageEntry {
-                message,
-                in_thread: false,
-            })
-            .collect();
-        if let Some(thread) = &self.thread {
-            let mut after = 0;
-            for message in std::iter::once(&thread.root)
-                .chain(&thread.messages)
-                .filter(|m| m.kind == MessageKind::Image && m.event_id.is_some())
-            {
-                if let Some(ix) = entries
-                    .iter()
-                    .position(|e| e.message.event_id == message.event_id)
-                {
-                    after = ix + 1;
-                    continue;
-                }
-                let ix = (after..entries.len())
-                    .find(|&ix| entries[ix].message.timestamp_ms > message.timestamp_ms)
-                    .unwrap_or(entries.len());
-                entries.insert(
-                    ix,
-                    ImageEntry {
-                        message: message.clone(),
-                        in_thread: true,
-                    },
-                );
-                after = ix + 1;
-            }
-        }
-        let mut seen = std::collections::HashSet::new();
-        entries.retain(|e| seen.insert(e.message.event_id.clone()));
-        entries
-    }
     pub fn open_viewer(
         &mut self,
         id: String,

@@ -669,6 +669,14 @@ mod integration {
             if encrypted {
                 assert!(room.encryption_state().is_encrypted());
             }
+            let account = crate::auth::Account::new(
+                client.clone(),
+                path.clone(),
+                matrix_client_platform::SessionStore::new(
+                    "matrix-client.integration.gallery-unused",
+                ),
+                Arc::new(std::sync::Mutex::new(())),
+            );
             let conversation = Conversation {
                 read_updates: None,
                 root: None,
@@ -752,6 +760,59 @@ mod integration {
                     client.media().remove_media_content(&request).await,
                     "clear upload cache before viewer",
                 );
+                let gallery = checked(
+                    account
+                        .room_media(
+                            room.room_id().as_str(),
+                            crate::media::MediaKind::Images,
+                            None,
+                            1,
+                        )
+                        .await,
+                    "gallery page",
+                );
+                assert_eq!(gallery.items.len(), 1);
+                assert_eq!(gallery.items[0].filename, name);
+                let gallery_bytes = checked(
+                    account.media_bytes(&gallery.items[0].source).await,
+                    "gallery decrypt in memory",
+                );
+                assert!(gallery_bytes == bytes, "gallery original bytes differ");
+                if encrypted && name == "full.png" {
+                    let forwarded = checked(
+                        client.create_room(create_room::v3::Request::new()).await,
+                        "forward destination",
+                    );
+                    let content =
+                        matrix_sdk::ruma::events::room::message::ImageMessageEventContent::new(
+                            "forwarded.png".into(),
+                            request.source.clone(),
+                        );
+                    checked(
+                        forwarded
+                            .send(matrix_sdk::ruma::events::room::message::RoomMessageEventContent::new(MessageType::Image(content)))
+                            .await,
+                        "forward encrypted source into plain room",
+                    );
+                    let page = checked(
+                        account
+                            .room_media(
+                                forwarded.room_id().as_str(),
+                                crate::media::MediaKind::Images,
+                                None,
+                                1,
+                            )
+                            .await,
+                        "forwarded encrypted gallery item",
+                    );
+                    assert_eq!(page.items.len(), 1);
+                    assert!(
+                        checked(
+                            account.media_bytes(&page.items[0].source).await,
+                            "forwarded source decrypt"
+                        ) == bytes
+                    );
+                }
                 let (_cancel, cancel) = tokio::sync::watch::channel(false);
                 let result = conversation.viewer_image(&id, cancel).await;
                 if let Some(error) = error {
@@ -789,6 +850,42 @@ mod integration {
                     Err(super::super::ImageError::Cancelled)
                 ));
             }
+            let mut next = None;
+            let mut ids = std::collections::HashSet::new();
+            let mut names = Vec::new();
+            for _ in 0..20 {
+                let page = checked(
+                    account
+                        .room_media(
+                            room.room_id().as_str(),
+                            crate::media::MediaKind::Images,
+                            next,
+                            2,
+                        )
+                        .await,
+                    "gallery pagination",
+                );
+                assert!(page.items.len() <= 2);
+                for item in page.items {
+                    assert!(ids.insert(item.event_id));
+                    names.push(item.filename);
+                }
+                next = page.next;
+                if next.is_none() {
+                    break;
+                }
+            }
+            assert!(next.is_none(), "gallery must exhaust");
+            assert_eq!(
+                names,
+                [
+                    "corrupt.png",
+                    "large.png",
+                    "animated.webp",
+                    "animated.gif",
+                    "full.png"
+                ]
+            );
             checked(client.matrix_auth().logout().await, "viewer fixture logout");
         }
         println!(

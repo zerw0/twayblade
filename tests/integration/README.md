@@ -176,3 +176,7 @@ Notification checks use the same isolated Synapse fixture and generated accounts
 modes, muted unread exclusion and second-client observation;
 `bash tests/integration/run.sh notification-delivery` checks SDK-decrypted encrypted
 items and private previews. Neither establishes native OS delivery or Element acceptance.
+
+Search: `nix develop --command bash tests/integration/run.sh search` creates a fresh isolated account and checks server pagination, cached encrypted results with a limitation flag, global search across both sources and SDK event context for older results. This does not establish UI scrolling or Element interoperability.
+
+Presence: `nix develop --command bash tests/integration/run.sh presence` runs fresh isolated account pairs with Synapse presence enabled and disabled, then restores the normal enabled setting while stopped. It checks positive capability evidence, shared-room visibility, away/status and absent disabled-server data; there are no production configuration changes.

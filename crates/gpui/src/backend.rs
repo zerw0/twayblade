@@ -15,7 +15,12 @@ use matrix_client_core::conversation::{ConversationError, TimelineStatus};
 pub(super) use matrix_client_core::room_state::{Member, MemberRole, MembersState};
 use tokio::{runtime::Runtime, sync::watch, task::JoinHandle};
 use zeroize::Zeroizing;
+mod media;
+pub(super) use media::MediaState;
+mod search;
+pub(super) use search::SearchState;
 mod notifications;
+mod presence;
 pub(super) use notifications::NotificationConfig;
 
 use matrix_client_core::{
@@ -43,11 +48,19 @@ pub(super) struct Snapshot {
     pub(super) spaces_loaded: bool,
     pub(super) selected_room: String,
     pub(super) messages: Vec<Message>,
+    pub(super) media: MediaState,
+    pub(super) search: SearchState,
+    pub(super) focused_event: Option<String>,
+    pub(super) presence_enabled: bool,
+    pub(super) own_presence: Option<matrix_client_core::presence::Presence>,
+    pub(super) presence: std::collections::HashMap<String, matrix_client_core::presence::Presence>,
     pub(super) thread: Option<ThreadSnapshot>,
     pub(super) timeline_ready: bool,
     pub(super) members: Vec<Member>,
     pub(super) members_state: MembersState,
-    pub(super) typing: Vec<String>,
+    pub(super) typing: Vec<matrix_client_core::room_state::TypingUser>,
+    pub(super) typing_others: usize,
+    pub(super) reduce_motion: bool,
     pub(super) sync_status: String,
     pub(super) timeline_status: String,
 }
@@ -98,6 +111,13 @@ struct State {
     selection: u64,
     tasks: Vec<JoinHandle<()>>,
     timeline_task: Option<JoinHandle<()>>,
+    media_task: Option<JoinHandle<()>>,
+    media_request: u64,
+    search_task: Option<JoinHandle<()>>,
+    search_request: u64,
+    presence_task: Option<JoinHandle<()>>,
+    presence_request: u64,
+    presence_visible: Vec<String>,
     thread_task: Option<JoinHandle<()>>,
     thread_conversation: Option<Conversation>,
     thread_request: u64,
@@ -110,6 +130,9 @@ struct State {
 
 impl State {
     fn stop(&mut self) {
+        self.cancel_media();
+        self.cancel_search();
+        self.cancel_presence();
         self.security = None;
         self.directory = None;
         self.leave_plan = None;
@@ -151,6 +174,7 @@ impl BrowserLogin {
 
 pub(super) struct Backend {
     _instance: Option<auth::InstanceLock>,
+    motion_task: JoinHandle<()>,
     runtime: Runtime,
     state: Arc<Mutex<State>>,
     updates: watch::Sender<Snapshot>,
@@ -175,6 +199,7 @@ pub(super) fn render_viewer_image(
 fn publish(sender: &watch::Sender<Snapshot>, update: impl FnOnce(&mut Snapshot)) {
     sender.send_modify(|snapshot| {
         update(snapshot);
+        snapshot.reduce_motion = matrix_client_platform::reduce_motion();
         snapshot.revision = snapshot.revision.wrapping_add(1);
     });
 }
@@ -334,6 +359,9 @@ fn media_failure(error: matrix_client_core::conversation::AttachmentError) -> Se
 fn conversation_failure(error: ConversationError) -> ServiceError {
     failure(match error {
         ConversationError::EmptyMessage => "Write a message first.",
+        ConversationError::Formatting(_) => {
+            "This message is too large to format. Shorten it and try again."
+        }
         ConversationError::Queue => "Message could not be queued. Your draft has been kept.",
         ConversationError::Pagination => "Older messages could not be loaded. Try again.",
         ConversationError::Unavailable => "This message is no longer available for that action.",
@@ -353,9 +381,24 @@ impl Backend {
         instance: Option<auth::InstanceLock>,
     ) -> Result<Arc<Self>, ServiceError> {
         let runtime = Runtime::new().map_err(|_| failure("Background runtime could not start."))?;
-        let (updates, _) = watch::channel(Snapshot::default());
+        let (updates, _) = watch::channel(Snapshot {
+            reduce_motion: matrix_client_platform::reduce_motion(),
+            ..Default::default()
+        });
+        let mut motion = matrix_client_platform::reduce_motion_changes();
+        let motion_updates = updates.clone();
+        let motion_task = runtime.spawn(async move {
+            while motion.changed().await.is_ok() {
+                let reduced = *motion.borrow_and_update();
+                let changed = motion_updates.borrow().reduce_motion != reduced;
+                if changed {
+                    publish(&motion_updates, |view| view.reduce_motion = reduced);
+                }
+            }
+        });
         Ok(Arc::new(Self {
             _instance: instance,
+            motion_task,
             runtime,
             updates,
             notification_config: watch::channel(NotificationConfig::default()).0,
@@ -597,6 +640,16 @@ impl Backend {
     }
 
     pub(super) fn select_room(&self, room_id: String) -> Result<(), ServiceError> {
+        self.select_room_focus(room_id, None)
+    }
+    pub(super) fn open_event(&self, room: String, event: String) -> Result<(), ServiceError> {
+        self.select_room_focus(room, Some(event))
+    }
+    fn select_room_focus(
+        &self,
+        room_id: String,
+        target: Option<String>,
+    ) -> Result<(), ServiceError> {
         let mut state = self
             .state
             .lock()
@@ -611,6 +664,8 @@ impl Backend {
         if let Some(task) = state.thread_task.take() {
             task.abort();
         }
+        state.cancel_media();
+        state.cancel_presence();
         state.thread_conversation = None;
         state.conversation = None;
         if let Some(typing) = &state.typing_intent {
@@ -621,6 +676,8 @@ impl Backend {
         let epoch = state.epoch;
         account.select_room(Some(&room_id));
         publish(&self.updates, |snapshot| {
+            snapshot.focused_event = None;
+            snapshot.media = MediaState::default();
             snapshot.selected_room = room_id.clone();
             snapshot.messages.clear();
             snapshot.thread = None;
@@ -628,12 +685,16 @@ impl Backend {
             snapshot.members.clear();
             snapshot.members_state = MembersState::Loading;
             snapshot.typing.clear();
+            snapshot.typing_others = 0;
             snapshot.timeline_status = "Loading messages…".into();
         });
         let shared = self.state.clone();
         let updates = self.updates.clone();
         state.timeline_task = Some(self.runtime.spawn(async move {
-            let stream = account.conversation_updates(room_id, selection);
+            let stream: std::pin::Pin<Box<dyn futures_util::Stream<Item = matrix_client_core::conversation::ConversationSnapshot> + Send>> = match target.clone() {
+                Some(event) => Box::pin(account.event_updates(room_id, event, selection)),
+                None => Box::pin(account.conversation_updates(room_id, selection)),
+            };
             tokio::pin!(stream);
             let mut thumbnails = std::collections::HashMap::<String, Arc<Vec<u8>>>::new();
             let mut attempted = std::collections::HashSet::new();
@@ -664,10 +725,13 @@ impl Backend {
                         publish(&updates, |view| {
                             view.timeline_ready = state.conversation.is_some();
                             view.timeline_status = timeline_status_text(snapshot.status).into();
+                            view.focused_event = target.as_ref().filter(|id| snapshot.messages.iter().any(|m| m.event_id.as_ref() == Some(id))).cloned();
                             view.messages = snapshot.messages;
                             view.members = snapshot.members;
+                            for member in &mut view.members { member.presence = view.presence.get(&member.user_id).cloned(); }
                             view.members_state = snapshot.members_state;
                             view.typing = snapshot.typing;
+                            view.typing_others = snapshot.typing_others;
                         });
                     }
                     completed = work.join_next(), if !work.is_empty() => {
@@ -682,7 +746,8 @@ impl Backend {
                 }
             }
         }));
-        Ok(())
+        drop(state);
+        self.observe_presence(Vec::new())
     }
 
     pub(super) fn select_thread(
@@ -1047,6 +1112,8 @@ impl Backend {
         if let Some(task) = state.thread_task.take() {
             task.abort();
         }
+        state.cancel_media();
+        state.cancel_presence();
         state.thread_conversation = None;
         state.conversation = None;
         if let Some(typing) = &state.typing_intent {
@@ -1056,6 +1123,8 @@ impl Backend {
             account.select_room(None);
         }
         publish(&self.updates, |snapshot| {
+            snapshot.focused_event = None;
+            snapshot.media = MediaState::default();
             snapshot.selected_room.clear();
             snapshot.messages.clear();
             snapshot.thread = None;
@@ -1063,9 +1132,11 @@ impl Backend {
             snapshot.members.clear();
             snapshot.members_state = MembersState::Loading;
             snapshot.typing.clear();
+            snapshot.typing_others = 0;
             snapshot.timeline_status.clear();
         });
-        Ok(())
+        drop(state);
+        self.observe_presence(Vec::new())
     }
 
     pub(super) fn media_conversation(
@@ -1132,6 +1203,28 @@ impl Backend {
         matrix_client_core::conversation::ImageError,
     > {
         use matrix_client_core::conversation::ImageError;
+        let gallery = {
+            let state = self.state.lock().map_err(|_| ImageError::Unavailable)?;
+            let view = self.updates.borrow();
+            if state.account.as_ref().map(Account::instance_id) != Some(account)
+                || view.selected_room != room
+            {
+                return Err(ImageError::Unavailable);
+            }
+            view.media
+                .items
+                .iter()
+                .find(|i| i.event_id == message)
+                .cloned()
+                .zip(state.account.clone())
+        };
+        if let Some((item, account)) = gallery {
+            let mut image = self
+                .runtime
+                .block_on(account.gallery_image(&item, cancel))?;
+            let render = render_viewer_image(&mut image);
+            return Ok((Arc::new(image), render));
+        }
         let conversation = {
             let state = self.state.lock().map_err(|_| ImageError::Unavailable)?;
             let view = self.updates.borrow();
@@ -1306,6 +1399,7 @@ impl Backend {
             .map_err(|_| failure("Session is unavailable."))?;
         state.stop();
         state.account = None;
+        matrix_client_platform::notifications::clear_launch_activation();
         publish(&self.updates, |snapshot| {
             let revision = snapshot.revision;
             *snapshot = Snapshot::default();
@@ -1451,6 +1545,13 @@ impl Backend {
                         .iter()
                         .fold(0u64, |sum, room| sum.saturating_add(room.unread));
                     view.rooms = snapshot.rooms;
+                    for room in &mut view.rooms {
+                        room.presence = room
+                            .partner
+                            .as_ref()
+                            .and_then(|id| view.presence.get(id))
+                            .cloned();
+                    }
                     view.notifications = snapshot.notifications;
                     view.invites = snapshot.invites;
                 });
@@ -1474,12 +1575,14 @@ impl Backend {
                 });
             }
         }));
-        Ok(())
+        drop(state);
+        self.observe_presence(Vec::new())
     }
 }
 
 impl Drop for Backend {
     fn drop(&mut self) {
+        self.motion_task.abort();
         if let Ok(mut state) = self.state.lock() {
             state.stop();
         }

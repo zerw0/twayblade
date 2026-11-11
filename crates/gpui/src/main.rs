@@ -7,6 +7,7 @@ mod avatars;
 mod backend;
 mod emoji;
 mod model;
+mod motion;
 mod preferences;
 mod security;
 mod settings;
@@ -41,6 +42,9 @@ fn main() {
     if capture.is_some() {
         eprintln!("Build with --features capture to capture an offline preview.");
         return;
+    }
+    if !preview {
+        matrix_client_platform::notifications::initialize_activation();
     }
     gpui_kit::application()
         .with_assets(gpui_kit::assets::AllAssets)
@@ -145,7 +149,7 @@ fn main() {
                     title: Some("Matrix Client".into()),
                     appears_transparent: cfg!(target_os = "macos"),
                     traffic_light_position: cfg!(target_os = "macos")
-                        .then(|| point(px(18.), px(18.))),
+                        .then(|| point(px(16.), px(14.))),
                 }),
                 app_owns_titlebar_drag: cfg!(target_os = "macos"),
                 ..Default::default()
@@ -193,6 +197,13 @@ fn main() {
                         if args.iter().any(|arg| arg == "--preview-verify") {
                             view.snapshot.security.verification = Some(matrix_client_core::security::VerificationView { flow: "sample".into(), device: "Sample second device".into(), incoming: false, phase: matrix_client_core::security::VerificationPhase::Emojis([("🐶", "Dog"), ("🌳", "Tree"), ("🚀", "Rocket"), ("🎸", "Guitar"), ("🍎", "Apple"), ("🔔", "Bell"), ("🦋", "Butterfly")].into_iter().map(|(symbol, name)| (symbol.into(), name.into())).collect()) });
                         } else { view.security_restore = true; }
+                    }
+                    if args.iter().any(|arg| arg == "--preview-search") {
+                        view.search_open = true;
+                    }
+                    if args.iter().any(|arg| arg == "--preview-files") {
+                        view.details_open = true;
+                        view.info_tab = app::InfoTab::Files;
                     }
                     if args.iter().any(|arg| arg == "--preview-info") {
                         view.details_open = true;

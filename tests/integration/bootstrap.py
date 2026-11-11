@@ -257,6 +257,13 @@ if __name__ == '__main__':
         action = sys.argv[1]
         if action == 'generate':
             generate()
+        elif action in ['presence-on', 'presence-off']:
+            import yaml
+            path = ROOT / 'homeserver.yaml'
+            config = yaml.safe_load(path.read_text())
+            config['presence'] = {'enabled': action == 'presence-on'}
+            path.write_text(yaml.safe_dump(config))
+            print('Isolated presence setting configured.')
         elif action == 'spaces-config':
             spaces_config()
         elif action == 'register-pair':

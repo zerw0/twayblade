@@ -5,10 +5,7 @@ use crate::{
     room_state::{Member, MembersState, room_members},
 };
 use futures_util::{Stream, StreamExt};
-use matrix_sdk::ruma::{
-    RoomId, UserId,
-    events::room::message::{MessageType, RoomMessageEventContent},
-};
+use matrix_sdk::ruma::{RoomId, UserId, events::room::message::MessageType};
 use matrix_sdk_ui::timeline::{
     EventSendState, MsgLikeContent, Profile, RoomExt, Timeline, TimelineDetails, TimelineFocus,
     TimelineItem, TimelineItemContent, TimelineReadReceiptTracking, VirtualTimelineItem,
@@ -19,6 +16,7 @@ mod attachments;
 mod unread;
 mod viewer;
 pub use attachments::{AttachmentDraft, AttachmentError, sanitize_filename};
+pub(crate) use viewer::decode_viewer_bytes;
 pub use viewer::{ImageError, ViewerImage, decode_viewer_image};
 
 /// What a timeline row represents. The frontend owns the wording.
@@ -44,6 +42,7 @@ pub struct MessageRow {
     pub timestamp_ms: i64,
     /// Plain text; never log this or reply excerpts.
     pub body: String,
+    pub rich: Option<Arc<crate::rich_text::RichText>>,
     pub kind: MessageKind,
     pub edited: bool,
     pub delivery: DeliveryState,
@@ -105,6 +104,8 @@ pub enum ConversationError {
     EmptyMessage,
     #[error("queue_failed")]
     Queue,
+    #[error(transparent)]
+    Formatting(#[from] crate::rich_text::FormattingError),
     #[error("pagination_failed")]
     Pagination,
     #[error("event_unavailable")]
@@ -138,7 +139,8 @@ pub struct ConversationSnapshot {
     pub status: TimelineStatus,
     pub members: Vec<Member>,
     pub members_state: MembersState,
-    pub typing: Vec<String>,
+    pub typing: Vec<crate::room_state::TypingUser>,
+    pub typing_others: usize,
 }
 
 impl Conversation {
@@ -147,7 +149,7 @@ impl Conversation {
             return Err(ConversationError::EmptyMessage);
         }
         self.timeline
-            .send(RoomMessageEventContent::text_plain(body).into())
+            .send(crate::rich_text::compose(body)?.into())
             .await
             .map(|_| ())
             .map_err(|_| ConversationError::Queue)
@@ -424,6 +426,9 @@ fn rows<'a>(
                 },
                 timestamp_ms: u64::from(event.timestamp().get()) as i64,
                 body,
+                rich: content
+                    .as_message()
+                    .and_then(|m| crate::rich_text::message(m.msgtype())),
                 edited: content
                     .as_message()
                     .is_some_and(|message| message.is_edited()),
@@ -512,7 +517,7 @@ impl Account {
         room_id: String,
         generation: u64,
     ) -> impl Stream<Item = ConversationSnapshot> + Send + 'static + use<> {
-        self.focused_updates(room_id, generation, None)
+        self.focused_updates(room_id, generation, None, None)
     }
 
     pub fn thread_updates(
@@ -521,7 +526,16 @@ impl Account {
         root: String,
         generation: u64,
     ) -> impl Stream<Item = ConversationSnapshot> + Send + 'static + use<> {
-        self.focused_updates(room_id, generation, Some(root))
+        self.focused_updates(room_id, generation, Some(root), None)
+    }
+
+    pub fn event_updates(
+        &self,
+        room_id: String,
+        event: String,
+        generation: u64,
+    ) -> impl Stream<Item = ConversationSnapshot> + Send + 'static + use<> {
+        self.focused_updates(room_id, generation, None, Some(event))
     }
 
     fn focused_updates(
@@ -529,6 +543,7 @@ impl Account {
         room_id: String,
         generation: u64,
         root: Option<String>,
+        target: Option<String>,
     ) -> impl Stream<Item = ConversationSnapshot> + Send + 'static + use<> {
         let account = self.clone();
         async_stream::stream! {
@@ -537,20 +552,23 @@ impl Account {
                 generation,
                 account_instance: account.instance_id(), room_id: room_id.clone(),
                 conversation: None, messages: Vec::new(), status: TimelineStatus::Loading,
-                members: Vec::new(), members_state: MembersState::Loading, typing: Vec::new(),
+                members: Vec::new(), members_state: MembersState::Loading, typing: Vec::new(), typing_others: 0,
             };
             let room = RoomId::parse(&room_id).ok().and_then(|id| account.client.get_room(&id));
             let Some(room) = room else {
                 snapshot.status = TimelineStatus::Unavailable;
                 yield snapshot; return;
             };
-            let focus = match root.as_deref() {
+            let focus = if let Some(target) = &target {
+                let Ok(target) = matrix_sdk::ruma::EventId::parse(target) else { snapshot.status = TimelineStatus::Unavailable; yield snapshot; return; };
+                TimelineFocus::Event { target, num_context_events: 30, thread_mode: matrix_sdk_ui::timeline::TimelineEventFocusThreadMode::Automatic { hide_threaded_events: false } }
+            } else { match root.as_deref() {
                 Some(root) => match matrix_sdk::ruma::EventId::parse(root) {
                     Ok(root_event_id) => TimelineFocus::Thread { root_event_id },
                     Err(_) => { snapshot.status = TimelineStatus::Unavailable; yield snapshot; return; }
                 },
                 None => TimelineFocus::Live { hide_threaded_events: true },
-            };
+            }};
             let timeline = match room.timeline_builder().with_focus(focus).track_read_marker_and_receipts(TimelineReadReceiptTracking::MessageLikeEvents).build().await {
                 Ok(timeline) => Arc::new(timeline),
                 Err(_) => {
@@ -604,8 +622,8 @@ impl Account {
             // is suspended at a yield. JoinSet also aborts it on selection/account drop.
             let mut initial_page = tokio::task::JoinSet::new();
             let initial_timeline = timeline.clone();
-            initial_page.spawn(async move { initial_timeline.paginate_backwards(30).await });
-            let mut initial_pending = true;
+            if target.is_none() { initial_page.spawn(async move { initial_timeline.paginate_backwards(30).await }); }
+            let mut initial_pending = target.is_none();
             let (_typing_guard, mut typing) = room.subscribe_to_typing_notifications();
             let mut room_updates = room.subscribe_to_updates();
             let mut cache_updates = account.client.event_cache().subscribe_to_room_generic_updates();
@@ -652,7 +670,10 @@ impl Account {
                     result = &mut member_load, if member_pending => {
                         member_pending = false;
                         match result {
-                            Ok(members) => { snapshot.members = members; snapshot.members_state = MembersState::Ready; }
+                            Ok(members) => {
+                                snapshot.members = members; snapshot.members_state = MembersState::Ready;
+                                for user in &mut snapshot.typing { if let Some(member)=snapshot.members.iter().find(|m|m.user_id==user.user_id) { user.name=member.display_name.clone(); user.avatar=member.avatar.clone(); } }
+                            }
                             Err(_) => snapshot.members_state = MembersState::Failed,
                         }
                         yield snapshot.clone();
@@ -663,8 +684,8 @@ impl Account {
                     }
                     change = typing.recv() => {
                         match change {
-                            Ok(ids) => snapshot.typing = ids.into_iter().map(|id| id.to_string()).collect(),
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => snapshot.typing.clear(),
+                            Ok(ids) => { let ids = ids.into_iter().map(|id| id.to_string()).collect::<Vec<_>>(); (snapshot.typing,snapshot.typing_others)=crate::room_state::typing_users(&ids,&snapshot.members,&account.user_id()); },
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => { snapshot.typing.clear(); snapshot.typing_others=0; },
                             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         }
                         yield snapshot.clone();

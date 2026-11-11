@@ -226,6 +226,28 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
                 },
             ];
             message.thread_replies = 4;
+            // A formatted (HTML) sample, as sent by Element: bold, code and a link.
+            use matrix_client_core::rich_text::{RichNode, RichText, SpanKind};
+            let span = |kind, text: &str| RichNode::Span {
+                kind,
+                children: vec![RichNode::Text(text.into())],
+            };
+            message.rich = Some(std::sync::Arc::new(RichText {
+                nodes: vec![
+                    RichNode::Text("A ".into()),
+                    span(SpanKind::Strong, "single"),
+                    RichNode::Text(" Rust interface for ".into()),
+                    span(SpanKind::Code, "macOS"),
+                    RichNode::Text(", Linux and Windows. See ".into()),
+                    span(
+                        SpanKind::Link {
+                            target: "https://matrix.org/".into(),
+                        },
+                        "matrix.org",
+                    ),
+                    RichNode::Text(".".into()),
+                ],
+            }));
         }
         if let Some(message) = snapshot.messages.get_mut(1) {
             message.reply = Some(ReplyTarget::Ready {
@@ -295,20 +317,34 @@ pub(super) fn typing_text(snapshot: &Snapshot) -> String {
     let names: Vec<_> = snapshot
         .typing
         .iter()
-        .filter(|id| **id != snapshot.user_id)
-        .map(|id| {
+        .filter(|user| user.user_id != snapshot.user_id)
+        .map(|user| {
             snapshot
                 .members
                 .iter()
-                .find(|member| &member.user_id == id)
-                .map_or(id.as_str(), |member| member.display_name.as_str())
+                .find(|member| member.user_id == user.user_id)
+                .map_or(user.name.as_str(), |member| member.display_name.as_str())
         })
         .collect();
     match names.as_slice() {
         [] => String::new(),
-        [name] => format!("{name} is typing…"),
-        [first, second] => format!("{first} and {second} are typing…"),
-        [first, ..] => format!("{first} and {} others are typing…", names.len() - 1),
+        [name] if snapshot.typing_others == 0 => format!("{name} is typing…"),
+        [first, second] if snapshot.typing_others == 0 => {
+            format!("{first} and {second} are typing…")
+        }
+        [first, ..] => format!(
+            "{first} and {} others are typing…",
+            names.len() - 1 + snapshot.typing_others
+        ),
+    }
+}
+
+pub(super) fn size_label(size: Option<u64>) -> String {
+    match size {
+        None => "size unknown".into(),
+        Some(size) if size < 1024 => format!("{size} B"),
+        Some(size) if size < 1_048_576 => format!("{:.0} KB", size as f64 / 1024.),
+        Some(size) => format!("{:.1} MB", size as f64 / 1_048_576.),
     }
 }
 
@@ -382,7 +418,7 @@ mod room_state_tests {
     fn typing_labels_resolve_members_and_do_not_include_our_own_user() {
         let mut snapshot = preview(false, 6);
         assert!(typing_text(&snapshot) == "Alex is typing…");
-        snapshot.typing = vec![snapshot.user_id.clone()];
+        snapshot.typing = vec![snapshot.user_id.clone().into()];
         assert!(typing_text(&snapshot).is_empty());
         snapshot.typing = vec![
             "@alex:preview.invalid".into(),
@@ -417,6 +453,7 @@ pub(super) fn group_signature(messages: &[Message], range: std::ops::Range<usize
         message.id.hash(&mut hasher);
         message.display_name.hash(&mut hasher);
         message.body.hash(&mut hasher);
+        message.rich.hash(&mut hasher);
         std::mem::discriminant(&message.kind).hash(&mut hasher);
         std::mem::discriminant(&message.delivery).hash(&mut hasher);
         message.edited.hash(&mut hasher);
@@ -448,4 +485,307 @@ pub(super) fn group_signature(messages: &[Message], range: std::ops::Range<usize
         }
     }
     hasher.finish()
+}
+
+#[cfg(test)]
+mod rich_tests {
+    use super::*;
+    #[test]
+    fn formatting_only_edits_invalidate_the_message_group_fingerprint() {
+        use matrix_client_core::rich_text::{RichNode, RichText, SpanKind};
+        let mut message = Message {
+            id: "$same".into(),
+            body: "same plain text".into(),
+            ..Default::default()
+        };
+        let plain = group_signature(&[message.clone()], 0..1);
+        message.rich = Some(std::sync::Arc::new(RichText {
+            nodes: vec![RichNode::Span {
+                kind: SpanKind::Strong,
+                children: vec![RichNode::Text(message.body.clone())],
+            }],
+        }));
+        assert_ne!(plain, group_signature(&[message], 0..1));
+    }
+}
+
+/// Sanitized rich text (from core) to Markdown for Kit's selectable text view.
+/// Every text run is escaped; only structure produces Markdown syntax, so
+/// message content can never inject formatting or links of its own.
+pub(super) fn rich_markdown(rich: &matrix_client_core::rich_text::RichText) -> String {
+    let mut blocks = Vec::new();
+    rich_blocks(&rich.nodes, &mut blocks);
+    blocks.join("\n\n")
+}
+
+fn escape_inline(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            // HTML text collapses newlines to spaces.
+            '\n' | '\r' => out.push(' '),
+            ch if ch.is_ascii_punctuation() => {
+                out.push('\\');
+                out.push(ch);
+            }
+            ch => out.push(ch),
+        }
+    }
+    out
+}
+
+fn raw_text(nodes: &[matrix_client_core::rich_text::RichNode], out: &mut String) {
+    use matrix_client_core::rich_text::{RichNode, SpanKind};
+    for node in nodes {
+        match node {
+            RichNode::Text(text) => out.push_str(text),
+            RichNode::Span {
+                kind: SpanKind::LineBreak,
+                ..
+            } => out.push('\n'),
+            RichNode::Span { children, .. } | RichNode::Block { children, .. } => {
+                raw_text(children, out)
+            }
+        }
+    }
+}
+
+/// The shortest backtick run longer than any run inside `text`.
+fn fence(text: &str, minimum: usize) -> String {
+    let longest = text.split(|ch| ch != '`').map(str::len).max().unwrap_or(0);
+    "`".repeat((longest + 1).max(minimum))
+}
+
+fn rich_inline(nodes: &[matrix_client_core::rich_text::RichNode]) -> String {
+    use matrix_client_core::rich_text::{RichNode, SpanKind};
+    let mut out = String::new();
+    for node in nodes {
+        match node {
+            RichNode::Text(text) => out.push_str(&escape_inline(text)),
+            RichNode::Block { children, .. } => {
+                if !out.is_empty() && !out.ends_with(' ') {
+                    out.push(' ');
+                }
+                out.push_str(&rich_inline(children));
+            }
+            RichNode::Span { kind, children } => {
+                let inner = rich_inline(children);
+                match kind {
+                    SpanKind::Strong if !inner.trim().is_empty() => {
+                        out.push_str(&format!("**{inner}**"))
+                    }
+                    SpanKind::Emphasis if !inner.trim().is_empty() => {
+                        out.push_str(&format!("*{inner}*"))
+                    }
+                    SpanKind::Strike if !inner.trim().is_empty() => {
+                        out.push_str(&format!("~~{inner}~~"))
+                    }
+                    SpanKind::Code => {
+                        let mut code = String::new();
+                        raw_text(children, &mut code);
+                        let code = code.replace('\n', " ");
+                        if !code.is_empty() {
+                            let ticks = fence(&code, 1);
+                            let pad = if code.starts_with('`') || code.ends_with('`') {
+                                " "
+                            } else {
+                                ""
+                            };
+                            out.push_str(&format!("{ticks}{pad}{code}{pad}{ticks}"));
+                        }
+                    }
+                    SpanKind::Link { target } => match url::Url::parse(target) {
+                        // Re-serialised so spaces and angle brackets are percent-encoded.
+                        Ok(url) if !inner.trim().is_empty() => {
+                            out.push_str(&format!("[{inner}](<{url}>)"))
+                        }
+                        Ok(url) => out.push_str(&format!("<{url}>")),
+                        Err(_) => out.push_str(&inner),
+                    },
+                    // Hidden until the spoiler UI exists; never shown by accident.
+                    SpanKind::Spoiler { .. } => out.push_str("*\\[spoiler\\]*"),
+                    SpanKind::LineBreak => out.push_str("\\\n"),
+                    SpanKind::Image { alt, .. } => {
+                        out.push_str(&escape_inline(if alt.is_empty() { "[image]" } else { alt }))
+                    }
+                    _ => out.push_str(&inner),
+                }
+            }
+        }
+    }
+    out
+}
+
+fn rich_blocks(nodes: &[matrix_client_core::rich_text::RichNode], out: &mut Vec<String>) {
+    use matrix_client_core::rich_text::{BlockKind, RichNode};
+    let mut inline: Vec<RichNode> = Vec::new();
+    let flush = |inline: &mut Vec<RichNode>, out: &mut Vec<String>| {
+        let text = rich_inline(inline);
+        if !text.trim().is_empty() {
+            out.push(text.trim().to_owned());
+        }
+        inline.clear();
+    };
+    for node in nodes {
+        let RichNode::Block { kind, children } = node else {
+            inline.push(node.clone());
+            continue;
+        };
+        flush(&mut inline, out);
+        match kind {
+            BlockKind::Heading(level) => {
+                let text = rich_inline(children);
+                if !text.trim().is_empty() {
+                    out.push(format!(
+                        "{} {}",
+                        "#".repeat((*level).clamp(1, 6) as usize),
+                        text.trim()
+                    ));
+                }
+            }
+            BlockKind::Quote => {
+                let mut inner = Vec::new();
+                rich_blocks(children, &mut inner);
+                let quoted = inner
+                    .join("\n\n")
+                    .lines()
+                    .map(|line| {
+                        if line.is_empty() {
+                            ">".to_owned()
+                        } else {
+                            format!("> {line}")
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !quoted.is_empty() {
+                    out.push(quoted);
+                }
+            }
+            BlockKind::Code { language } => {
+                let mut code = String::new();
+                raw_text(children, &mut code);
+                let code = code.trim_end_matches('\n');
+                let ticks = fence(code, 3);
+                let language: String = language
+                    .as_deref()
+                    .unwrap_or("")
+                    .chars()
+                    .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '_'))
+                    .take(32)
+                    .collect();
+                out.push(format!("{ticks}{language}\n{code}\n{ticks}"));
+            }
+            BlockKind::List { ordered, start } => {
+                let mut items = Vec::new();
+                for (number, item) in (*start..).zip(children.iter()) {
+                    let item_children = match item {
+                        RichNode::Block {
+                            kind: BlockKind::ListItem,
+                            children,
+                        } => children.as_slice(),
+                        other => std::slice::from_ref(other),
+                    };
+                    let mut inner = Vec::new();
+                    rich_blocks(item_children, &mut inner);
+                    let marker = if *ordered {
+                        format!("{number}. ")
+                    } else {
+                        "- ".to_owned()
+                    };
+                    let indent = " ".repeat(marker.len());
+                    let body = inner.join("\n\n");
+                    let mut lines = body.lines();
+                    let mut text = format!("{marker}{}", lines.next().unwrap_or(""));
+                    for line in lines {
+                        text.push('\n');
+                        if !line.is_empty() {
+                            text.push_str(&indent);
+                            text.push_str(line);
+                        }
+                    }
+                    items.push(text);
+                }
+                if !items.is_empty() {
+                    out.push(items.join("\n"));
+                }
+            }
+            BlockKind::Divider => out.push("---".into()),
+            BlockKind::Table => {
+                let mut rows = Vec::new();
+                collect_rows(children, &mut rows);
+                let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
+                if columns > 0 {
+                    let line = |cells: &[String]| {
+                        let mut cells = cells.to_vec();
+                        cells.resize(columns, String::new());
+                        format!("| {} |", cells.join(" | "))
+                    };
+                    let mut table = vec![line(&rows[0]), format!("|{}", " --- |".repeat(columns))];
+                    table.extend(rows[1..].iter().map(|row| line(row)));
+                    out.push(table.join("\n"));
+                }
+            }
+            _ => rich_blocks(children, out),
+        }
+    }
+    flush(&mut inline, out);
+}
+
+fn collect_rows(nodes: &[matrix_client_core::rich_text::RichNode], rows: &mut Vec<Vec<String>>) {
+    use matrix_client_core::rich_text::{BlockKind, RichNode};
+    for node in nodes {
+        if let RichNode::Block { kind, children } = node {
+            match kind {
+                BlockKind::TableRow => rows.push(
+                    children
+                        .iter()
+                        .filter_map(|cell| match cell {
+                            RichNode::Block {
+                                kind: BlockKind::TableCell { .. },
+                                children,
+                            } => Some(rich_inline(children).trim().to_owned()),
+                            _ => None,
+                        })
+                        .collect(),
+                ),
+                _ => collect_rows(children, rows),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod rich_markdown_tests {
+    use super::rich_markdown;
+    use matrix_client_core::rich_text::incoming;
+    use matrix_sdk::ruma::events::room::message::FormattedBody;
+
+    fn render(html: &str) -> String {
+        rich_markdown(&incoming(&FormattedBody::html(html)).unwrap())
+    }
+
+    #[test]
+    fn structure_becomes_markdown_and_text_stays_escaped() {
+        assert_eq!(render("<b>bold</b> and <em>it</em>"), "**bold** and *it*");
+        assert_eq!(render("<code>a`b</code>"), "``a`b``");
+        assert_eq!(
+            render("<a href='https://example.org/a b'>site</a>"),
+            "[site](<https://example.org/a%20b>)"
+        );
+        assert_eq!(render("<ul><li>one</li><li>two</li></ul>"), "- one\n- two");
+        assert_eq!(render("<ol start='3'><li>x</li></ol>"), "3. x");
+        assert_eq!(render("<blockquote><p>q</p></blockquote>"), "> q");
+        assert_eq!(
+            render("<pre><code class='language-rust'>let a = 1;\n</code></pre>"),
+            "```rust\nlet a = 1;\n```"
+        );
+        // Text that looks like Markdown is shown literally.
+        assert_eq!(
+            render("<p>**not bold** [x](y)</p>"),
+            "\\*\\*not bold\\*\\* \\[x\\]\\(y\\)"
+        );
+        // Spoilers stay hidden.
+        assert!(!render("<span data-mx-spoiler>secret</span>").contains("secret"));
+    }
 }

@@ -207,20 +207,32 @@ impl Conversation {
             _ = cancel.changed() => return Err(ImageError::Cancelled),
             result = tokio::time::timeout(std::time::Duration::from_secs(30),media.get_media_content(&request,false)) => result.map_err(|_| ImageError::Download)?.map_err(|_| ImageError::Download)?,
         };
-        let permit = tokio::select! {
-            _ = cancel.changed() => return Err(ImageError::Cancelled),
-            permit = DECODER.clone().acquire_owned() => permit.map_err(|_| ImageError::Cancelled)?,
-        };
-        let decode = tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            decode_viewer_image(bytes, &filename)
-        });
-        tokio::select! {
-            _ = cancel.changed() => Err(ImageError::Cancelled),
-            result = decode => result.map_err(|_| ImageError::Corrupt)?,
-        }
+        decode_viewer_bytes(bytes, filename, cancel).await
     }
 }
+/// One process-wide decoder permit is shared by timeline and gallery images.
+pub(crate) async fn decode_viewer_bytes(
+    bytes: Vec<u8>,
+    filename: String,
+    mut cancel: tokio::sync::watch::Receiver<bool>,
+) -> Result<ViewerImage, ImageError> {
+    if *cancel.borrow() {
+        return Err(ImageError::Cancelled);
+    }
+    let permit = tokio::select! {
+        _ = cancel.changed() => return Err(ImageError::Cancelled),
+        permit = DECODER.clone().acquire_owned() => permit.map_err(|_| ImageError::Cancelled)?,
+    };
+    let decode = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        decode_viewer_image(bytes, &filename)
+    });
+    tokio::select! {
+        _ = cancel.changed() => Err(ImageError::Cancelled),
+        result = decode => result.map_err(|_| ImageError::Corrupt)?,
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn animated_webp_fixture() -> Vec<u8> {
     fn chunk(out: &mut Vec<u8>, tag: &[u8; 4], data: &[u8]) {
@@ -335,5 +347,23 @@ mod tests {
             decode_viewer_image(many, "many.gif"),
             Err(ImageError::Limit)
         ));
+    }
+    #[tokio::test]
+    async fn cancelled_decoder_waiters_do_not_enqueue_blocking_work() {
+        let permit = DECODER.clone().acquire_owned().await.unwrap();
+        let (sender, receiver) = tokio::sync::watch::channel(false);
+        let task = tokio::spawn(decode_viewer_bytes(
+            Vec::new(),
+            "cancelled.png".into(),
+            receiver,
+        ));
+        tokio::task::yield_now().await;
+        sender.send_replace(true);
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(result, Err(ImageError::Cancelled)));
+        drop(permit);
     }
 }

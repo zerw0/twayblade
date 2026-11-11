@@ -15,6 +15,22 @@ case "$matrix_endpoint" in
 esac
 compose=(docker --context "$matrix_context" compose -f tests/integration/compose.yaml)
 case "${1:-test}" in
+    presence)
+        mkdir -p test-data/local/integration
+        "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py generate
+        trap '"${compose[@]}" stop synapse' EXIT
+        for mode in enabled disabled; do
+            setting=presence-on
+            if [[ "$mode" == disabled ]]; then setting=presence-off; fi
+            "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py "$setting"
+            "${compose[@]}" up -d --force-recreate --wait --wait-timeout 90 synapse
+            "${compose[@]}" exec -T synapse python /bootstrap.py register-pair
+            MATRIX_TEST_PRESENCE="$mode" cargo test --locked -p matrix-client-core --all-features presence_enabled_and_disabled_server_evidence -- --ignored --nocapture
+            "${compose[@]}" stop synapse
+        done
+        # Leave the shared local fixture's normal default restored while stopped.
+        "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py presence-on
+        ;;
     recovery)
         mkdir -p test-data/local/integration test-data/local/recovery
         "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py generate
@@ -44,7 +60,7 @@ case "${1:-test}" in
             cargo test --locked -p matrix-client-core --all-features oauth_keychain_lifecycle_across_processes -- --ignored --nocapture
         fi
         ;;
-    up|test|keychain|services|security|media|threads|spaces|viewer|notifications|notification-delivery)
+    up|test|keychain|services|security|media|threads|spaces|viewer|search|notifications|notification-delivery)
         mkdir -p test-data/local/integration
         "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py generate
         if [[ "${1:-test}" == spaces ]]; then
@@ -55,7 +71,10 @@ case "${1:-test}" in
         if [[ "${1:-test}" != up ]]; then
             # Keep encrypted fixture data for inspection; stop only our test service.
             trap '"${compose[@]}" stop' EXIT
-            if [[ "${1:-test}" == notification-delivery ]]; then
+            if [[ "${1:-test}" == search ]]; then
+                "${compose[@]}" exec -T synapse python /bootstrap.py register-security
+                cargo test --locked -p matrix-client-core --all-features search_server_cached_encryption_pagination_and_event_context -- --ignored --nocapture
+            elif [[ "${1:-test}" == notification-delivery ]]; then
                 cargo test --locked -p matrix-client-core --all-features encrypted_notification_delivery_and_private_preview -- --ignored --nocapture
             elif [[ "${1:-test}" == notifications ]]; then
                 cargo test --locked -p matrix-client-core --all-features notification_rules_round_trip_and_second_client_changes -- --ignored --nocapture
@@ -86,5 +105,5 @@ case "${1:-test}" in
         ;;
     down) "${compose[@]}" down ;;
     status) "${compose[@]}" ps ;;
-    *) printf 'Usage: bash tests/integration/run.sh [up|test|keychain|services|oauth|sso|recovery|security|media|threads|spaces|viewer|notifications|notification-delivery|down|status]\n' >&2; exit 1 ;;
+    *) printf 'Usage: bash tests/integration/run.sh [up|test|keychain|services|presence|oauth|sso|recovery|security|media|threads|spaces|viewer|search|notifications|notification-delivery|down|status]\n' >&2; exit 1 ;;
 esac

@@ -236,12 +236,24 @@ async fn encrypted_delivery_profile_and_same_device_store_restore() {
         .await,
         "sender application timeline",
     );
-    let body = format!("isolated-e2ee-{}", Uuid::new_v4());
+    let body = format!("**isolated-e2ee-{}**", Uuid::new_v4());
     checked(
         conversation.send(body.clone()).await,
         "application send queue",
     );
     wait_for_message(&bob, room_id.to_string(), &body).await;
+    let mut rich_updates = Box::pin(bob.conversation_updates(room_id.to_string(), 2));
+    wait_snapshot(
+        &mut rich_updates,
+        |s| {
+            s.messages
+                .iter()
+                .any(|m| m.body == body && m.rich.is_some())
+        },
+        "encrypted Markdown rich-text projection",
+    )
+    .await;
+    drop(rich_updates);
     let response = checked(
         alice
             .client
@@ -272,6 +284,8 @@ async fn encrypted_delivery_profile_and_same_device_store_restore() {
         "PASS: application send queue, encrypted server event and decrypted recipient timeline"
     );
 
+    let notification_identity = bob.notification_identity();
+    let previous_instance = bob.instance_id();
     bob_sync.abort();
     let _ = bob_sync.await;
     drop(bob);
@@ -298,6 +312,34 @@ async fn encrypted_delivery_profile_and_same_device_store_restore() {
     let restored_sync = sync(&restored);
     wait_for_room(&restored, &room_id).await;
     wait_for_message(&restored, room_id.to_string(), &body).await;
+    assert!(restored.instance_id() != previous_instance);
+    assert!(restored.notification_identity() == notification_identity);
+    use crate::notifications::ActivationState;
+    assert!(
+        restored.validate_notification_target(&notification_identity, room_id.as_str(), None)
+            == ActivationState::Ready
+    );
+    assert!(
+        restored.validate_notification_target(
+            &alice.notification_identity(),
+            room_id.as_str(),
+            None
+        ) == ActivationState::Rejected
+    );
+    assert!(
+        restored.validate_notification_target(
+            &notification_identity,
+            room_id.as_str(),
+            Some("invalid")
+        ) == ActivationState::Rejected
+    );
+    assert!(
+        restored.validate_notification_target(
+            &notification_identity,
+            "!not-yet-synced:example.org",
+            None
+        ) == ActivationState::Pending
+    );
     eprintln!("PASS: same-device encrypted store reopen and history decryption");
 
     // Revoke only these generated test sessions; never call Account::logout,
@@ -617,8 +659,11 @@ async fn timeline_metadata_and_send_queue_actions() {
     .await;
     let mut conversation = ready.conversation.expect("conversation");
     let root_event = checked(
-        room.send(RoomMessageEventContent::text_plain("sample root excerpt"))
-            .await,
+        room.send(RoomMessageEventContent::text_html(
+            "sample root excerpt",
+            "<p><strong>sample root excerpt</strong></p>",
+        ))
+        .await,
         "root send",
     )
     .response
@@ -629,6 +674,14 @@ async fn timeline_metadata_and_send_queue_actions() {
         "root projection",
     )
     .await;
+    assert!(
+        root_snapshot
+            .messages
+            .iter()
+            .find(|m| m.event_id.as_deref() == Some(root_event.as_str()))
+            .is_some_and(|m| m.rich.is_some()),
+        "Element-style HTML must project to native rich data"
+    );
     let root_id = root_snapshot
         .messages
         .iter()
@@ -923,7 +976,10 @@ async fn members_typing_and_read_receipts() {
     );
     wait_snapshot(
         &mut updates,
-        |s| s.typing.contains(&alice.user_id()) && !s.typing.contains(&bob.user_id()),
+        |s| {
+            s.typing.iter().any(|u| u.user_id == alice.user_id())
+                && !s.typing.iter().any(|u| u.user_id == bob.user_id())
+        },
         "remote typing notification",
     )
     .await;
