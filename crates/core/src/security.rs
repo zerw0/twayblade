@@ -506,7 +506,10 @@ async fn refresh(
         view.ready = true;
         view.failed = false;
         view.has_identity = identity.is_some();
-        view.verified = own.is_some_and(|device| device.is_verified());
+        // Not `is_verified()`: the SDK marks its own device locally trusted, so
+        // that is true even for a session no other client trusts. Verified means
+        // signed by the account's cross-signing identity, as Element X reports it.
+        view.verified = own.is_some_and(|device| device.is_cross_signed_by_owner());
         view.backup_exists = backup_exists;
         view.recovery_enabled = client.encryption().recovery().state() == RecoveryState::Enabled;
         view.devices = rows;

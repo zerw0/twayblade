@@ -488,7 +488,7 @@ impl MatrixApp {
                     title: Some("Settings".into()),
                     appears_transparent: cfg!(target_os = "macos"),
                     traffic_light_position: cfg!(target_os = "macos")
-                        .then(|| point(px(18.), px(18.))),
+                        .then(|| point(px(16.), px(14.))),
                 }),
                 app_owns_titlebar_drag: cfg!(target_os = "macos"),
                 ..Default::default()
@@ -1156,9 +1156,12 @@ impl Render for SettingsWindow {
                         }))
                 }));
         let (sidebar_bar, content_bar, panel) = self.main.update(cx, |main, cx| {
-            let sidebar_bar = main.toolbar("settings-sidebar-toolbar", cx);
+            // 40pt, like the main window's title bar, so the window buttons
+            // (centred at 20pt) line up with the section title.
+            let sidebar_bar = main.toolbar("settings-sidebar-toolbar", cx).h(px(40.));
             let content_bar = main
                 .toolbar("settings-toolbar", cx)
+                .h(px(40.))
                 .px(px(20.))
                 .border_b_1()
                 .border_color(cx.theme().border)

@@ -149,6 +149,15 @@ here are reflected in Element for the same account.
 - *Formatting.* HTML message composition (bold, italic, code, links, lists,
   quotes) with a formatting toolbar, sent as `formatted_body` with a plain
   fallback.
+- *Room discovery.* Today only a space's own hierarchy can be browsed. Add the
+  public room directory: browse and search your homeserver's directory
+  (`/publicRooms` with server-side filter and pagination), switch to another
+  server's directory (and its third-party networks where offered), and join
+  by `#alias:server` or a matrix.to / `matrix:` link. Each result shows name,
+  avatar, topic, member count, join rule and whether it is a space; a preview
+  (summary or world-readable history) before joining where the server allows
+  it, and knock for knock-only rooms. Never auto-join; joining a space opens
+  its hierarchy.
 
 **M5 — calls (5–7 weeks).** Start with a macOS call-runtime spike, then the
 complete lifecycle and Linux/Windows. Exit: encrypted direct and group calls with
@@ -187,7 +196,7 @@ Linux and Windows CI passed on `36f850a`; macOS CI was switched to `macos-15`
    Notification OS permission/delivery/click/badge acceptance and Element comparison
    remain. Linux accent observation now retains its portal connection.
 5. **M4b chat polish.** Search, room media gallery, presence, motion, typing
-   indicator, formatting (see Milestones).
+   indicator, formatting and room discovery (see Milestones).
 6. **M5 calls.** Element Call runtime, direct and group calls.
 7. **M6 release.** Accessibility pass, packaging, signing, updates.
 
@@ -466,6 +475,22 @@ M4b core — Task 1 gallery review corrections (2026-11-11):
 - Gallery and timeline images share the existing single decoder permit, with cancellation before scheduling blocking decode work. Gallery actions start in UI invocation order and carry the expected account/room; a pending room switch cannot open or load the old room's gallery. The artificial 2,000-item exhaustion cap was removed; no background auto-pagination was added.
 - UI fields/actions remain as listed in Task 1. Compilation: locked strict workspace/all-target/all-feature Clippy and rustfmt check passed. Unit/offline suite: 118 workspace tests passed, including account/selection/request admission, asynchronous selection cancellation, oversized server responses and cancellation while waiting for the shared decoder.
 - Live integration: isolated Synapse viewer/gallery regression passed again, including encrypted media forwarded to a plain room and in-memory decryption. Physical platform and Element checks remain unverified, as above.
+
+M4b UI on the core contracts (2026-11-11, Claude):
+- Review of `feature/chat-polish-core` (7 commits): no blocking defects. Sanitizer uses Ruma's strict allowlist with scheme/mxc checks and budgets; search keeps no index and only scans already-decrypted cache for encrypted rooms; no bodies, queries or tokens logged. Follow-ups: plain messages always carry an HTML `formatted_body` (Element sends plain when Markdown changes nothing); cached encrypted search results carry only the sender ID.
+- Rich text: sanitized `RichText` is converted to escaped Markdown for Kit's selectable text view (bold, italic, strike, code, code blocks, links, lists, quotes, headings, tables). Message text can never inject its own formatting; spoilers stay hidden ("[spoiler]") until a reveal control exists. Links show their real destination in a tooltip and open only http(s)/mailto.
+- Motion: one module (`motion.rs`) with a single ease-out curve; side panels slide/fade in, dialogs and the emoji picker rise, room switches crossfade, the typing indicator pulses (30 fps cap). Only opacity and relative offsets animate. Reduce Motion (from the platform watch) shows final states; UI tests settle the same way.
+- Typing: up to three typers' avatars, animated dots and the accessible "… is typing" text.
+- Gallery: Info › Files shows the room gallery (Images grid / Files list) with skeleton loading, error with retry, empty states and Load Older; images open in the viewer in gallery order. Thumbnails reuse timeline previews when the event is loaded, otherwise a filename tile (gallery thumbnail fetching is pending). Offline previews keep the loaded-timeline list.
+- Search: Return in the title search (or the "Search messages for …" sidebar row) opens a Search panel with All Rooms / This Room, Has Files, highlighted snippets, an encrypted-history notice, Load More and empty/error states. Opening a result selects the room, scrolls to the event and tints it.
+- Presence: your avatar opens an account menu (Your Profile, Online / Away / Invisible, Clear Status Message, Account Settings…); status dots on your avatar, DM rows and members, only when the server shares presence. The visible set (DM partners, plus members when the Members tab shows; ≤64) is handed to the observer only when it changes.
+- Locked fmt, strict all-feature Clippy and 121 workspace tests pass (incl. rich-text Markdown escaping, motion easing, search panel flow). Offline preview captures reviewed. Not verified live: gallery with real media, search against a server, presence changes, cold-launch activation, Reduce Motion toggling on a physical Mac.
+
+Fixes from the first live run (2026-11-11):
+- This device's verification uses `is_cross_signed_by_owner()` instead of `is_verified()` (true for the SDK's own, locally trusted device), so an unverified session no longer reads "verified"; other sessions show "Unknown until this device is verified" until it is.
+- Conversation search matches all conversations (Home, every space, DMs), not only the shown space; choosing a result clears the query.
+- Title bar: traffic lights centred on the 40pt bar (main and Settings), no filled sidebar toggle, and no connection dot while connected.
+- Not yet re-verified on the live account: verification state after cross-signing with Element.
 
 Not yet verified:
 - Physical GUI checks of logout, pagination, IME and VoiceOver.

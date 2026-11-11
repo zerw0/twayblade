@@ -366,10 +366,16 @@ impl MatrixApp {
                                 } else {
                                     ""
                                 },
-                                if device.verified {
+                                if device.verified && security.verified {
                                     "Verified"
+                                } else if device.current {
+                                    "Not verified"
+                                } else if !security.verified {
+                                    // Trust in other sessions comes from this one's;
+                                    // until it is verified, their status is unknown.
+                                    "Unknown until this device is verified"
                                 } else {
-                                    "Unverified"
+                                    "Not verified"
                                 }
                             ))),
                     );

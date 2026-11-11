@@ -87,6 +87,17 @@ pub(super) struct MatrixApp {
     pub(super) info_tab: InfoTab,
     /// The composer's current placeholder, so it is only reset on room change.
     pub(super) composer_placeholder: SharedString,
+    /// The room the Files tab last asked the gallery for, so a failed load is
+    /// retried by the user, not on every frame.
+    pub(super) gallery_requested: String,
+    /// Message search panel and its scope/filter.
+    pub(super) search_open: bool,
+    pub(super) search_all_rooms: bool,
+    pub(super) search_has_file: bool,
+    /// The last focused event scrolled into view, and the one highlighted.
+    pub(super) revealed_event: Option<String>,
+    /// The DM partners and members last handed to the presence observer.
+    pub(super) presence_observed: Vec<String>,
     /// A destructive member action waiting for its second click: (user, action).
     pub(super) member_confirm: Option<(String, matrix_client_core::room_state::MemberAction)>,
     /// Per-group content fingerprints matching `groups`, for targeted re-measure.
@@ -184,8 +195,17 @@ impl MatrixApp {
         };
         let groups = model::grouped(&snapshot.messages);
         let scroller = cx.new(|cx| MessageScrollerState::new(groups.len(), cx));
-        let mut subscriptions =
-            vec![cx.subscribe_in(&search, window, |_, _, _: &InputEvent, _, cx| cx.notify())];
+        let mut subscriptions = vec![cx.subscribe_in(
+            &search,
+            window,
+            |this, _, event: &InputEvent, window, cx| {
+                // Typing filters conversations; Return searches messages.
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    this.run_message_search(window, cx);
+                }
+                cx.notify()
+            },
+        )];
         subscriptions.push(cx.subscribe_in(
             &emoji_search,
             window,
@@ -344,6 +364,12 @@ impl MatrixApp {
             collapsed_sections: Default::default(),
             info_tab: InfoTab::About,
             composer_placeholder: "Message".into(),
+            gallery_requested: String::new(),
+            search_open: false,
+            search_all_rooms: true,
+            search_has_file: false,
+            revealed_event: None,
+            presence_observed: Vec::new(),
             member_confirm: None,
             group_signatures: Vec::new(),
             latest_cache: Default::default(),
@@ -1328,6 +1354,11 @@ impl MatrixApp {
             cx.notify();
             return;
         }
+        if self.search_open {
+            self.search_open = false;
+            cx.notify();
+            return;
+        }
         if self.thread.is_some() {
             self.close_thread(cx);
             return;
@@ -1790,5 +1821,35 @@ impl MatrixApp {
             move |b| b.set_presence(state, status),
             |_, _, _, _| {},
         );
+    }
+}
+
+impl MatrixApp {
+    /// Search messages for the title-bar query, in this room or all rooms.
+    pub(super) fn run_message_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.search.read(cx).value().trim().to_owned();
+        if text.is_empty() {
+            return;
+        }
+        self.search_open = true;
+        if self.preview {
+            cx.notify();
+            return;
+        }
+        let room = (!self.search_all_rooms)
+            .then(|| self.snapshot.selected_room.clone())
+            .filter(|room| !room.is_empty())
+            .and_then(|room| room.try_into().ok());
+        self.search_messages(
+            matrix_client_core::search::SearchQuery {
+                text,
+                room,
+                sender: None,
+                has_file: self.search_has_file,
+            },
+            window,
+            cx,
+        );
+        cx.notify();
     }
 }

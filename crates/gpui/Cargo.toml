@@ -21,6 +21,10 @@ emojis = "=0.9.1"
 directories.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+matrix-sdk.workspace = true
 
 [lints]
 workspace = true

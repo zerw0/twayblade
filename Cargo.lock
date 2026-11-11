@@ -5232,10 +5232,12 @@ dependencies = [
  "gpui-kit",
  "matrix-client-core",
  "matrix-client-platform",
+ "matrix-sdk",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "url",
  "zeroize",
 ]
 
