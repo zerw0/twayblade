@@ -1,5 +1,42 @@
 # Local Matrix integration checks
 
+## macOS call-runtime spike
+
+Inside the project Nix shell, with the dedicated local Docker engine running:
+
+```sh
+MATRIX_TEST_DOCKER_CONTEXT=colima-matrixclient-test bash tests/integration/run.sh call
+```
+
+This command starts digest-pinned Synapse, LiveKit, lk-jwt-service and the TLS
+proxy, creates fresh isolated accounts and an encrypted room, packages the
+macOS helper, and opens two real Element Call windows with media initially
+muted. It requires SDK memberships, received encryption keys and both
+participant lists; it never creates synthetic call events. It stops those
+services afterward, including on failure. Ports bind only to loopback; the
+Compose `call` profile is separate from normal fixture startup.
+
+**Current result: failing.** The helper exposes media/encoded-transform APIs and
+exchanges widget/SDK messages, but WebKit cannot reach the generated-CA service
+with trusted TLS. No host CA is installed and TLS is not bypassed. A separate
+HTTPS probe with the exact fixture CA returned HTTP 200. An earlier call run
+saw widget joins but no encryption-key messages. Neither an encrypted call nor
+media E2EE is established. Token-free SFU transport and WebRTC egress
+confinement remain production blockers.
+
+For a credential-free API probe (one temporary window, no media access):
+
+```sh
+bash macos/build-call-host.sh
+python3 tests/integration/probe-call-host.py \
+  'target/debug/bundle/Twayblade Call.app/Contents/MacOS/twayblade-call-host'
+```
+
+Physical permissions/media, screen share and Element Web interop need separate
+acceptance. See [the process boundary and contracts](../../docs/architecture/CALL-HOST.md).
+
+## Other Matrix checks
+
 This opt-in fixture uses pinned Synapse v1.164.2 (image digest recorded in
 `compose.yaml`), SQLite and two generated test accounts. It binds only
 `127.0.0.1:18448`, with a local CA and a signed server certificate. No system

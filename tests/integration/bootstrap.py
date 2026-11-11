@@ -196,6 +196,19 @@ def directory_config():
     print('Isolated directory publication enabled.')
 
 
+def call_config():
+    import yaml
+    path = ROOT / 'homeserver.yaml'
+    config = yaml.safe_load(path.read_text())
+    config['extra_well_known_client_content'] = {
+        'org.matrix.msc4143.rtc_foci': [
+            {'type': 'livekit', 'livekit_service_url': 'https://127.0.0.1:22449/jwt'}
+        ]
+    }
+    path.write_text(yaml.safe_dump(config))
+    print('Isolated MatrixRTC foci configured.')
+
+
 def recovery_config():
     import yaml
     config = yaml.safe_load((ROOT / 'homeserver.yaml').read_text())
@@ -275,6 +288,8 @@ if __name__ == '__main__':
             print('Isolated presence setting configured.')
         elif action == 'directory-config':
             directory_config()
+        elif action == 'call-config':
+            call_config()
         elif action == 'spaces-config':
             spaces_config()
         elif action == 'register-pair':
