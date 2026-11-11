@@ -65,6 +65,7 @@ jobs:
           cargo build --locked --release -p twayblade
           mkdir -p dist/twayblade
           cp target/release/twayblade README.md dist/twayblade/
+          cp crates/media/licenses/libwebrtc-a545de4.md dist/twayblade/libwebrtc-LICENSE.md
           tar -C dist -czf "dist/twayblade-${{ matrix.name }}.tar.gz" twayblade
 
       - name: Build Windows binary
@@ -74,6 +75,7 @@ jobs:
           cargo build --locked --release -p twayblade
           New-Item -ItemType Directory -Force dist/twayblade | Out-Null
           Copy-Item target/release/twayblade.exe, README.md dist/twayblade/
+          Copy-Item crates/media/licenses/libwebrtc-a545de4.md dist/twayblade/libwebrtc-LICENSE.md
           Compress-Archive -Path dist/twayblade -DestinationPath "dist/twayblade-${{ matrix.name }}.zip"
 
       - uses: actions/upload-artifact@v7

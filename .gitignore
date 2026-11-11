@@ -81,3 +81,7 @@ recovery_key*
 /.worktrees/
 /.github/agents/
 /.github/skills/
+
+# Isolated browser fixture dependencies.
+node_modules/
+__pycache__/

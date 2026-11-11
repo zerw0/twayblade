@@ -21,7 +21,10 @@ feature and a separate worktree for concurrent work. Keep Cargo.lock committed;
 use `--locked`. The first GPUI build downloads and compiles many dependencies.
 GPUI Kit is pinned to 0.9.1 with its matching GPUI snapshot. Cargo.lock also pins
 the compatible Taffy/unicode-properties versions needed by Kit's test features.
-Nix is optional and has a separate section below.
+Native calls also build the pinned LiveKit Rust bindings and download their
+libwebrtc prebuilt. Its build/license and the headless encrypted-media fixture
+are documented in [CALLS.md](docs/architecture/CALLS.md). Physical call media on
+macOS needs a later operator check; Linux/Windows call acceptance remains pending. Nix is optional and has a separate section below.
 
 ## macOS
 
@@ -198,7 +201,8 @@ it does not prove live GPUI login/restoration or Element interoperability.
 
 ## Optional Nix environment — macOS and Linux
 
-The pinned shell supplies Rust, rustfmt, Clippy, pkg-config, CMake and Python,
+The pinned shell supplies Rust, rustfmt, Clippy, pkg-config, CMake, Python,
+Node.js and OpenSSL (the latter two support the isolated browser call peer),
 plus Linux display, font and DBus inputs. Keep flake.lock committed.
 
 ```sh

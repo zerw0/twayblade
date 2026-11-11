@@ -191,7 +191,7 @@ here are reflected in Element for the same account.
 **M5 — calls (8–11 weeks).** Native MatrixRTC calls. Start with an
 encrypted audio call between Twayblade and Element Call on macOS, then video,
 devices, screen sharing, ringing and Linux/Windows. The Element Call web
-runtime spike (`call-host`) is removed once the native path works. Exit: encrypted direct and group calls with
+runtime spike (`call-host`) has been removed after native encrypted audio interop passed. Exit: encrypted direct and group calls with
 Element on each OS, including denied permissions, device removal, network change
 and screen sharing (Wayland and X11). Transport TLS is not media E2EE.
 
@@ -229,7 +229,7 @@ Linux and Windows CI passed on `36f850a`; macOS CI was switched to `macos-15`
 5. **M4b chat polish.** Search, room media gallery, presence, motion, typing
    indicator, formatting, room discovery, message editing, stacked
    attachments, timeline image size and keyboard shortcuts (see Milestones).
-6. **M5 calls.** Native calls (decision 2026-11-11): MatrixRTC in `core`, LiveKit Rust SDK media, GPUI call interface. The merged Element Call web-runtime spike is superseded and will be removed once native calls work.
+6. **M5 calls.** Native calls (decision 2026-11-11): MatrixRTC in `core`, LiveKit Rust SDK media, GPUI call interface. The merged Element Call web-runtime spike was removed after native encrypted audio interop passed.
 7. **M6 release.** Accessibility pass, packaging, signing, updates.
 
 ## Progress
@@ -581,22 +581,31 @@ Stacked attachments and sync restart (2026-11-11):
 - The SDK sync service stops for good after an error or unexpected termination. While the session is active it is now restarted with backoff (1 s, doubling up to 60 s), showing "Offline · reconnecting…". Previously the app stayed disconnected until relaunched.
 - Checks: fmt, strict Clippy and the workspace tests pass (offline UI test for the tray and its removal; restart backoff unit test). Isolated Synapse sync service tests pass. Sending stacked attachments to a live server, and the restart path against a real failing server, have not been exercised.
 
-M5 — macOS call-runtime spike, technical layer (2026-11-11):
-- Added the separate `twayblade-call-host` executable (Tao 0.37.2/Wry 0.57.2), signed helper bundle and macOS packaging. GPUI and WebKit never share a process/main thread. Private length-prefixed stdio has 256 KiB frames and 32-frame queues; main-loop health probes detect hangs. Cancellation kills the child. Account/request tickets gate admission/publication; logout/account replacement/backend shutdown and leaving the joined room end the call. No views changed.
-- Embedded Element Call **0.17.0**, archive SHA-256 `ba0f3f3b04b62577587faed603c3768465b1f9db33b15583473265531ca00121`; 154 assets are pinned and verified before custom-protocol serving from the bundle. Remote app navigation, popups, downloads and unrelated permissions are denied; release devtools are disabled. Upstream license files are preserved. Complete process/network confinement is not claimed.
-- SDK `experimental-widgets` owns the room-scoped `WidgetDriver`, encrypted/joined-room validation, HTTPS well-known RTC-focus selection and capability enforcement. Matrix credentials stay in the parent; call keys/OpenID assertions may cross the bridge and are never logged. Own call membership writes, key events and selected metadata are granted; timeline/media/legacy/ringing capabilities are denied. Extra filtering prevents other-room to-device key disclosure and rejects outbound recipients outside joined membership. SDK internal widget channels remain unbounded; application bridge queues/outstanding requests are bounded.
-- UI contract: `Snapshot.call: Option<CallState>` exposes `room_id,kind:Direct|Group,phase:Starting|Joining|Connected|Ended(reason),participants,muted,video,screen_sharing,error`. Participants expose `user_id,display_name,muted,video`. `Snapshot.room_calls: HashMap<String,ActiveCall>` projects SDK nonexpired memberships, deduplicated participants and the earliest available `started_ms`. **Contract refinement:** media booleans and `started_ms` are optional to represent unknown values; `display_name` is optional. Full types/phase semantics: `docs/architecture/CALL-HOST.md`.
-- Actions: `MatrixApp::{start_call(room_id,video),join_call(room_id),leave_call(),set_muted(bool),set_video(bool)}` return typed errors. Start/join share the only spawn path. Mute/video use `io.element.device_mute` and publish only acknowledged/reported state; requests are bounded with a five-second deadline. Screen-sharing state has no widget action in this pin and remains unknown. Claude owns view integration and user-facing wording.
-- Compilation: macOS pinned-shell fmt, strict locked workspace all-target/all-feature Clippy, shell syntax and Compose validation passed. Unit/offline tests: locked all-feature workspace suite passed **139 tests**, 23 opt-in tests ignored, covering capabilities, cross-room key rejection, framing/caps, real child crash/hang/cancellation and stale tickets. An earlier watchdog run saw an unexplained immediate child exit; targeted, supervisor-suite and final workspace reruns passed.
-- Runtime evidence on this Mac: actual helper windows, assets, IPC and widget/SDK exchange exercised. A bare executable reported `secure_context=true,media_devices=false,script_transform=true`; the signed helper with usage declarations reported all three true. The two-account timed run saw 10 widget messages, 8 SDK messages and widget join notifications per side, but zero received call-key messages. Widget joins do not prove SFU connectivity or an encrypted call.
-- Isolated-server signalling: added digest-pinned LiveKit 1.9.0, lk-jwt-service 0.9.0 and TLS proxy; Synapse serves RTC foci. `run.sh call` creates two isolated accounts in an encrypted room and drives real embedded clients. It **fails** rather than substituting synthetic events. The final run reports WebKit `trusted_tls_service_reachable=false`. No host CA was installed and WebKit TLS was not bypassed. Membership, both participant lists and key-exchange acceptance remain incomplete.
-- Production blockers: WebKit fixture trust; SFU transport without JWTs in WebSocket URLs (credential-bearing network URLs are rejected); SFU-only WebRTC ICE egress (CSP cannot enforce it); complete SDK/pin compatibility and bounded SDK internals. Ringing/incoming notifications are next steps; legacy `m.call.*` remains out of scope. Screen-share permission needs per-OS checks; Linux WebKitGTK/Wayland/X11 and Windows WebView2 are unattempted.
-- Physical media on this Mac: **not attempted**, needs a person for permissions, two windows and actual audio/video/media-E2EE checks. No fake WebKit devices; the signalling scenario starts muted. Element Web interop: **not attempted**. Linux/Windows compilation/runtime: **not attempted**. TLS and encoded-transform availability do not prove media E2EE. No M5 exit claimed. Architecture/commands: `docs/architecture/CALL-HOST.md`.
+M5 — native calls, phase 1 technical layer (2026-11-11):
+- The superseded macOS WebKit spike has been removed after native/Element Call encrypted audio passed. The app no longer includes `call-host`, widget capabilities/bridge, Element Call assets or a WebKit fixture. Claude owns GPUI call views; this work changes only technical contracts and existing action wiring.
+- `core::calls` uses matrix-sdk 0.19.1 / Ruma for `org.matrix.msc3401.call.member` (MSC3401/4143; per-user/device state keys), SDK active-membership parsing/expiry, `.well-known` `org.matrix.msc4143.rtc_foci`, OpenID and encrypted to-device sending. The oldest membership selects one LiveKit focus. MSC4195 deployment compatibility uses lk-jwt-service `/sfu/get`; MSC4140 delayed state targets Ruma's Synapse-compatible revision `3ee73abe5f81252b00877cfb5db941ee9aa6c18d`, with 15-second delayed leave, five-second restart and two-minute expiry fallback. This phase does not implement MatrixRTC 2.0 sticky events, hashed identities or multi-SFU migration.
+- Per-participant 16-byte CSPRNG media keys travel as `io.element.call.encryption_keys` only to exact current call-member devices through SDK Olm encryption. Incoming events require authenticated sender-device metadata and current room/call membership. Current `media_key`/`member_id` and deprecated fields are supported; timestamps/session claims are validated when present. Departures rotate the sender key/index. Media E2EE is mandatory; clear publications are rejected before subscription.
+- New `twayblade-media` isolates LiveKit 0.10.1, libwebrtc 0.4.0 / webrtc-sys 0.3.53 and prebuilt `webrtc-a545de4` from Matrix state and GPUI. HKDF, salt `LKFrameEncryptionKey`, ratchet window 10, key ring 256 and AES-GCM-128 interoperate with Element Call. Bundled WebRTC BSD/dependency notices are tracked and packaged. Microphone/speaker use the native ADM, camera uses AVFoundation behind a small capture boundary, and `platform` owns typed permission errors/prompts. Device lists are refreshed and selection validates stable IDs; physical hot-plug recovery is unverified.
+- UI contract: `Snapshot.call` keeps room/kind/phase/error and adds device-level participants (name, speaking, mute, video, quality), local media/device state, input/output/camera lists and video-track descriptors. Existing start/join/leave/mute/video actions remain, with `select_input`, `select_output`, `select_camera` and `call_video_handle`. Frames never enter snapshots: one latest-frame handle per track exposes immutable BGRA8 with timestamp/rotation, bounded conversion outside GPUI. Removed tracks permanently retire their handle and cancel its consumer. One account reservation and account/request tickets reject concurrent/stale calls; account/logout/room exit cancel them. No views changed.
+- Isolated fixture: digest-pinned Element Call **0.28.2** (`c61fc9e4e04f75690c693d4556d01c09a2b9246f3fc8d35222d3aac36ba29906`), Matrix JS SDK `3f05dc4d104a3dfc753c5e3549a18c74fab4b076`, LiveKit **1.9.0**, lk-jwt-service **0.9.0**, Playwright **1.56.1** / Chromium build **1194**. Browser peer runs the standalone SPA in Compatibility mode with generated tone/pattern capture. Native trust uses the account root-certificate option; browser trust is limited to the fixture leaf SPKI. WebSocket trust bindings match the SFU origin and exact SDK bearer token to keep accounts isolated. No keychain changes. Selected service/trust/evidence/assertion pieces were reused from the unmerged signalling branch, without merging its runtime.
+- Compilation/checks: pinned macOS Nix shell `cargo fmt --all -- --check` and strict locked workspace all-target/all-feature Clippy passed. Shell/Node/Python syntax and Compose call-profile validation passed.
+- Unit/offline checks: locked workspace all-feature suite passed **141 tests**, with **24** opt-in service tests ignored. Coverage includes CSPRNG generation/departure rotation, authenticated key acceptance and modern/legacy schemas, membership state keys/expiry, oldest-focus selection/refusal to fork, stale account/request tickets, same-SFU account trust isolation and latest-frame bounding/retirement. Offline GPUI tests are distinct from call-view acceptance.
+- Isolated interop: final `run.sh call` passed **both** cases (2/2, 141 seconds): native↔native and native↔Element Call 0.28.2. Audio first, then video: both Matrix membership/participant lists, bidirectional encrypted key receipt counts, exact two-identity LiveKit room, decrypted generated-tone signal blocks and new decoded video test-pattern frames on each side. The native case additionally remained joined through a 75-second sustained interval across membership expiry refresh and delayed-leave renewal. This regression caught and fixed an orphaned delayed leave on servers retaining it across state writes. These are real SDK/SFU/browser flows with synthetic capture, not physical media acceptance.
+- Packaging: the final macOS native debug `.app` built and signed ad hoc; helper removal, microphone/camera usage declarations and bundled libwebrtc notices are checked. No application launch, call views or physical permission prompts were exercised. Linux/Windows packaging scripts now include the notices but their builds were not run. Commands and full contract: `docs/architecture/CALLS.md`.
+- Remaining acceptance: actual microphone/speaker/camera and permission interactions on this Mac need a person. Public-server Element Web, Linux and Windows compilation/runtime are not attempted. Screen sharing, ringing/MSC4075 notifications, device removal, network changes, cross-service focus migration and GPUI view integration remain open. No M5 exit claimed.
+
+Native calls review fixes (2026-11-11):
+- Only current call members' encrypted tracks are received. Previously every LiveKit publication was subscribed and departed members' keys stayed installed, so someone who left the Matrix call but stayed in the SFU room kept playing. Departure now unsubscribes their tracks, clears their video slots and overwrites their installed key indices with random material.
+- Keys are sent on membership changes and retried only after a failed delivery. Previously the 5-second keepalive resent them to every member.
+- An unencrypted publication is left unsubscribed and its member marked `media_blocked`; the call continues. Previously one such publication ended the call for everyone.
+- After a rotation the new key is distributed first and used after 5 s (matrix-js-sdk `useKeyDelay`, as in Element Call 0.28.2), avoiding a dropout on every departure.
+- Frame-counting evidence sinks are behind the media crate's `evidence` feature (tests only); release builds attach no extra sink per remote track. Remote audio still plays through the platform audio device module; that path is not exercised without a person.
+- Checks: fmt and strict Clippy (with and without `evidence`) and the workspace tests pass. `run.sh call` passed 2/2 (133 s): native↔native audio, video, sustained refresh and the new departure case (a member who left the call but stayed in the SFU room sends no further received audio or video frames and has no video slots), and native↔Element Call 0.28.2 audio and video. No physical devices.
 
 Not yet verified:
 - Physical GUI checks of logout, pagination, IME and VoiceOver.
 - CI on any host; Linux and Windows builds and runs.
-- Element interoperability; IME, VoiceOver, keyboard focus; performance numbers.
+- Public-server Element interoperability; IME, VoiceOver, keyboard focus; performance numbers.
 
 Evidence log: `docs/compatibility/STATUS.md`. Architecture: `docs/architecture/GPUI.md`.
 
@@ -606,20 +615,18 @@ Evidence log: `docs/compatibility/STATUS.md`. Architecture: `docs/architecture/G
 crates/core/        Matrix services, auth, sync, timelines (owns all Matrix state)
 crates/platform/    OS credentials, notifications, appearance (later: deep links)
 crates/app/         The app (crate `twayblade`): GPUI + GPUI Kit frontend
-crates/call-host/   Credential-free Element Call process/protocol (macOS spike)
   src/ui/           Views: window chrome, timeline, conversation, panels,
                     settings, security, spaces, threads, viewer, emoji
   src/backend/      Bridges the UI to core services (snapshots, actions)
+crates/media/       Native LiveKit/libwebrtc media and bounded video handles
 macos/              Development .app bundle helper
 tests/integration/  Isolated Synapse fixture
 docs/               Architecture and compatibility evidence
 ```
-
-`call-host` is the superseded Element Call spike; it is removed once native calls work.
 
 ## References
 
 - https://github.com/matrix-org/matrix-rust-sdk
 - https://github.com/longbridge/gpui-kit
 - https://github.com/element-hq/element-call
-- https://github.com/tauri-apps/wry
+- https://github.com/livekit/rust-sdks

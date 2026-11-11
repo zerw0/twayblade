@@ -12,7 +12,7 @@ apple_env+=("DEVELOPER_DIR=$apple_developer_dir")
 run=false
 preview=false
 profile=debug
-build=(cargo build --locked -p twayblade -p twayblade-call-host)
+build=(cargo build --locked -p twayblade)
 app_args=()
 for arg in "$@"; do
     case "$arg" in
@@ -30,11 +30,10 @@ app="$repo_root/target/$profile/bundle/Twayblade.app"
 mkdir -p "$app/Contents/MacOS"
 cp "target/$profile/twayblade" "$app/Contents/MacOS/"
 cp macos/Info.plist "$app/Contents/Info.plist"
-call_app="$app/Contents/Helpers/Twayblade Call.app"
-mkdir -p "$call_app/Contents/MacOS"
-cp "target/$profile/twayblade-call-host" "$call_app/Contents/MacOS/"
-cp macos/CallHost-Info.plist "$call_app/Contents/Info.plist"
-python3 crates/call-host/prepare-assets.py --dest "$call_app/Contents/Resources/element-call"
+# Remove the superseded helper from a previously built development bundle.
+rm -rf "$app/Contents/Helpers/Twayblade Call.app"
+mkdir -p "$app/Contents/Resources/licenses"
+cp crates/media/licenses/libwebrtc-a545de4.md "$app/Contents/Resources/licenses/"
 # A stable identity keeps Keychain approval across rebuilds; ad-hoc signing
 # ("-") changes the signature every build. Create one with
 # macos/create-dev-certificate.sh, or set TWAYBLADE_SIGN_IDENTITY.
@@ -52,7 +51,6 @@ if [[ -z "$identity" ]]; then
     printf 'Signing ad hoc: macOS will ask for Keychain access after each build.\n' >&2
     printf 'Run macos/create-dev-certificate.sh once to stop that.\n' >&2
 fi
-"${apple_env[@]}" /usr/bin/codesign --force --deep --sign "$identity" "$call_app"
 "${apple_env[@]}" /usr/bin/codesign --force --deep --sign "$identity" "$app"
 printf 'Built %s\n' "$app"
 if [[ "$run" == true ]]; then

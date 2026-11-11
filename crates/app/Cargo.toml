@@ -13,7 +13,6 @@ capture = ["gpui-kit/test-support"]
 gpui-kit = "=0.9.1"
 twayblade-core = { path = "../core" }
 twayblade-platform = { path = "../platform" }
-twayblade-call-host = { path = "../call-host", default-features = false }
 tokio.workspace = true
 futures-util.workspace = true
 chrono.workspace = true

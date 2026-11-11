@@ -15,7 +15,7 @@
 - Keep SDK clients and credentials out of public UI snapshots. Bound update queues, cancel account/selection tasks, and reject stale snapshots.
 - `core`: Matrix SDK integration, authentication, messaging, crypto, and session lifecycle. It owns Matrix state.
 - `platform`: credentials, notifications, deep links, OS permissions, packaging integration.
-- Calls (M5): MatrixRTC signalling and call-key exchange in `core` through the SDK; LiveKit media with end-to-end frame encryption; video frames reach GPUI through bounded, latest-frame handles. `call-host` is a superseded spike to remove.
+- Calls (M5): MatrixRTC signalling and call-key exchange in `core` through the SDK; LiveKit media with end-to-end frame encryption; video frames reach GPUI through bounded, latest-frame handles. The superseded `call-host` web runtime has been removed.
 - `core` returns data and typed errors; user-facing wording belongs in the frontend.
 - Use SDK timelines, sync, crypto, and stores rather than reimplementing protocol state or cryptography.
 - Add crates and dependencies when needed; avoid empty abstraction layers and speculative features.

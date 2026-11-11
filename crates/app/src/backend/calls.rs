@@ -1,28 +1,31 @@
 #![allow(
     dead_code,
-    reason = "Call contracts for the UI contributor; no call views in this spike"
+    reason = "Call contracts for the UI contributor; native call views are owned by the UI contributor"
 )]
 use super::{Account, Backend, Snapshot, State, publish};
 use std::{
-    collections::HashSet,
     sync::{Arc, Mutex},
     time::Duration,
 };
 use tokio::sync::{mpsc, watch};
-use twayblade_call_host::{Failure, Frame, QUEUE_CAPACITY};
+const QUEUE_CAPACITY: usize = 32;
 use twayblade_core::calls::{
-    self, CallError, CallKind, CallPhase, CallState, CallTicket, EndReason,
+    CallError, CallKind, CallPhase, CallState, CallTicket, EndReason, NativeCall, NativeControl,
 };
 
 pub(crate) enum Control {
     Muted(bool),
     Video(bool),
+    Input(String),
+    Output(String),
+    Camera(String),
     Leave,
 }
 impl State {
     pub(super) fn cancel_call(&mut self) {
         self.call_request = self.call_request.wrapping_add(1);
         self.call_control = None;
+        self.call_video = Default::default();
         if let Some(task) = self.call_task.take() {
             task.abort();
         }
@@ -35,6 +38,18 @@ impl State {
     }
 }
 impl Backend {
+    pub(crate) fn call_video_handle(
+        &self,
+        expected: u128,
+        id: &str,
+    ) -> Option<twayblade_core::calls::LatestFrame> {
+        let state = self.state.lock().ok()?;
+        if state.account.as_ref()?.instance_id() != expected {
+            return None;
+        }
+        state.call_video.get(id)
+    }
+
     pub(crate) fn start_call(
         &self,
         expected_account: u128,
@@ -63,6 +78,9 @@ impl Backend {
         state.call_control = Some(tx);
         publish(&self.updates, |v| {
             v.call = Some(CallState {
+                local: Default::default(),
+                devices: Default::default(),
+                video_tracks: Vec::new(),
                 room_id: room.clone(),
                 kind: CallKind::Group,
                 phase: CallPhase::Starting,
@@ -156,14 +174,10 @@ pub(super) fn observe(backend: &Backend, state: &mut State, account: Account) {
                 state.cancel_call();
             }
             publish(&updates, |v| {
-                if let Some(call) = &mut v.call {
-                    if room_left {
-                        call.phase = CallPhase::Ended(EndReason::RoomLeft);
-                    }
-                    call.participants = calls
-                        .get(&call.room_id)
-                        .map(|c| c.participants.clone())
-                        .unwrap_or_default();
+                if let Some(call) = &mut v.call
+                    && room_left
+                {
+                    call.phase = CallPhase::Ended(EndReason::RoomLeft);
                 }
                 v.room_calls = calls;
             });
@@ -198,129 +212,43 @@ async fn run(
     updates: watch::Sender<Snapshot>,
     mut controls: mpsc::Receiver<Control>,
 ) -> Result<EndReason, CallError> {
-    let widget = tokio::time::timeout(
-        Duration::from_secs(30),
-        account.call_widget(&room, join, video),
-    )
-    .await
-    .map_err(|_| CallError::UnsupportedServer)??;
-    let direct = widget.room.is_direct().await.unwrap_or(false);
-    update(&shared, &updates, ticket, |c| {
-        c.kind = if direct {
-            CallKind::Direct
-        } else {
-            CallKind::Group
-        }
-    })?;
-    // Check admission after discovery and before the only runtime spawn path.
-    let mut runtime = {
+    let _ = join; // Start and join use the same room-scoped MatrixRTC session.
+    {
         let state = shared.lock().map_err(|_| CallError::StaleRequest)?;
         if !state.accepts_call(ticket) {
             return Err(CallError::StaleRequest);
         }
-        // spawn_runtime has no suspension before spawning/configuration; its
-        // synchronous counterpart keeps ticket admission atomic with spawn.
-        let runtime =
-            twayblade_call_host::supervisor::Supervisor::spawn(&calls::runtime_executable()?)
-                .map_err(|_| CallError::RuntimeExited)?;
-        runtime
-            .send
-            .try_send(Frame::Configure {
-                url: widget.url.clone(),
-                jwt_service: widget.jwt_service.clone(),
-            })
-            .map_err(|_| CallError::RuntimeExited)?;
-        runtime
-    };
-    let mut outstanding = HashSet::new();
-    let mut sdk_requests = HashSet::new();
-    let mut control_request: Option<String> = None;
-    let mut control_deadline = tokio::time::Instant::now();
-    let mut sequence = 0u64;
+    }
+    let mut call = NativeCall::start(&account, &room, video).await?.drive();
+    {
+        let mut state = shared.lock().map_err(|_| CallError::StaleRequest)?;
+        if !state.accepts_call(ticket) {
+            return Err(CallError::StaleRequest);
+        }
+        state.call_video = call.video_tracks();
+    }
+    update(&shared, &updates, ticket, |state| {
+        *state = call.updates.borrow().clone()
+    })?;
     loop {
         tokio::select! {
-            exit = &mut runtime.exited => return match exit {
-                Ok(twayblade_call_host::supervisor::Exit::Closed) => Ok(EndReason::RuntimeClosed),
-                Ok(exit) => Err(calls::runtime_error(exit)),
-                Err(_) => Err(CallError::RuntimeExited),
+            result=call.updates.changed()=>{
+                result.map_err(|_|CallError::SessionClosed)?;
+                let snapshot=call.updates.borrow().clone();
+                update(&shared,&updates,ticket,|state|*state=snapshot.clone())?;
+                if let CallPhase::Ended(reason)=snapshot.phase{return snapshot.error.map_or(Ok(reason),Err);}
             },
-            _ = tokio::time::sleep_until(control_deadline), if control_request.is_some() => return Err(CallError::ControlUnavailable),
-            control = controls.recv(), if control_request.is_none() => {
-                let data = match control {
-                    Some(Control::Muted(muted)) => serde_json::json!({"audio_enabled":!muted}),
-                    Some(Control::Video(video)) => serde_json::json!({"video_enabled":video}),
-                    _ => return Ok(EndReason::Left),
+            control=controls.recv()=>{
+                let control=match control{
+                    Some(Control::Muted(v))=>NativeControl::Muted(v),
+                    Some(Control::Video(v))=>NativeControl::Video(v),
+                    Some(Control::Input(id))=>NativeControl::Input(id),
+                    Some(Control::Output(id))=>NativeControl::Output(id),
+                    Some(Control::Camera(id))=>NativeControl::Camera(id),
+                    _=>{call.leave().await?;return Ok(EndReason::Left);}
                 };
-                sequence += 1;
-                let request = format!("twayblade-{sequence}");
-                control_request = Some(request.clone());
-                control_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-                runtime.send.try_send(Frame::Widget(serde_json::json!({"api":"toWidget","widgetId":widget.widget_id,"requestId":request,"action":"io.element.device_mute","data":data}))).map_err(|_| CallError::WidgetRejected)?;
-            },
-            frame = runtime.receive.recv() => {
-                match frame {
-                    Some(Frame::Ready) => update(&shared, &updates, ticket, |c| c.phase = CallPhase::Joining)?,
-                    Some(Frame::ServiceHealth(true)) => {},
-                    Some(Frame::ServiceHealth(false)) => return Err(CallError::UnsupportedServer),
-                    Some(Frame::Environment { secure_context, media_devices, script_transform }) => {
-                        if !secure_context || !media_devices || !script_transform { return Err(CallError::UnsupportedRuntime); }
-                    }
-                    Some(Frame::Failed(failure)) => return Err(if failure == Failure::PermissionDenied { CallError::PermissionDenied } else { CallError::WidgetRejected }),
-                    Some(Frame::Widget(value)) => {
-                        if !widget.accepts_message(&value).await { return Err(CallError::WidgetRejected); }
-                        let action = value.get("action").and_then(serde_json::Value::as_str).unwrap_or("");
-                        let response = value.get("response");
-                        if action == "im.vector.hangup" || action == "io.element.close" { return Ok(EndReason::Left); }
-                        if action == "io.element.join" && response.is_none() {
-                            // This is Element Call's own joined-session notification,
-                            // not an inference from presence or process readiness.
-                            update(&shared, &updates, ticket, |c| c.phase = CallPhase::Connected)?;
-                            let mut ack = value.clone(); ack["response"] = serde_json::json!({});
-                            runtime.send.try_send(Frame::Widget(ack)).map_err(|_| CallError::WidgetRejected)?;
-                            continue;
-                        }
-                        if action == "io.element.device_mute" {
-                            let is_response = response.is_some();
-                            if is_response && value.get("requestId").and_then(serde_json::Value::as_str) != control_request.as_deref() { return Err(CallError::WidgetRejected); }
-                            let data = response.unwrap_or(&value["data"]);
-                            update(&shared, &updates, ticket, |c| {
-                                if let Some(audio) = data.get("audio_enabled").and_then(serde_json::Value::as_bool) { c.muted = Some(!audio); }
-                                if let Some(video) = data.get("video_enabled").and_then(serde_json::Value::as_bool) { c.video = Some(video); }
-                            })?;
-                            if is_response { control_request = None; } else {
-                                let mut ack = value.clone(); ack["response"] = serde_json::json!({});
-                                runtime.send.try_send(Frame::Widget(ack)).map_err(|_| CallError::WidgetRejected)?;
-                            }
-                            continue;
-                        }
-                        if response.is_none() {
-                            if outstanding.len() >= QUEUE_CAPACITY { return Err(CallError::WidgetRejected); }
-                            let id = value.get("requestId").and_then(serde_json::Value::as_str).ok_or(CallError::WidgetRejected)?.to_owned();
-                            if !outstanding.insert(id) { return Err(CallError::WidgetRejected); }
-                        } else {
-                            let id = value.get("requestId").and_then(serde_json::Value::as_str).ok_or(CallError::WidgetRejected)?;
-                            if !sdk_requests.remove(id) { return Err(CallError::WidgetRejected); }
-                        }
-                        if !widget.handle.send(value.to_string()) { return Err(CallError::WidgetRejected); }
-                    }
-                    _ => return Err(CallError::RuntimeExited),
-                }
-            },
-            message = widget.handle.recv() => {
-                let message = message.ok_or(CallError::WidgetRejected)?;
-                if message.len() > twayblade_call_host::MAX_FRAME { return Err(CallError::WidgetRejected); }
-                let value: serde_json::Value = serde_json::from_str(&message).map_err(|_| CallError::WidgetRejected)?;
-                if !calls::policy::outgoing_room_scoped(&value, &room) {
-                    let mut ack = value; ack["response"] = serde_json::json!({});
-                    if !widget.handle.send(ack.to_string()) { return Err(CallError::WidgetRejected); }
-                    continue;
-                }
-                if value.get("response").is_some() && let Some(id) = value.get("requestId").and_then(serde_json::Value::as_str) { outstanding.remove(id); }
-                if value.get("response").is_none() {
-                    let id = value.get("requestId").and_then(serde_json::Value::as_str).ok_or(CallError::WidgetRejected)?;
-                    if sdk_requests.len() >= QUEUE_CAPACITY || !sdk_requests.insert(id.to_owned()) { return Err(CallError::WidgetRejected); }
-                }
-                runtime.send.try_send(Frame::Widget(value)).map_err(|_| CallError::WidgetRejected)?;
+                call.control(control)?;
+                update(&shared,&updates,ticket,|state|*state=call.updates.borrow().clone())?;
             }
         }
     }

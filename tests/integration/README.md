@@ -1,39 +1,34 @@
 # Local Matrix integration checks
 
-## macOS call-runtime spike
+## Native MatrixRTC audio and video
 
-Inside the project Nix shell, with the dedicated local Docker engine running:
+Inside `nix develop`, with a local Docker engine:
 
 ```sh
+npm ci --prefix tests/integration/browser --ignore-scripts
+PLAYWRIGHT_BROWSERS_PATH=target/playwright tests/integration/browser/node_modules/.bin/playwright install chromium
 MATRIX_TEST_DOCKER_CONTEXT=colima-matrixclient-test bash tests/integration/run.sh call
 ```
 
-This command starts digest-pinned Synapse, LiveKit, lk-jwt-service and the TLS
-proxy, creates fresh isolated accounts and an encrypted room, packages the
-macOS helper, and opens two real Element Call windows with media initially
-muted. It requires SDK memberships, received encryption keys and both
-participant lists; it never creates synthetic call events. It stops those
-services afterward, including on failure. Ports bind only to loopback; the
-Compose `call` profile is separate from normal fixture startup.
+The call profile runs digest-pinned Synapse, LiveKit 1.9.0, lk-jwt-service 0.9.0,
+Element Call 0.28.2 and a TLS proxy. The native headless client and pinned
+Chromium/Element peer join an encrypted room. Assertions cover memberships,
+both participant lists, encrypted key exchange (counts only), exactly two
+LiveKit participants and decrypted generated audio/video on both sides. A
+native/native case checks the same media path. No synthetic Matrix membership
+or key events, physical devices, GPUI views or WebKit are involved.
 
-**Current result: failing.** The helper exposes media/encoded-transform APIs and
-exchanges widget/SDK messages, but WebKit cannot reach the generated-CA service
-with trusted TLS. No host CA is installed and TLS is not bypassed. A separate
-HTTPS probe with the exact fixture CA returned HTTP 200. An earlier call run
-saw widget joins but no encryption-key messages. Neither an encrypted call nor
-media E2EE is established. Token-free SFU transport and WebRTC egress
-confinement remain production blockers.
+Service ports bind to loopback and only this Compose project's call services
+are stopped afterward, including on failure. Existing generated test data is
+retained; both pre-rename and current fixture server aliases are supported.
+Native clients trust the fixture CA through the account certificate option;
+Chromium trusts only the fixture leaf's SPKI. No host trust roots are changed.
+Browser consoles and credential-bearing network URLs are never forwarded.
+`MATRIX_TEST_CALL_FILTER` can select one native call test during diagnosis.
 
-For a credential-free API probe (one temporary window, no media access):
-
-```sh
-bash macos/build-call-host.sh
-python3 tests/integration/probe-call-host.py \
-  'target/debug/bundle/Twayblade Call.app/Contents/MacOS/twayblade-call-host'
-```
-
-Physical permissions/media, screen share and Element Web interop need separate
-acceptance. See [the process boundary and contracts](../../docs/architecture/CALL-HOST.md).
+Physical microphone/speaker/camera permissions and media on this Mac require a
+person. Public-server Element Web, Linux and Windows are not attempted.
+[Architecture, key formats and UI contracts](../../docs/architecture/CALLS.md).
 
 ## Other Matrix checks
 
