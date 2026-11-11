@@ -120,13 +120,21 @@ impl Supervisor {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    /// Tests write executable scripts and fork concurrently. A fork in one test
+    /// can briefly inherit another test's script descriptor before exec, so
+    /// executing that script fails ("text file busy"). Serialize create+spawn.
+    static SPAWN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    fn spawn_runtime(path: &Path) -> Supervisor {
+        let _guard = SPAWN.lock().unwrap_or_else(|e| e.into_inner());
+        Supervisor::spawn(path).unwrap()
+    }
     #[tokio::test]
     async fn supervisor_reports_real_clean_and_crash_exits() {
         for (command, expected) in [
             ("/usr/bin/true", Exit::Closed),
             ("/usr/bin/false", Exit::Crashed(Some(1))),
         ] {
-            let mut process = Supervisor::spawn(Path::new(command)).unwrap();
+            let mut process = spawn_runtime(Path::new(command));
             assert_eq!(
                 tokio::time::timeout(Duration::from_secs(3), &mut process.exited)
                     .await
@@ -138,6 +146,7 @@ mod tests {
     }
     fn sleeping_runtime() -> std::path::PathBuf {
         use std::os::unix::fs::PermissionsExt;
+        let _guard = SPAWN.lock().unwrap_or_else(|e| e.into_inner());
         let path = std::env::temp_dir().join(format!(
             "twayblade-call-supervisor-{}-{}",
             std::process::id(),
@@ -162,7 +171,7 @@ mod tests {
     #[tokio::test]
     async fn hung_runtime_is_killed_and_reaped() {
         let path = sleeping_runtime();
-        let mut process = Supervisor::spawn(&path).unwrap();
+        let mut process = spawn_runtime(&path);
         let exit = tokio::time::timeout(Duration::from_secs(12), &mut process.exited)
             .await
             .unwrap()
@@ -174,7 +183,7 @@ mod tests {
     #[tokio::test]
     async fn cancellation_kills_the_child_even_without_a_shutdown_ack() {
         let path = sleeping_runtime();
-        let process = Supervisor::spawn(&path).unwrap();
+        let process = spawn_runtime(&path);
         let pid = process.process_id;
         drop(process);
         tokio::time::timeout(Duration::from_secs(3), async {
