@@ -634,6 +634,18 @@ impl MatrixApp {
             self.accent_picker
                 .update(cx, |picker, cx| picker.set_value(value, window, cx));
         }
+        let custom = self.preferences.appearance.custom_theme.unwrap_or_default();
+        let to_hsla = |hex: u32| -> Hsla { crate::theme::swatch(hex) };
+        self.theme_bg_picker
+            .update(cx, |picker, cx| picker.set_value(to_hsla(custom.background), window, cx));
+        self.theme_sidebar_picker
+            .update(cx, |picker, cx| picker.set_value(to_hsla(custom.sidebar), window, cx));
+        self.theme_text_picker
+            .update(cx, |picker, cx| picker.set_value(to_hsla(custom.text), window, cx));
+        self.theme_secondary_picker
+            .update(cx, |picker, cx| picker.set_value(to_hsla(custom.secondary), window, cx));
+        self.theme_border_picker
+            .update(cx, |picker, cx| picker.set_value(to_hsla(custom.border), window, cx));
         self.scroller.update(cx, |state, cx| state.remeasure(cx));
         if let Some(thread) = &self.thread {
             thread.scroller.update(cx, |state, cx| state.remeasure(cx));
@@ -643,6 +655,31 @@ impl MatrixApp {
         }
         self.save_preferences(window, cx);
         cx.notify();
+    }
+    pub(crate) fn load_preset_to_custom(
+        &mut self,
+        scheme: Scheme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let dark = cx.theme().is_dark();
+        let [background, sidebar, text, muted, secondary, border] =
+            crate::theme::surfaces(scheme, dark);
+        self.preferences.appearance.custom_theme = Some(crate::preferences::CustomTheme {
+            background,
+            sidebar,
+            text,
+            muted,
+            secondary,
+            border,
+        });
+        self.preferences.appearance.scheme = Scheme::Custom;
+        self.appearance_changed(window, cx);
+    }
+    pub(crate) fn reset_custom_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.preferences.appearance.custom_theme = Some(Default::default());
+        self.preferences.appearance.scheme = Scheme::Custom;
+        self.appearance_changed(window, cx);
     }
     fn appearance_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let appearance = &self.preferences.appearance;
@@ -657,16 +694,19 @@ impl MatrixApp {
                 Scheme::Dark => true,
                 _ => dark,
             };
-            let [background, sidebar, text] = crate::theme::scheme_preview(scheme, preview_dark);
+            let [background, sidebar, text] =
+                crate::theme::scheme_preview(scheme, preview_dark, appearance.custom_theme);
             let label = scheme_label(scheme);
             tiles = tiles.child(
                 Button::new(SharedString::from(format!("scheme-{}", scheme.name())))
                     .ghost()
                     .p_0()
                     .h_auto()
+                    .w(px(72.))
                     .accessibility_label(label)
                     .child(
                         v_flex()
+                            .w(px(72.))
                             .items_center()
                             .gap(px(4.))
                             .child(
@@ -703,6 +743,8 @@ impl MatrixApp {
                             )
                             .child(
                                 div()
+                                    .w_full()
+                                    .text_center()
                                     .text_size(px(11.))
                                     .text_color(if selected {
                                         cx.theme().foreground
@@ -720,7 +762,7 @@ impl MatrixApp {
         }
         let has_variants = !matches!(
             appearance.scheme,
-            Scheme::System | Scheme::Light | Scheme::Dark
+            Scheme::System | Scheme::Light | Scheme::Dark | Scheme::Custom
         );
         let variant = segmented(
             [
@@ -784,6 +826,108 @@ impl MatrixApp {
                 .small()
                 .accessibility_label("Choose custom accent colour"),
         );
+        let custom_theme = appearance.custom_theme.unwrap_or_default();
+        let color_row = |id: &'static str,
+                         label: &'static str,
+                         color_val: u32,
+                         picker: &Entity<color_picker::ColorPickerState>,
+                         cx: &App| {
+            form_row(
+                label,
+                h_flex()
+                    .id(SharedString::from(format!("custom-color-{id}")))
+                    .gap(px(8.))
+                    .items_center()
+                    .child(
+                        div()
+                            .size(px(18.))
+                            .rounded(px(4.))
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .bg(crate::theme::swatch(color_val)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .font_family(cx.theme().mono_font_family.clone())
+                            .text_color(cx.theme().muted_foreground)
+                            .child(format!("#{:06x}", color_val)),
+                    )
+                    .child(
+                        color_picker::ColorPicker::new(picker)
+                            .small()
+                            .accessibility_label(format!("Choose {label} colour")),
+                    ),
+                cx,
+            )
+        };
+        let presets = [
+            ("preset-catppuccin", "Catppuccin", Scheme::Catppuccin),
+            ("preset-nord", "Nord", Scheme::Nord),
+            ("preset-gruvbox", "Gruvbox", Scheme::Gruvbox),
+            ("preset-solarized", "Solarized", Scheme::Solarized),
+            ("preset-dark", "Dark", Scheme::Dark),
+            ("preset-light", "Light", Scheme::Light),
+        ]
+        .into_iter()
+        .map(|(id, name, scheme)| {
+            Button::new(id)
+                .small()
+                .label(name)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.load_preset_to_custom(scheme, window, cx);
+                }))
+        });
+
+        let theme_editor_rows = vec![
+            v_flex()
+                .px(px(12.))
+                .py(px(10.))
+                .gap(px(8.))
+                .child(
+                    h_flex()
+                        .justify_between()
+                        .items_center()
+                        .child(
+                            v_flex()
+                                .gap(px(2.))
+                                .child(
+                                    div()
+                                        .text_size(px(13.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child("Theme Editor"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .text_color(muted)
+                                        .child("Customize theme surfaces and palettes, or load a preset template to edit."),
+                                ),
+                        )
+                        .child(
+                            Button::new("reset-custom-theme")
+                                .small()
+                                .label("Reset Custom")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.reset_custom_theme(window, cx);
+                                })),
+                        ),
+                )
+                .child(
+                    h_flex()
+                        .gap(px(6.))
+                        .items_center()
+                        .flex_wrap()
+                        .child(div().text_size(px(11.)).text_color(muted).child("Load template:"))
+                        .children(presets),
+                ),
+            color_row("bg", "Background", custom_theme.background, &self.theme_bg_picker, cx),
+            color_row("sidebar", "Sidebar", custom_theme.sidebar, &self.theme_sidebar_picker, cx),
+            color_row("text", "Text (Foreground)", custom_theme.text, &self.theme_text_picker, cx),
+            color_row("secondary", "Secondary surface", custom_theme.secondary, &self.theme_secondary_picker, cx),
+            color_row("border", "Border", custom_theme.border, &self.theme_border_picker, cx),
+        ];
+
         let fonts = ["Interface font", "Message font", "Code font"]
             .into_iter()
             .enumerate()
@@ -828,6 +972,178 @@ impl MatrixApp {
                 this.appearance_changed(window, cx);
             },
         );
+
+        let typography_rows = std::iter::once(
+            v_flex()
+                .px(px(12.))
+                .py(px(10.))
+                .gap(px(2.))
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("Typography & Fonts"),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(muted)
+                        .child("Choose font families and sizing for interface controls, chat messages, and code."),
+                ),
+        )
+        .chain(fonts)
+        .collect::<Vec<_>>();
+
+        let message_font = crate::theme::message_font(cx);
+        let preview_card = v_flex()
+            .px(px(12.))
+            .py(px(10.))
+            .gap(px(10.))
+            .child(
+                v_flex()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Theme & Typography Preview"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(muted)
+                            .child("Live preview of current theme colors, interface font, message font, and code font."),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .overflow_hidden()
+                    .bg(cx.theme().background)
+                    .child(
+                        v_flex()
+                            .w(px(130.))
+                            .p(px(8.))
+                            .gap(px(6.))
+                            .bg(cx.theme().sidebar)
+                            .border_r_1()
+                            .border_color(cx.theme().border)
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(cx.theme().sidebar_foreground)
+                                    .child("CHANNELS"),
+                            )
+                            .child(
+                                h_flex()
+                                    .px(px(6.))
+                                    .py(px(3.))
+                                    .rounded(px(4.))
+                                    .bg(cx.theme().accent)
+                                    .text_color(cx.theme().accent_foreground)
+                                    .text_size(px(12.))
+                                    .child("# general"),
+                            )
+                            .child(
+                                h_flex()
+                                    .px(px(6.))
+                                    .py(px(3.))
+                                    .text_color(cx.theme().muted_foreground)
+                                    .text_size(px(12.))
+                                    .child("# random"),
+                            ),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .p(px(12.))
+                            .gap(px(10.))
+                            .child(
+                                h_flex()
+                                    .justify_between()
+                                    .items_center()
+                                    .border_b_1()
+                                    .border_color(cx.theme().border)
+                                    .pb(px(6.))
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child("# general"),
+                                    )
+                                    .child(
+                                        div()
+                                            .px(px(8.))
+                                            .py(px(2.))
+                                            .rounded(px(4.))
+                                            .bg(cx.theme().primary)
+                                            .text_color(cx.theme().primary_foreground)
+                                            .text_size(px(11.))
+                                            .child("Accent"),
+                                    ),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap(px(8.))
+                                    .child(
+                                        div()
+                                            .size(px(28.))
+                                            .rounded(px(14.))
+                                            .bg(cx.theme().primary)
+                                            .text_color(cx.theme().primary_foreground)
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .text_size(px(11.))
+                                            .font_weight(FontWeight::BOLD)
+                                            .child("AR"),
+                                    )
+                                    .child(
+                                        v_flex()
+                                            .flex_1()
+                                            .gap(px(4.))
+                                            .child(
+                                                h_flex()
+                                                    .gap(px(6.))
+                                                    .items_center()
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(12.))
+                                                            .font_weight(FontWeight::SEMIBOLD)
+                                                            .child("Alex Rivera"),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(10.))
+                                                            .text_color(muted)
+                                                            .child("10:42 AM"),
+                                                    ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .font_family(message_font)
+                                                    .text_size(px(f32::from(appearance.message_size)))
+                                                    .child("Welcome to Twayblade! Customize your themes, colors, and fonts."),
+                                            )
+                                            .child(
+                                                div()
+                                                    .p(px(6.))
+                                                    .rounded(px(4.))
+                                                    .bg(cx.theme().secondary)
+                                                    .text_color(cx.theme().secondary_foreground)
+                                                    .font_family(cx.theme().mono_font_family.clone())
+                                                    .text_size(px(11.5))
+                                                    .child("let theme = Theme::catppuccin();"),
+                                            ),
+                                    ),
+                            ),
+                    ),
+            );
+
         v_flex()
             .gap(px(18.))
             .child(group(
@@ -837,7 +1153,7 @@ impl MatrixApp {
                         .px(px(12.))
                         .py(px(10.))
                         .gap(px(10.))
-                        .child(div().text_size(px(13.)).child("Appearance"))
+                        .child(div().text_size(px(13.)).child("Appearance & Themes"))
                         .child(tiles),
                 )
                 // Only curated palettes have light/dark variants to choose from.
@@ -846,6 +1162,7 @@ impl MatrixApp {
                 .collect::<Vec<_>>(),
                 cx,
             ))
+            .child(group(theme_editor_rows, cx))
             .child(group(
                 [
                     form_row(
@@ -886,7 +1203,8 @@ impl MatrixApp {
                 ],
                 cx,
             ))
-            .child(group(fonts, cx))
+            .child(group(typography_rows, cx))
+            .child(group([preview_card], cx))
             .into_any_element()
     }
 
@@ -1279,10 +1597,12 @@ fn scheme_label(scheme: Scheme) -> &'static str {
         Scheme::System => "System",
         Scheme::Light => "Light",
         Scheme::Dark => "Dark",
-        Scheme::HighContrast => "High Contrast",
-        Scheme::Solarized => "Solarized",
-        Scheme::Gruvbox => "Gruvbox",
+        Scheme::Catppuccin => "Catppuccin",
         Scheme::Nord => "Nord",
+        Scheme::Gruvbox => "Gruvbox",
+        Scheme::Solarized => "Solarized",
+        Scheme::HighContrast => "High Contrast",
+        Scheme::Custom => "Custom",
     }
 }
 

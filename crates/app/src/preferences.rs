@@ -57,26 +57,54 @@ pub(super) enum Scheme {
     Solarized,
     Gruvbox,
     Nord,
+    Catppuccin,
+    Custom,
 }
 impl Scheme {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 9] = [
         Self::System,
         Self::Light,
         Self::Dark,
-        Self::HighContrast,
-        Self::Solarized,
-        Self::Gruvbox,
+        Self::Catppuccin,
         Self::Nord,
+        Self::Gruvbox,
+        Self::Solarized,
+        Self::HighContrast,
+        Self::Custom,
     ];
     pub fn name(self) -> &'static str {
         match self {
             Self::System => "system",
             Self::Light => "light",
             Self::Dark => "dark",
-            Self::HighContrast => "high-contrast",
-            Self::Solarized => "solarized",
-            Self::Gruvbox => "gruvbox",
+            Self::Catppuccin => "catppuccin",
             Self::Nord => "nord",
+            Self::Gruvbox => "gruvbox",
+            Self::Solarized => "solarized",
+            Self::HighContrast => "high-contrast",
+            Self::Custom => "custom",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(super) struct CustomTheme {
+    pub background: u32,
+    pub sidebar: u32,
+    pub text: u32,
+    pub muted: u32,
+    pub secondary: u32,
+    pub border: u32,
+}
+impl Default for CustomTheme {
+    fn default() -> Self {
+        Self {
+            background: 0x1e1e2e,
+            sidebar: 0x181825,
+            text: 0xcdd6f4,
+            muted: 0xa6adc8,
+            secondary: 0x313244,
+            border: 0x45475a,
         }
     }
 }
@@ -101,6 +129,7 @@ pub(super) struct Appearance {
     pub code_font: Option<String>,
     /// Spacing of sidebar rows, section headers and menus.
     pub sidebar_density: SidebarDensity,
+    pub custom_theme: Option<CustomTheme>,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -140,6 +169,7 @@ impl Default for Appearance {
             message_size: 13,
             code_font: None,
             sidebar_density: SidebarDensity::Regular,
+            custom_theme: None,
         }
     }
 }
