@@ -12,7 +12,7 @@ apple_env+=("DEVELOPER_DIR=$apple_developer_dir")
 run=false
 preview=false
 profile=debug
-build=(cargo build --locked -p matrix-client-gpui)
+build=(cargo build --locked -p twayblade)
 app_args=()
 for arg in "$@"; do
     case "$arg" in
@@ -26,16 +26,20 @@ for arg in "$@"; do
 done
 if [[ "$profile" == release ]]; then build+=(--release); fi
 "${build[@]}"
-app="$repo_root/target/$profile/bundle/Matrix Client.app"
+app="$repo_root/target/$profile/bundle/Twayblade.app"
 mkdir -p "$app/Contents/MacOS"
-cp "target/$profile/matrix-client-gpui" "$app/Contents/MacOS/"
+cp "target/$profile/twayblade" "$app/Contents/MacOS/"
 cp macos/Info.plist "$app/Contents/Info.plist"
 # A stable identity keeps Keychain approval across rebuilds; ad-hoc signing
 # ("-") changes the signature every build. Create one with
-# macos/create-dev-certificate.sh, or set MATRIX_CLIENT_SIGN_IDENTITY.
-identity="${MATRIX_CLIENT_SIGN_IDENTITY:-}"
+# macos/create-dev-certificate.sh, or set TWAYBLADE_SIGN_IDENTITY.
+identity="${TWAYBLADE_SIGN_IDENTITY:-}"
 if [[ -z "$identity" ]] && "${apple_env[@]}" /usr/bin/security find-identity -p codesigning 2>/dev/null \
+    | grep -q '"Twayblade Development"'; then
+    identity="Twayblade Development"
+elif [[ -z "$identity" ]] && "${apple_env[@]}" /usr/bin/security find-identity -p codesigning 2>/dev/null \
     | grep -q '"Matrix Client Development"'; then
+    # Identity created before the rename; still stable across builds.
     identity="Matrix Client Development"
 fi
 if [[ -z "$identity" ]]; then

@@ -11,7 +11,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use matrix_client_core::security::{VerificationPhase, VerificationView};
+use twayblade_core::security::{VerificationPhase, VerificationView};
 
 impl MatrixApp {
     pub(super) fn perform_security(

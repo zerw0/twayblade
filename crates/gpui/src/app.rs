@@ -17,7 +17,7 @@ use crate::{
 };
 
 gpui_kit::actions!(
-    matrix_client,
+    twayblade,
     [
         Quit,
         OpenSettings,
@@ -99,7 +99,7 @@ pub(super) struct MatrixApp {
     /// The DM partners and members last handed to the presence observer.
     pub(super) presence_observed: Vec<String>,
     /// A destructive member action waiting for its second click: (user, action).
-    pub(super) member_confirm: Option<(String, matrix_client_core::room_state::MemberAction)>,
+    pub(super) member_confirm: Option<(String, twayblade_core::room_state::MemberAction)>,
     /// Per-group content fingerprints matching `groups`, for targeted re-measure.
     group_signatures: Vec<u64>,
     /// Latest timeline event and your latest message, derived once per snapshot.
@@ -115,7 +115,7 @@ pub(super) struct MatrixApp {
     pub emoji_picker: Option<crate::emoji::Picker>,
     pub emoji_search: Entity<InputState>,
     pub emoji_preferences: crate::emoji::Preferences,
-    pub attachment_draft: Option<matrix_client_core::conversation::AttachmentDraft>,
+    pub attachment_draft: Option<twayblade_core::conversation::AttachmentDraft>,
     pub attachment_busy: bool,
     pub attachment_sample: bool,
     pub attachment_request: u64,
@@ -891,7 +891,7 @@ impl MatrixApp {
 
     pub(super) fn activate_notification(
         &mut self,
-        target: matrix_client_platform::notifications::Activation,
+        target: twayblade_platform::notifications::Activation,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1578,11 +1578,11 @@ impl MatrixApp {
     pub(super) fn member_action(
         &mut self,
         user: String,
-        action: matrix_client_core::room_state::MemberAction,
+        action: twayblade_core::room_state::MemberAction,
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        use matrix_client_core::room_state::MemberAction;
+        use twayblade_core::room_state::MemberAction;
         let destructive = matches!(
             action,
             MemberAction::Kick | MemberAction::Ban | MemberAction::Ignore
@@ -1628,7 +1628,7 @@ impl MatrixApp {
     #[allow(dead_code, reason = "Gallery UI entry point")]
     pub fn load_media(
         &mut self,
-        kind: matrix_client_core::media::MediaKind,
+        kind: twayblade_core::media::MediaKind,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1681,7 +1681,7 @@ impl MatrixApp {
         use crate::viewer::{ImageLoad, Viewer};
         if self.navigation.selected_room.as_deref() != Some(self.snapshot.media.room.as_str())
             || self.snapshot.media.room != self.snapshot.selected_room
-            || self.snapshot.media.kind != matrix_client_core::media::MediaKind::Images
+            || self.snapshot.media.kind != twayblade_core::media::MediaKind::Images
         {
             return;
         }
@@ -1716,7 +1716,7 @@ impl MatrixApp {
     }
     pub(super) fn image_entries(&self) -> Vec<crate::viewer::ImageEntry> {
         if self.snapshot.media.room == self.snapshot.selected_room
-            && self.snapshot.media.kind == matrix_client_core::media::MediaKind::Images
+            && self.snapshot.media.kind == twayblade_core::media::MediaKind::Images
             && self.viewer.as_ref().is_some_and(|v| {
                 self.snapshot.media.items.iter().any(|i| {
                     Some(&i.event_id)
@@ -1775,7 +1775,7 @@ impl MatrixApp {
 impl MatrixApp {
     pub fn search_messages(
         &mut self,
-        query: matrix_client_core::search::SearchQuery,
+        query: twayblade_core::search::SearchQuery,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1810,7 +1810,7 @@ impl MatrixApp {
     }
     pub fn set_presence(
         &mut self,
-        state: matrix_client_core::presence::State,
+        state: twayblade_core::presence::State,
         status: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1841,7 +1841,7 @@ impl MatrixApp {
             .filter(|room| !room.is_empty())
             .and_then(|room| room.try_into().ok());
         self.search_messages(
-            matrix_client_core::search::SearchQuery {
+            twayblade_core::search::SearchQuery {
                 text,
                 room,
                 sender: None,

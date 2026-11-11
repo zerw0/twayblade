@@ -14,7 +14,7 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 use tokio::sync::oneshot;
-const PAYLOAD_KEY: &str = "matrixclient.activation.v1";
+const PAYLOAD_KEY: &str = "twayblade.activation.v1";
 type Pending = (oneshot::Sender<Activation>, Activation);
 fn pending() -> &'static Mutex<HashMap<String, Pending>> {
     static PENDING: OnceLock<Mutex<HashMap<String, Pending>>> = OnceLock::new();
@@ -28,7 +28,7 @@ define_class!(
     // SAFETY: NSObject subclass with no ivars; callbacks use only thread-safe Rust
     // channels and retained framework objects for the duration of each invocation.
     #[unsafe(super(NSObject))]
-    #[name = "MatrixClientNotificationDelegate"]
+    #[name = "TwaybladeNotificationDelegate"]
     struct NotificationDelegate;
     unsafe impl NSObjectProtocol for NotificationDelegate {}
     unsafe impl UNUserNotificationCenterDelegate for NotificationDelegate {
@@ -254,5 +254,5 @@ pub async fn set_badge(count: u64) -> Result<(), NotificationError> {
     Ok(())
 }
 pub fn open_settings() -> Result<(), NotificationError> {
-    std::process::Command::new("/usr/bin/open").arg("x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=com.matrixclient.desktop.development").spawn().map(|_|()).map_err(|_|NotificationError)
+    std::process::Command::new("/usr/bin/open").arg("x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=com.twayblade.desktop.development").spawn().map(|_|()).map_err(|_|NotificationError)
 }

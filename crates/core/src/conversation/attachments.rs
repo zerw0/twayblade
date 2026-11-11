@@ -672,9 +672,7 @@ mod integration {
             let account = crate::auth::Account::new(
                 client.clone(),
                 path.clone(),
-                matrix_client_platform::SessionStore::new(
-                    "matrix-client.integration.gallery-unused",
-                ),
+                twayblade_platform::SessionStore::new("twayblade.integration.gallery-unused"),
                 Arc::new(std::sync::Mutex::new(())),
             );
             let conversation = Conversation {

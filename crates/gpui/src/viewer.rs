@@ -13,8 +13,8 @@ use gpui_kit::{
     },
     *,
 };
-use matrix_client_core::conversation::{ImageError, ViewerImage};
 use std::sync::Arc;
+use twayblade_core::conversation::{ImageError, ViewerImage};
 
 gpui_kit::actions!(
     matrix_viewer,
@@ -305,7 +305,7 @@ impl MatrixApp {
         let room = viewer.room.clone();
         let id = viewer.entries[viewer.index].message.id.clone();
         if self.preview {
-            let result = matrix_client_core::conversation::decode_viewer_image(
+            let result = twayblade_core::conversation::decode_viewer_image(
                 include_bytes!("../assets/attachment-sample.png").to_vec(),
                 "Sample landscape.png",
             )

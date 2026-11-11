@@ -1,51 +1,80 @@
-# Matrix Client
+# Twayblade
 
-A native Rust Matrix desktop client using **GPUI + GPUI Kit** for one shared
-macOS/Linux/Windows frontend. macOS is the primary UX platform.
+A native desktop client for [Matrix](https://matrix.org), written in Rust.
 
-The current prototype connects server-name (`.well-known`) discovery, password sign-in, OS-backed
-sessions, encrypted SDK stores, room/space navigation, timelines, pagination and
-plain-text sending to the shared Rust core. Consecutive messages share sender
-headers; sender names open readonly profiles. Room-owned composers preserve drafts
-and editing state across navigation. Home excludes rooms belonging to spaces.
+One codebase for macOS, Linux and Windows, drawn with [GPUI](https://www.gpui.rs) and
+built on the official [matrix-rust-sdk](https://github.com/matrix-org/matrix-rust-sdk).
+No Electron, no web view for chat. macOS is the primary platform.
 
-OAuth/legacy SSO, verification/recovery, attachments, emoji/reactions, threads,
-Element Call and release packaging remain planned. Stickers and alternative
-timeline styles/palettes are deferred past 1.0.
+> **Status: early development.** Twayblade is not ready for daily use. Expect missing
+> features and rough edges, and use a test account. See [what works](#what-works) and
+> the [plan](PLAN.md).
 
-## Run
+## What works
 
-Install the platform dependencies in [DEVELOPMENT.md](DEVELOPMENT.md), then:
+- **Sign in** with a password, OAuth/OIDC or single sign-on in your browser; sessions are
+  kept in the OS keychain, never in plain files
+- **End-to-end encryption**: device verification with emoji, secure backup and recovery
+- **Spaces, rooms and direct messages**, with favourites, invites and room creation
+- **Conversations**: threads, replies, reactions, edits, formatted messages, images and
+  files, read receipts and typing indicators
+- **Search** conversations, and messages (encrypted rooms: history already on this device)
+- **Notifications** that follow your Matrix push rules, with private previews
+- **Make it yours**: light, dark and curated colour schemes, interface scale, fonts,
+  and Bubbles, IRC or Minimal chat styles
+
+Calls (Element Call) and the public room directory are planned.
+
+## Download
+
+Builds for macOS (Apple silicon), Linux (x86_64) and Windows (x86_64) are produced by
+the [Build binaries](../../actions/workflows/build.yml) workflow for every change on
+`main`, and attached to [releases](../../releases) for version tags.
+
+They are not signed by a developer certificate yet:
+
+- **macOS**: unzip, then right-click `Twayblade.app` › Open the first time.
+- **Windows**: SmartScreen may warn; choose More info › Run anyway.
+- **Linux**: extract and run `./twayblade` from a graphical session.
+
+Your homeserver needs native sliding sync (MSC4186), as in current Synapse
+releases.
+
+## Build from source
+
+You need [Rust 1.99+](https://rustup.rs) and your platform's build tools
+(see [DEVELOPMENT.md](DEVELOPMENT.md)).
 
 ```sh
-cargo run --locked -p matrix-client-gpui
+git clone https://github.com/zerw0/twayblade.git
+cd twayblade
+cargo run --locked --release -p twayblade
 ```
 
-On macOS, build and launch the development app with:
+On macOS, build and open the app bundle:
 
 ```sh
-bash macos/build.sh --run
+bash macos/build.sh --release --run
 ```
 
-Offline modes never read the credential store or connect to Matrix:
+Try the interface without an account, using offline sample data:
 
 ```sh
-cargo run --locked -p matrix-client-gpui -- --preview
-cargo run --locked -p matrix-client-gpui -- --preview-home
-cargo run --locked -p matrix-client-gpui -- --preview-profile
-cargo run --locked -p matrix-client-gpui -- --preview-large
+cargo run --locked -p twayblade -- --preview
 ```
 
-A normal launch restores the saved account. Only one instance can run at a
-time. Use dedicated test accounts. The homeserver must support native sliding sync.
+## Project
 
-The GPUI app builds/runs locally on macOS arm64, and offline captures/interaction
-tests pass. A separate isolated Synapse test passed encrypted SDK/application
-service delivery and same-device encrypted-store reopening. Live GPUI account
-flows, Element interoperability and native Linux/Windows execution still need
-acceptance. GPUI controls are custom-rendered; AppKit widgets, Liquid Glass and
-complete accessibility are not implied.
+| | |
+|---|---|
+| [PLAN.md](PLAN.md) | Roadmap, milestones and what has been verified |
+| [DEVELOPMENT.md](DEVELOPMENT.md) | Setup for macOS, Linux and Windows, tests, troubleshooting |
+| [AGENTS.md](AGENTS.md) | Contributor rules: architecture, security, branches |
+| [docs/](docs/) | Architecture notes and compatibility evidence |
 
-See [PLAN.md](PLAN.md), [AGENTS.md](AGENTS.md), [architecture](docs/architecture/GPUI.md)
-and [compatibility evidence](docs/compatibility/STATUS.md). Use a feature branch for
-contributions; repository-local AI tooling and credentials are ignored.
+The code is split into three crates: `twayblade-core` (Matrix, sessions, encryption),
+`twayblade-platform` (keychain, notifications, OS integration) and `twayblade` (the app).
+
+Contributions go through feature branches and pull requests. Run
+`cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings` and
+`cargo test --workspace` before opening one.

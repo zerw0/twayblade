@@ -25,9 +25,9 @@ Certificates are renewed automatically when nearing expiry.
 On macOS with Colima, use a dedicated VM without changing the default context:
 
 ```sh
-colima start --profile matrixclient-test --cpu 2 --memory 3 --disk 10 --activate=false
-MATRIX_TEST_DOCKER_CONTEXT=colima-matrixclient-test bash tests/integration/run.sh
-colima stop --profile matrixclient-test
+colima start --profile twayblade-test --cpu 2 --memory 3 --disk 10 --activate=false
+MATRIX_TEST_DOCKER_CONTEXT=colima-twayblade-test bash tests/integration/run.sh
+colima stop --profile twayblade-test
 ```
 
 Docker Desktop or a native Linux Docker daemon can use its current local context.
@@ -57,7 +57,7 @@ app's normal credential entry.
 ## Optional Nix invocation
 
 ```sh
-MATRIX_TEST_DOCKER_CONTEXT=colima-matrixclient-test \
+MATRIX_TEST_DOCKER_CONTEXT=colima-twayblade-test \
   nix develop --command bash tests/integration/run.sh
 ```
 
@@ -71,7 +71,7 @@ References: [Synapse Docker instructions](https://github.com/element-hq/synapse/
 With an unlocked login Keychain, run in the project shell:
 
 ```sh
-MATRIX_TEST_DOCKER_CONTEXT=colima-matrixclient-test bash tests/integration/run.sh keychain
+MATRIX_TEST_DOCKER_CONTEXT=colima-twayblade-test bash tests/integration/run.sh keychain
 ```
 
 This invokes the normal authentication implementation with a unique test
@@ -90,7 +90,7 @@ builds; release signing and migration acceptance remain unverified.
 ## Functional workspace service checks
 
 ```sh
-MATRIX_TEST_DOCKER_CONTEXT=colima-matrixclient-test bash tests/integration/run.sh services
+MATRIX_TEST_DOCKER_CONTEXT=colima-twayblade-test bash tests/integration/run.sh services
 ```
 
 Starts the isolated fixture, runs the following checks sequentially, then stops
@@ -145,7 +145,7 @@ generates a fresh user and runs `secure_backup_fresh_store_recovery_and_sas`.
 It covers setup, wrong key, a fresh store restoring old encrypted history live,
 SAS/cancel, other-device sign-out and recovery-key reset. The original device is
 offline during backup restoration to exclude key gossip as the recovery source.
-The runner prefers an existing local `colima-matrixclient-test` context; override
+The runner prefers an existing local `colima-twayblade-test` context; override
 with `MATRIX_TEST_DOCKER_CONTEXT`. Avoid two fixture VMs sharing the same ports.
 
 Run `bash tests/integration/run.sh media` for generated-user plain/encrypted file

@@ -14,7 +14,7 @@ use gpui_kit::{
     prelude::FluentBuilder,
     *,
 };
-use matrix_client_core::profile::ProfileUpdate;
+use twayblade_core::profile::ProfileUpdate;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Section {
@@ -78,7 +78,7 @@ impl MatrixApp {
         if let Some(backend) = &self.backend {
             backend.set_notification_config(crate::backend::NotificationConfig {
                 device: self.preferences.notifications.clone(),
-                context: matrix_client_core::notifications::NotificationContext {
+                context: twayblade_core::notifications::NotificationContext {
                     enabled: self.preferences.notifications.enabled,
                     active: self.notification_window_active,
                     focused_room: self.navigation.selected_room.clone(),
@@ -89,7 +89,7 @@ impl MatrixApp {
     }
 
     fn device_notifications(&self, cx: &mut Context<Self>) -> AnyElement {
-        use matrix_client_platform::notifications::Permission;
+        use twayblade_platform::notifications::Permission;
         let permission = if self.preview {
             Permission::Granted
         } else {
@@ -207,7 +207,7 @@ impl MatrixApp {
                     .child(if preview {
                         "Alex · General"
                     } else {
-                        "Matrix Client"
+                        "Twayblade"
                     }),
             )
             .child(div().text_size(px(13.)).child(if preview {
@@ -221,7 +221,7 @@ impl MatrixApp {
                     .label("Open conversation")
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.activate_notification(
-                            matrix_client_platform::notifications::Activation {
+                            twayblade_platform::notifications::Activation {
                                 account: this.snapshot.account_instance,
                                 room: "general".into(),
                                 thread: Some("$sample-0:preview.invalid".into()),
@@ -236,11 +236,11 @@ impl MatrixApp {
 
     pub(super) fn change_notification_rule(
         &mut self,
-        change: matrix_client_core::notifications::RuleChange,
+        change: twayblade_core::notifications::RuleChange,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use matrix_client_core::notifications::{RoomMode, RuleChange};
+        use twayblade_core::notifications::{RoomMode, RuleChange};
         if self.notification_busy {
             return;
         }
@@ -299,7 +299,7 @@ impl MatrixApp {
     }
 
     fn notification_settings(&self, cx: &mut Context<Self>) -> AnyElement {
-        use matrix_client_core::notifications::{DefaultLevel, RoomClass, RuleChange};
+        use twayblade_core::notifications::{DefaultLevel, RoomClass, RuleChange};
         if !self.preview && !self.snapshot.notifications.ready {
             return div()
                 .text_size(px(13.))
@@ -408,7 +408,7 @@ impl MatrixApp {
         room: &str,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        use matrix_client_core::notifications::{RoomMode, RuleChange};
+        use twayblade_core::notifications::{RoomMode, RuleChange};
         if !self.preview && !self.snapshot.notifications.ready {
             return div().into_any_element();
         }
@@ -1243,7 +1243,7 @@ impl Render for SettingsWindow {
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .text_size(px(13.))
-            .key_context("MatrixClient")
+            .key_context("Twayblade")
             .on_action(
                 cx.listener(|this, _: &crate::app::IncreaseScale, window, cx| {
                     this.main

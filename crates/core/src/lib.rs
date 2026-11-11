@@ -225,8 +225,8 @@ mod tests {
             "example.org:8448"
         );
         assert_eq!(
-            server_input("https://matrix-client.matrix.org/").unwrap(),
-            "https://matrix-client.matrix.org/"
+            server_input("https://twayblade.matrix.org/").unwrap(),
+            "https://twayblade.matrix.org/"
         );
         for input in [
             "",

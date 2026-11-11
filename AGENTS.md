@@ -1,4 +1,4 @@
-# Matrix Client contributor instructions
+# Twayblade contributor instructions
 
 ## Product and scope
 - Read `PLAN.md` before implementation. Work through its milestones and keep its progress section accurate.

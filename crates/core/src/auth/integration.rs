@@ -421,7 +421,7 @@ async fn keychain_session_lifecycle_phase() {
         "parse test CA",
     );
     let context = AuthContext {
-        session_store: secrets::SessionStore::new(&format!("matrix-client.integration.{run_id}")),
+        session_store: secrets::SessionStore::new(&format!("twayblade.integration.{run_id}")),
         data_dir: root.join(format!("lifecycle-{run_id}")),
         root_certificate: Some(certificate),
     };
@@ -627,13 +627,13 @@ async fn timeline_metadata_and_send_queue_actions() {
     let alice = Account::new(
         alice_client,
         run.join("alice"),
-        secrets::SessionStore::new("matrix-client.integration.metadata-unused"),
+        secrets::SessionStore::new("twayblade.integration.metadata-unused"),
         Arc::new(Mutex::new(())),
     );
     let bob = Account::new(
         bob_client,
         run.join("bob"),
-        secrets::SessionStore::new("matrix-client.integration.metadata-unused"),
+        secrets::SessionStore::new("twayblade.integration.metadata-unused"),
         Arc::new(Mutex::new(())),
     );
     let alice_sync = sync(&alice);
@@ -732,7 +732,7 @@ async fn timeline_metadata_and_send_queue_actions() {
     ] {
         let content: RoomMessageEventContent = checked(
             serde_json::from_value(
-                serde_json::json!({"msgtype":msgtype,"body":"sample item","url":"mxc://matrixclient.test/sample", "info":{"size":2048}}),
+                serde_json::json!({"msgtype":msgtype,"body":"sample item","url":"mxc://twayblade.test/sample", "info":{"size":2048}}),
             ),
             "message fixture",
         );
@@ -922,13 +922,13 @@ async fn members_typing_and_read_receipts() {
     let alice = Account::new(
         alice_client,
         run.join("alice"),
-        secrets::SessionStore::new("matrix-client.integration.unused"),
+        secrets::SessionStore::new("twayblade.integration.unused"),
         Arc::new(Mutex::new(())),
     );
     let bob = Account::new(
         bob_client,
         run.join("bob"),
-        secrets::SessionStore::new("matrix-client.integration.unused"),
+        secrets::SessionStore::new("twayblade.integration.unused"),
         Arc::new(Mutex::new(())),
     );
     let alice_sync = sync(&alice);
@@ -1116,7 +1116,7 @@ async fn pagination_preserves_message_identity() {
     let account = Account::new(
         alice_client,
         run.join("alice"),
-        secrets::SessionStore::new("matrix-client.integration.unused"),
+        secrets::SessionStore::new("twayblade.integration.unused"),
         Arc::new(Mutex::new(())),
     );
     let syncing = sync(&account);
@@ -1240,7 +1240,7 @@ async fn room_list_service_tracks_recency_and_details() {
     let account = Account::new(
         alice_client,
         run.join("alice"),
-        secrets::SessionStore::new("matrix-client.integration.unused"),
+        secrets::SessionStore::new("twayblade.integration.unused"),
         Arc::new(Mutex::new(())),
     );
     let mut updates = Box::pin(account.room_updates());
@@ -1327,7 +1327,7 @@ async fn revoked_device_and_soft_logout_recovery() {
         let scope = Uuid::new_v4();
         let context = AuthContext {
             session_store: secrets::SessionStore::new(&format!(
-                "matrix-client.integration.recovery.{scope}"
+                "twayblade.integration.recovery.{scope}"
             )),
             data_dir: root.join(format!("lifecycle-{scope}")),
             root_certificate: Some(certificate.clone()),
@@ -1540,13 +1540,13 @@ async fn threads_send_paginate_receipts_and_closed_unread() {
     let alice = Account::new(
         alice_client,
         run.join("alice"),
-        secrets::SessionStore::new("matrix-client.integration.unused"),
+        secrets::SessionStore::new("twayblade.integration.unused"),
         Arc::new(Mutex::new(())),
     );
     let bob = Account::new(
         bob_client,
         run.join("bob"),
-        secrets::SessionStore::new("matrix-client.integration.unused"),
+        secrets::SessionStore::new("twayblade.integration.unused"),
         Arc::new(Mutex::new(())),
     );
     let alice_sync = sync(&alice);
@@ -1828,13 +1828,13 @@ async fn spaces_hierarchy_invites_creation_restricted_join_and_selective_leave()
     let alice = Account::new(
         alice_client,
         run.join("alice"),
-        secrets::SessionStore::new("matrix-client.integration.unused"),
+        secrets::SessionStore::new("twayblade.integration.unused"),
         Arc::new(Mutex::new(())),
     );
     let bob = Account::new(
         bob_client,
         run.join("bob"),
-        secrets::SessionStore::new("matrix-client.integration.unused"),
+        secrets::SessionStore::new("twayblade.integration.unused"),
         Arc::new(Mutex::new(())),
     );
     let alice_sync = sync(&alice);
@@ -2186,7 +2186,7 @@ async fn notification_rules_round_trip_and_second_client_changes() {
         accounts.push(Account::new(
             client,
             run.join(store),
-            secrets::SessionStore::new("matrix-client.integration.unused"),
+            secrets::SessionStore::new("twayblade.integration.unused"),
             Arc::new(Mutex::new(())),
         ));
     }
@@ -2293,7 +2293,7 @@ async fn notification_rules_round_trip_and_second_client_changes() {
     let bob = Account::new(
         bob_client,
         run.join("bob"),
-        secrets::SessionStore::new("matrix-client.integration.unused"),
+        secrets::SessionStore::new("twayblade.integration.unused"),
         Arc::new(Mutex::new(())),
     );
     let bob_sync = sync(&bob);
@@ -2454,7 +2454,7 @@ async fn encrypted_notification_delivery_and_private_preview() {
         accounts.push(Account::new(
             client,
             run.join(name),
-            secrets::SessionStore::new("matrix-client.integration.unused"),
+            secrets::SessionStore::new("twayblade.integration.unused"),
             Arc::new(Mutex::new(())),
         ));
     }

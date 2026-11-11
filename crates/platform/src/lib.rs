@@ -11,6 +11,12 @@ pub use motion::{reduce_motion, reduce_motion_changes};
 compile_error!("No credential backend is configured for this operating system");
 
 const SERVICE: &str = if cfg!(debug_assertions) {
+    "twayblade.development"
+} else {
+    "twayblade"
+};
+/// The service used before the rename to Twayblade; read once and migrated.
+const LEGACY_SERVICE: &str = if cfg!(debug_assertions) {
     "matrix-client.development"
 } else {
     "matrix-client"
@@ -27,11 +33,16 @@ pub struct SecretStoreError;
 #[derive(Clone)]
 pub struct SessionStore {
     service: String,
+    /// Only the application's own slot migrates from the pre-rename service.
+    legacy: Option<String>,
 }
 
 impl Default for SessionStore {
     fn default() -> Self {
-        Self::new(SERVICE)
+        Self {
+            service: SERVICE.into(),
+            legacy: Some(LEGACY_SERVICE.into()),
+        }
     }
 }
 
@@ -39,6 +50,7 @@ impl SessionStore {
     pub fn new(service: &str) -> Self {
         Self {
             service: service.into(),
+            legacy: None,
         }
     }
 
@@ -51,9 +63,26 @@ impl SessionStore {
     pub fn load_sync(&self) -> Result<Option<Zeroizing<String>>, SecretStoreError> {
         match self.entry()?.get_password() {
             Ok(value) => Ok(Some(Zeroizing::new(value))),
-            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(keyring::Error::NoEntry) => self.migrate_legacy(),
             Err(_) => Err(SecretStoreError),
         }
+    }
+
+    /// Moves a session saved under the pre-rename service into this slot: the
+    /// new item is written first, and the old one removed only after that.
+    fn migrate_legacy(&self) -> Result<Option<Zeroizing<String>>, SecretStoreError> {
+        let Some(legacy) = &self.legacy else {
+            return Ok(None);
+        };
+        let old = keyring::Entry::new(legacy, ACCOUNT).map_err(|_| SecretStoreError)?;
+        let value = match old.get_password() {
+            Ok(value) => Zeroizing::new(value),
+            Err(keyring::Error::NoEntry) => return Ok(None),
+            Err(_) => return Err(SecretStoreError),
+        };
+        self.save_sync(&value)?;
+        let _ = old.delete_credential();
+        Ok(Some(value))
     }
 
     pub fn save_sync(&self, value: &str) -> Result<(), SecretStoreError> {

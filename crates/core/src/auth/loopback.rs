@@ -124,9 +124,9 @@ async fn handle(
     }
     let result = parse_request_kind(&request, redirect, state, kind);
     let response: &[u8] = if result.is_ok() {
-        b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\nReturn to Matrix Client to finish signing in."
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\nReturn to Twayblade to finish signing in."
     } else {
-        b"HTTP/1.1 400 Bad Request\r\nCache-Control: no-store\r\nConnection: close\r\n\r\nSign-in callback rejected. Return to Matrix Client."
+        b"HTTP/1.1 400 Bad Request\r\nCache-Control: no-store\r\nConnection: close\r\n\r\nSign-in callback rejected. Return to Twayblade."
     };
     // A browser disconnect after delivery must not discard a valid callback.
     let _ = socket.write_all(response).await;

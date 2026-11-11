@@ -145,7 +145,7 @@ impl MatrixApp {
     }
 
     fn session_recovery_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        use matrix_client_core::auth::SessionState;
+        use twayblade_core::auth::SessionState;
         if self.snapshot.session_state == SessionState::SoftLoggedOut && self.options.is_some() {
             return self.sign_in_view(cx);
         }
@@ -247,7 +247,7 @@ impl MatrixApp {
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(
                             if self.snapshot.session_state
-                                == matrix_client_core::auth::SessionState::SoftLoggedOut
+                                == twayblade_core::auth::SessionState::SoftLoggedOut
                             {
                                 "You were signed out"
                             } else {
@@ -304,7 +304,7 @@ impl MatrixApp {
                                 .disabled(
                                     self.busy
                                         || self.snapshot.session_state
-                                            != matrix_client_core::auth::SessionState::Active,
+                                            != twayblade_core::auth::SessionState::Active,
                                 )
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.options = None;
@@ -375,7 +375,7 @@ impl MatrixApp {
                                 .child(Input::new(&self.username).disabled(
                                     self.busy
                                         || self.snapshot.session_state
-                                            != matrix_client_core::auth::SessionState::Active,
+                                            != twayblade_core::auth::SessionState::Active,
                                 )),
                         )
                         .child(
@@ -417,7 +417,7 @@ impl MatrixApp {
                 .text_color(muted)
                 .text_center()
                 .child(format!(
-                    "Matrix Client keeps your session securely in the {}.",
+                    "Twayblade keeps your session securely in the {}.",
                     secret_store_name()
                 )),
         );
@@ -772,7 +772,7 @@ impl MatrixApp {
             .id(SharedString::from(format!("room-context-{}", room.id)))
             .child(row)
             .context_menu(move |mut menu, _, _| {
-                use matrix_client_core::notifications::{RoomMode, RuleChange};
+                use twayblade_core::notifications::{RoomMode, RuleChange};
                 let favourite_view = weak.clone();
                 let favourite_room = room_id.clone();
                 menu = menu
@@ -906,7 +906,7 @@ impl MatrixApp {
     /// presence) and account settings.
     fn own_menu(&self, user: String, cx: &mut Context<Self>) -> AnyElement {
         use gpui_kit::component::menu::DropdownMenu;
-        use matrix_client_core::presence::State;
+        use twayblade_core::presence::State;
         let avatar = self.avatar_image(self.own_avatar.as_deref(), &user, &user, 22., 11., cx);
         let own = self.snapshot.own_presence.clone();
         let enabled = self.snapshot.presence_enabled && !self.preview;
@@ -983,11 +983,11 @@ impl MatrixApp {
     pub(super) fn with_presence(
         &self,
         avatar: AnyElement,
-        presence: Option<&matrix_client_core::presence::Presence>,
+        presence: Option<&twayblade_core::presence::Presence>,
         size: f32,
         cx: &App,
     ) -> AnyElement {
-        use matrix_client_core::presence::State;
+        use twayblade_core::presence::State;
         let palette = theme::palette(cx);
         let Some(presence) = presence.filter(|_| self.snapshot.presence_enabled) else {
             return avatar;
@@ -3151,7 +3151,7 @@ impl MatrixApp {
     }
 
     fn info_about(&self, room: &Room, cx: &mut Context<Self>) -> AnyElement {
-        use matrix_client_core::notifications::{RoomMode, RuleChange};
+        use twayblade_core::notifications::{RoomMode, RuleChange};
         let palette = theme::palette(cx);
         let muted = cx.theme().muted_foreground;
         let mode = self.snapshot.notifications.room_mode(&room.id);
@@ -3392,7 +3392,7 @@ impl MatrixApp {
     /// Info › Files: the room's paginated gallery (Images grid, Files list).
     /// Offline previews have no server, so they list the loaded timeline.
     fn info_files(&self, cx: &mut Context<Self>) -> AnyElement {
-        use matrix_client_core::media::MediaKind;
+        use twayblade_core::media::MediaKind;
         if self.preview || self.backend.is_none() {
             return self.info_files_loaded(cx);
         }
@@ -3414,8 +3414,7 @@ impl MatrixApp {
                     )
             }),
         );
-        let items: &[matrix_client_core::media::MediaItem] =
-            if current { &media.items } else { &[] };
+        let items: &[twayblade_core::media::MediaItem] = if current { &media.items } else { &[] };
         let mut body = v_flex().px(px(12.)).py(px(10.)).gap(px(8.));
         if kind == MediaKind::Images {
             // Thumbnails come from already-loaded timeline previews; others show
@@ -3723,7 +3722,7 @@ impl MatrixApp {
     /// Message, Verify and Ignore for anyone; Mute, Kick and Ban when your power
     /// level allows. Kick, Ban and Ignore need a second click to confirm.
     fn member_actions(&self, user: &str, cx: &mut Context<Self>) -> AnyElement {
-        use matrix_client_core::room_state::MemberAction;
+        use twayblade_core::room_state::MemberAction;
         let member = self
             .snapshot
             .members
@@ -4049,126 +4048,125 @@ impl Render for MatrixApp {
             self.security_open = false;
             self.open_settings(crate::settings::Section::Security, cx);
         }
-        let content =
-            if self.snapshot.session_state != matrix_client_core::auth::SessionState::Active {
-                self.session_recovery_view(cx)
-            } else if self.snapshot.user_id.is_empty() {
-                self.sign_in_view(cx)
+        let content = if self.snapshot.session_state != twayblade_core::auth::SessionState::Active {
+            self.session_recovery_view(cx)
+        } else if self.snapshot.user_id.is_empty() {
+            self.sign_in_view(cx)
+        } else {
+            let reduce = self.snapshot.reduce_motion;
+            let panel = if self.management.is_some() {
+                None
+            } else if self.search_open {
+                Some(("panel-search", self.search_view(cx)))
+            } else if self.thread.is_some() {
+                Some(("panel-thread", self.thread_view(cx)))
+            } else if self.profile.is_some() {
+                Some(("panel-profile", self.profile_view(cx)))
+            } else if self.details_open && self.navigation.selected_room.is_some() {
+                Some(("panel-details", self.details_view(cx)))
             } else {
-                let reduce = self.snapshot.reduce_motion;
-                let panel = if self.management.is_some() {
-                    None
-                } else if self.search_open {
-                    Some(("panel-search", self.search_view(cx)))
-                } else if self.thread.is_some() {
-                    Some(("panel-thread", self.thread_view(cx)))
-                } else if self.profile.is_some() {
-                    Some(("panel-profile", self.profile_view(cx)))
-                } else if self.details_open && self.navigation.selected_room.is_some() {
-                    Some(("panel-details", self.details_view(cx)))
-                } else {
-                    None
-                }
-                // The side panel slides in from the trailing edge when it opens or changes.
-                .map(|(key, panel)| {
-                    motion::slide_in(
-                        // The window-relative width cap lives here, on the panel's direct row child.
-                        h_flex()
-                            .h_full()
-                            .flex_none()
-                            .max_w(relative(0.32))
-                            .items_stretch()
-                            .child(panel),
-                        key,
-                        reduce,
-                    )
-                });
-                let room_key = SharedString::from(format!(
-                    "conversation-{}",
-                    self.navigation.selected_room.as_deref().unwrap_or("none")
-                ));
-                let full_page = self
-                    .management
-                    .as_ref()
-                    .is_some_and(|page| !page.kind.is_dialog());
-                let dialog = self
-                    .management
-                    .as_ref()
-                    .is_some_and(|page| page.kind.is_dialog());
-                v_flex()
-                    .size_full()
-                    .child(self.window_titlebar(cx))
-                    .child(
-                        h_flex()
-                            .relative()
-                            .flex_1()
-                            .min_h_0()
-                            .items_stretch()
-                            .child(self.rail_view(cx))
-                            .when(self.sidebar_open, |row| row.child(self.sidebar_view(cx)))
-                            .child(if full_page {
-                                self.management_view(cx)
-                            } else {
-                                // Switching rooms crossfades the conversation briefly.
-                                motion::fade_in(
-                                    h_flex()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .h_full()
-                                        .items_stretch()
-                                        .child(self.conversation_view(cx)),
-                                    room_key,
-                                    reduce,
-                                )
-                            })
-                            .children(panel)
-                            // Create Room / New DM / Join Space: a small sheet over a dimmed window.
-                            .when(dialog, |row| {
-                                row.child(
-                                    div()
-                                        .id("management-backdrop")
-                                        .absolute()
-                                        .inset_0()
-                                        .bg(gpui_kit::black().opacity(0.35))
-                                        .flex()
-                                        .items_start()
-                                        .justify_center()
-                                        .pt(px(72.))
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.management = None;
-                                            cx.notify();
-                                        }))
-                                        .child(motion::rise(
-                                            div()
-                                                .id("management-dialog")
-                                                .w(px(440.))
-                                                .rounded(px(12.))
-                                                .overflow_hidden()
-                                                .border_1()
-                                                .border_color(cx.theme().border)
-                                                .shadow_lg()
-                                                // Clicks inside the sheet must not close it.
-                                                .on_click(|_, _, cx| cx.stop_propagation())
-                                                .child(self.management_view(cx)),
-                                            "management-dialog-motion",
-                                            reduce,
-                                        )),
-                                )
-                            }),
-                    )
-                    .into_any_element()
-            };
+                None
+            }
+            // The side panel slides in from the trailing edge when it opens or changes.
+            .map(|(key, panel)| {
+                motion::slide_in(
+                    // The window-relative width cap lives here, on the panel's direct row child.
+                    h_flex()
+                        .h_full()
+                        .flex_none()
+                        .max_w(relative(0.32))
+                        .items_stretch()
+                        .child(panel),
+                    key,
+                    reduce,
+                )
+            });
+            let room_key = SharedString::from(format!(
+                "conversation-{}",
+                self.navigation.selected_room.as_deref().unwrap_or("none")
+            ));
+            let full_page = self
+                .management
+                .as_ref()
+                .is_some_and(|page| !page.kind.is_dialog());
+            let dialog = self
+                .management
+                .as_ref()
+                .is_some_and(|page| page.kind.is_dialog());
+            v_flex()
+                .size_full()
+                .child(self.window_titlebar(cx))
+                .child(
+                    h_flex()
+                        .relative()
+                        .flex_1()
+                        .min_h_0()
+                        .items_stretch()
+                        .child(self.rail_view(cx))
+                        .when(self.sidebar_open, |row| row.child(self.sidebar_view(cx)))
+                        .child(if full_page {
+                            self.management_view(cx)
+                        } else {
+                            // Switching rooms crossfades the conversation briefly.
+                            motion::fade_in(
+                                h_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .h_full()
+                                    .items_stretch()
+                                    .child(self.conversation_view(cx)),
+                                room_key,
+                                reduce,
+                            )
+                        })
+                        .children(panel)
+                        // Create Room / New DM / Join Space: a small sheet over a dimmed window.
+                        .when(dialog, |row| {
+                            row.child(
+                                div()
+                                    .id("management-backdrop")
+                                    .absolute()
+                                    .inset_0()
+                                    .bg(gpui_kit::black().opacity(0.35))
+                                    .flex()
+                                    .items_start()
+                                    .justify_center()
+                                    .pt(px(72.))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.management = None;
+                                        cx.notify();
+                                    }))
+                                    .child(motion::rise(
+                                        div()
+                                            .id("management-dialog")
+                                            .w(px(440.))
+                                            .rounded(px(12.))
+                                            .overflow_hidden()
+                                            .border_1()
+                                            .border_color(cx.theme().border)
+                                            .shadow_lg()
+                                            // Clicks inside the sheet must not close it.
+                                            .on_click(|_, _, cx| cx.stop_propagation())
+                                            .child(self.management_view(cx)),
+                                        "management-dialog-motion",
+                                        reduce,
+                                    )),
+                            )
+                        }),
+                )
+                .into_any_element()
+        };
         let overlay = self.viewer.as_ref().map(|_| self.viewer_view(window, cx));
         let workspace = !self.security_open
             && !self.snapshot.user_id.is_empty()
-            && self.snapshot.session_state == matrix_client_core::auth::SessionState::Active;
+            && self.snapshot.session_state == twayblade_core::auth::SessionState::Active;
         v_flex()
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .text_size(px(13.))
             .track_focus(&self.focus)
-            .key_context("MatrixClient")
+            .key_context("Twayblade")
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if this.viewer.is_none() {
                     this.emoji_key(event, window, cx);

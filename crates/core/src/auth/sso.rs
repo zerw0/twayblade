@@ -137,7 +137,7 @@ impl SsoLogin {
                 );
             }
             login
-                .initial_device_display_name("Matrix Client desktop")
+                .initial_device_display_name("Twayblade desktop")
                 .await
                 .map_err(|_| AuthError::Login)?;
             self.record
@@ -183,7 +183,6 @@ impl SsoLogin {
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
-    use matrix_client_platform::SessionStore;
     use matrix_sdk::{
         reqwest::Certificate, ruma::api::client::session::get_login_types::v3::LoginType,
     };
@@ -192,6 +191,7 @@ mod tests {
         path::Path,
         process::{Command, Stdio},
     };
+    use twayblade_platform::SessionStore;
 
     #[tokio::test]
     #[ignore = "requires isolated legacy Synapse + MAS OIDC provider and unlocked Keychain"]
@@ -199,7 +199,7 @@ mod tests {
         let scope = Uuid::new_v4();
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-data/local/sso");
         let context = AuthContext {
-            session_store: SessionStore::new(&format!("matrix-client.integration.sso.{scope}")),
+            session_store: SessionStore::new(&format!("twayblade.integration.sso.{scope}")),
             data_dir: root.join(format!("lifecycle-{scope}")),
             root_certificate: Some(
                 Certificate::from_pem(
@@ -253,7 +253,7 @@ mod tests {
             .await
             .expect("SSO callback/loginToken exchange");
         assert!(browser.await.expect("browser task").0.success());
-        assert!(account.user_id().ends_with(":sso.matrixclient.test"));
+        assert!(account.user_id().ends_with(":sso.twayblade.test"));
         account.client.whoami().await.expect("SSO session accepted");
         let store = account.session_store.clone();
         let path = account.store_path.clone();

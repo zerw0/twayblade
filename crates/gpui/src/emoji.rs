@@ -147,7 +147,7 @@ pub(super) struct Preferences {
 impl Preferences {
     fn path() -> Option<PathBuf> {
         Some(
-            directories::ProjectDirs::from("", "MatrixClient", "MatrixClient")?
+            directories::ProjectDirs::from("", "Twayblade", "Twayblade")?
                 .config_dir()
                 .join("emoji.json"),
         )

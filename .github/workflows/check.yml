@@ -36,4 +36,4 @@ jobs:
       - name: Test
         run: cargo test --locked --workspace --all-features
       - name: Build native desktop
-        run: cargo build --locked -p matrix-client-gpui
+        run: cargo build --locked -p twayblade

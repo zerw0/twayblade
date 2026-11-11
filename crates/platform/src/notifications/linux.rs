@@ -44,7 +44,7 @@ pub async fn notify(
         .map_err(|_| NotificationError)?;
     let mut hints = HashMap::new();
     hints.insert("suppress-sound", Value::Bool(!notification.sound));
-    hints.insert("desktop-entry", Value::from("com.matrixclient.desktop"));
+    hints.insert("desktop-entry", Value::from("com.twayblade.desktop"));
     if notification.sound {
         hints.insert("sound-name", Value::from("message-new-instant"));
     }
@@ -53,7 +53,7 @@ pub async fn notify(
         .call(
             "Notify",
             &(
-                "Matrix Client",
+                "Twayblade",
                 0u32,
                 "",
                 notification.title,
@@ -98,10 +98,10 @@ pub async fn set_badge(count: u64) -> Result<(), NotificationError> {
         .await?
         .emit_signal(
             None::<&str>,
-            "/com/matrixclient/desktop",
+            "/com/twayblade/desktop",
             "com.canonical.Unity.LauncherEntry",
             "Update",
-            &("application://com.matrixclient.desktop.desktop", properties),
+            &("application://com.twayblade.desktop.desktop", properties),
         )
         .await
         .map_err(|_| NotificationError)

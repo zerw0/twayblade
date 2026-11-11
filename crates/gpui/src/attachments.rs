@@ -161,7 +161,7 @@ impl MatrixApp {
         }
         let room = self.snapshot.selected_room.clone();
         let account = self.snapshot.account_instance;
-        let filename = matrix_client_core::conversation::sanitize_filename(&filename);
+        let filename = twayblade_core::conversation::sanitize_filename(&filename);
         let selected = cx.prompt_for_new_path(&PathBuf::from("."), Some(&filename));
         cx.spawn_in(window, async move |view, cx| {
             if let Ok(Ok(Some(path))) = selected.await {

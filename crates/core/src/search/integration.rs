@@ -76,7 +76,7 @@ async fn search_server_cached_encryption_pagination_and_event_context() {
     let account = Account::new(
         client.clone(),
         path,
-        matrix_client_platform::SessionStore::new("matrix-client.integration.search-unused"),
+        twayblade_platform::SessionStore::new("twayblade.integration.search-unused"),
         Arc::new(Mutex::new(())),
     );
     let sync_account = account.clone();

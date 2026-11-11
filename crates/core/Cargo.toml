@@ -1,5 +1,5 @@
 [package]
-name = "matrix-client-core"
+name = "twayblade-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -24,7 +24,7 @@ serde_json.workspace = true
 directories.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
-matrix-client-platform = { path = "../platform" }
+twayblade-platform = { path = "../platform" }
 
 [lints]
 workspace = true

@@ -45,7 +45,7 @@ async fn login(root: &Path, fixture: &Fixture, certificate: &Certificate, label:
     Account::new(
         client,
         path,
-        matrix_client_platform::SessionStore::new("matrix-client.integration.crypto-unused"),
+        twayblade_platform::SessionStore::new("twayblade.integration.crypto-unused"),
         Arc::new(Mutex::new(())),
     )
 }

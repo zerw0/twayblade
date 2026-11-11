@@ -1,4 +1,4 @@
-# Native Rust Matrix client — plan
+# Twayblade — plan
 
 Updated 2026-11-11. Status: M0 in progress; no milestone exit claimed.
 
@@ -91,7 +91,7 @@ corrupt files fail with a clear message, and keyboard-only use reaches every
 action.
 
 **M4 — settings and appearance (3–4 weeks).** One Settings window (⌘,,
-menu Matrix Client › Settings…) with a sidebar of sections. Every change
+menu Twayblade › Settings…) with a sidebar of sections. Every change
 previews live, and each section has Reset to Defaults.
 
 - *Notifications.* Default level for DMs and group rooms, encrypted and unencrypted (all
@@ -353,7 +353,7 @@ M3 review fixes (2026-11-10):
 Settings — M4 Task 1 (2026-11-10):
 - Versioned frontend JSON preferences with atomic replacement, defaults and corrupt/unknown-file backup; one separate Settings window with six sections, Security controls and SDK account name/avatar edits. Unimplemented controls remain hidden.
 - Locked fmt/strict Clippy/69 unit/UI tests pass; Settings light/dark samples reviewed; section navigation retains the main conversation and draft.
-- `encrypted_delivery_profile_and_same_device_store_restore` passes on isolated Synapse 1.164.2 (`matrixclient.test`), including core display-name/avatar update/removal. Operator checks: native menus/shortcut, file picker, account sign-out, security focus/VoiceOver. Appearance, Chat and Notifications controls follow in Tasks 2–5.
+- `encrypted_delivery_profile_and_same_device_store_restore` passes on isolated Synapse 1.164.2 (`twayblade.test`), including core display-name/avatar update/removal. Operator checks: native menus/shortcut, file picker, account sign-out, security focus/VoiceOver. Appearance, Chat and Notifications controls follow in Tasks 2–5.
 
 Colour schemes and accent — M4 Task 2 (2026-11-10):
 - System/Light/Dark/High contrast and Solarized/Gruvbox/Nord variants; persisted system/custom accent with six swatches and Kit colour picker, applied live through semantic tokens.
@@ -368,7 +368,7 @@ Scaling and fonts — M4 Task 3 (2026-11-10):
 Chat styles — M4 Task 4 (2026-11-10):
 - Shared Bubbles/IRC/Minimal renderer in the timeline and threads, persisted density/avatars/timestamps; SDK edit indicator and all existing reply/reaction/media/error controls retained. Style changes remeasure retained scrollers.
 - Locked fmt/strict Clippy/85 tests pass; control-driven style test preserves visible IDs, room, draft, reading anchor and open thread, and reaches existing message actions; edited/deleted states included. Light/dark style and attachment samples captured; thread samples included.
-- `timeline_metadata_and_send_queue_actions` passes on isolated Synapse 1.164.2 (`matrixclient.test`). Operator checks: keyboard/VoiceOver, long-history switching, real encrypted attachments and thread interactions. M4 notifications remain unimplemented.
+- `timeline_metadata_and_send_queue_actions` passes on isolated Synapse 1.164.2 (`twayblade.test`). Operator checks: keyboard/VoiceOver, long-history switching, real encrypted attachments and thread interactions. M4 notifications remain unimplemented.
 
 M4 review fixes (2026-11-10):
 - Choosing System after a forced Light/Dark scheme re-reads the OS appearance
@@ -394,17 +394,17 @@ Chat styles, avatars and performance (2026-11-10, after operator screenshots):
 
 Thread unread caching — Notifications Task 1 (2026-11-10):
 - Per-selection root/reply-count cache; four concurrent SDK queries, immediate cached/zero snapshots and follow-up counts. Own public/private receipts and explicit mark-read invalidate; stale results are rejected and selection drop cancels work.
-- Locked fmt/strict all-feature Clippy and 91 workspace tests pass, including a counting stub, invalidation, focused-root and bound/eviction regressions. The isolated `threads_send_paginate_receipts_and_closed_unread` passes on Synapse 1.164.2 (`matrixclient.test`).
+- Locked fmt/strict all-feature Clippy and 91 workspace tests pass, including a counting stub, invalidation, focused-root and bound/eviction regressions. The isolated `threads_send_paginate_receipts_and_closed_unread` passes on Synapse 1.164.2 (`twayblade.test`).
 - Offline thread controls pass; reviewed `captures/notifications-thread-{light,dark}.png` sample captures. Physical checks remain: real-account thread counts versus Element and long-history scrolling.
 
 Notification rules — Notifications Task 2 (2026-11-10):
 - SDK server defaults for four room classes (All/Mentions only), keywords and Default/All/Mentions/Mute overrides; subscribed cross-client updates, grouped Settings, details controls, room context menu and muted badges. Edits use fresh SDK views, bounded idempotent retries and sync confirmation. Changed room summaries refresh SDK notification counts, preserving higher server totals without adding thread counts.
 - Locked fmt/strict all-feature Clippy and 92 workspace tests pass; control-driven Settings/keyword/details/context-menu test passes. Reviewed release `captures/notification-{rules,room}-{light,dark}.png` sample captures.
-- `notification_rules_round_trip_and_second_client_changes` passes on isolated Synapse 1.164.2 (`matrixclient.test`), including muted unread exclusion. Physical checks: rules shown in Element, real sidebar/details/menu and keyboard/VoiceOver. Native delivery follows in Task 3.
+- `notification_rules_round_trip_and_second_client_changes` passes on isolated Synapse 1.164.2 (`twayblade.test`), including muted unread exclusion. Physical checks: rules shown in Element, real sidebar/details/menu and keyboard/VoiceOver. Native delivery follows in Task 3.
 
 Notification delivery — Notifications Task 3 (2026-11-11):
 - Bounded SDK sync intake and NotificationClient decryption; own/muted/active-room suppression, guarded room/thread clicks and persisted local enable/sound/preview/badge controls. macOS UserNotifications (bundle detection/permission), persistent Linux D-Bus and Windows toast adapters; OS Focus remains authoritative.
-- Locked fmt/strict all-feature Clippy and 97 workspace tests pass, including unbundled behavior, skip/privacy rules and device/click controls. `encrypted_notification_delivery_and_private_preview` passes on isolated Synapse 1.164.2 (`matrixclient.test`); reviewed release `captures/notification-{delivery,private,device}-{light,dark}.png` samples.
+- Locked fmt/strict all-feature Clippy and 97 workspace tests pass, including unbundled behavior, skip/privacy rules and device/click controls. `encrypted_notification_delivery_and_private_preview` passes on isolated Synapse 1.164.2 (`twayblade.test`); reviewed release `captures/notification-{delivery,private,device}-{light,dark}.png` samples.
 - Operator checks: permission grant/deny/settings link and real delivery/click-to-room/thread, sound, preview, Focus and badge from the release .app. Linux/Windows builds/runtime, desktop badge support, Windows installed app identity and cold-launch activation remain unverified; current callbacks are scoped to the running account/process.
 
 Linux accent observation — Notifications Task 4 (2026-11-11):
@@ -491,6 +491,12 @@ Fixes from the first live run (2026-11-11):
 - Conversation search matches all conversations (Home, every space, DMs), not only the shown space; choosing a result clears the query.
 - Title bar: traffic lights centred on the 40pt bar (main and Settings), no filled sidebar toggle, and no connection dot while connected.
 - Not yet re-verified on the live account: verification state after cross-signing with Element.
+
+Rename to Twayblade (2026-11-11):
+- Crates `twayblade-core`, `twayblade-platform`, `twayblade` (app and binary); `Twayblade.app`, bundle ID `com.twayblade.desktop(.development)`, keychain service `twayblade(.development)`, data/config folder `Twayblade`, device name "Twayblade desktop", notification IDs and test fixtures (`twayblade.test`). GitHub repository `zerw0/twayblade`.
+- One-time migration on first live launch: the pre-rename `MatrixClient` data/config folders are moved (skipped if the new ones exist or the old app is running), and the keychain session is copied from the old service and then deleted. Cold-launch activation from notifications posted before the rename is not carried over.
+- `.github/workflows/build.yml` builds release binaries (macOS arm64 app zip, Linux x86_64 tarball, Windows x86_64 zip) on pushes to main and manual runs, and publishes a GitHub release with checksums for `v*` tags. Builds are unsigned (macOS ad hoc). The workflow has not run yet.
+- Locked fmt, strict Clippy and the workspace tests pass after the rename; the migration has not yet been exercised on the live account.
 
 Not yet verified:
 - Physical GUI checks of logout, pagination, IME and VoiceOver.

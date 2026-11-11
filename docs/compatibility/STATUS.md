@@ -76,7 +76,7 @@ listed separately. Earlier Iced/SwiftUI evidence was removed with those frontend
 ## Notes
 
 - Isolated tests (`tests/integration/`) use generated accounts on Synapse
-  v1.164.2, `matrixclient.test`, `https://127.0.0.1:18448`. The encrypted
+  v1.164.2, `twayblade.test`, `https://127.0.0.1:18448`. The encrypted
   interoperability check is SDK-to-SDK. A separate macOS lifecycle test uses
   real Keychain storage and the normal auth implementation in separate processes.
   Neither establishes physical UI automation or Element interoperability.
@@ -113,19 +113,19 @@ against Synapse v1.164.2 with generated accounts only:
 | `revoked_device_and_soft_logout_recovery` (Task 3) | Synapse 1.164.2 (normal and five-second-token fixture): second-client revocation, hard/soft status, clean sync stop, local data retained, invalid-password retry, same-device/store reauth and explicit hard cleanup; pass |
 | `secure_backup_fresh_store_recovery_and_sas` (Task 4) | Synapse 1.164.2, fresh generated account: cross-signing/backup, missing-key timeline, wrong key, fresh-store backup recovery with live re-decryption, SAS between SDK clients, cancelled verification, other-device revocation, reset rejects old key and accepts new key; pass |
 | `attachment_plain_encrypted_cancel_restart_round_trip` (Task 5) | Synapse 1.164.2: files and image thumbnails in plain/encrypted rooms, encrypted media source checked, server downloads bypass cache, oversize sparse file rejected, queued cancellation and store-reopen upload/download pass |
-| `encrypted_delivery_profile_and_same_device_store_restore`, `timeline_metadata_and_send_queue_actions`, `members_typing_and_read_receipts`, `pagination_preserves_message_identity`, `room_list_service_tracks_recency_and_details` (Task 0 regression) | Synapse 1.164.2, `matrixclient.test`: all five existing service checks pass; generated accounts only |
-| `threads_send_paginate_receipts_and_closed_unread` (M3 Task 1) | Synapse 1.164.2, `matrixclient.test`: SDK-created thread, two-way sending, 68 replies, pagination/unique IDs, typed/scoped receipts, root unread summary, hidden inline replies and unread preservation after reading main; pass |
-| Existing five service checks (M3 Task 1 regression) | Synapse 1.164.2, `matrixclient.test`: all pass with threading enabled and independent initial pagination; fixture runs serialized |
-| `spaces_hierarchy_invites_creation_restricted_join_and_selective_leave` (M3a Task 2) | Synapse 1.164.2, `matrixclient.test`, fresh generated pair: nested/private spaces, 55 accessible children across actual hierarchy pages, inaccessible child, suggested restricted join, room/space accepts and DM decline, encrypted creation, denied parent permissions, multi-parent navigation and selected-space-only leave; pass |
-| Existing five service checks and thread acceptance (M3a Task 2 regression) | Synapse 1.164.2, `matrixclient.test`: pass; member fixture waits for requested SDK permission state before updating powers |
-| `image_viewer_plain_encrypted_animation_limits_and_corrupt` (M3 Task 3) | Synapse 1.164.2, `matrixclient.test`: plain/encrypted PNG, animated GIF/WebP, >8k image and corrupt file; SDK decryption, no cached decrypted media, explicit original-byte save and cancellation; pass |
-| `attachment_plain_encrypted_cancel_restart_round_trip` (M3 Task 3 regression) | Synapse 1.164.2, `matrixclient.test`: attachment round trips, cancellation and persisted queue restart after shared atomic-save/cache changes; pass |
+| `encrypted_delivery_profile_and_same_device_store_restore`, `timeline_metadata_and_send_queue_actions`, `members_typing_and_read_receipts`, `pagination_preserves_message_identity`, `room_list_service_tracks_recency_and_details` (Task 0 regression) | Synapse 1.164.2, `twayblade.test`: all five existing service checks pass; generated accounts only |
+| `threads_send_paginate_receipts_and_closed_unread` (M3 Task 1) | Synapse 1.164.2, `twayblade.test`: SDK-created thread, two-way sending, 68 replies, pagination/unique IDs, typed/scoped receipts, root unread summary, hidden inline replies and unread preservation after reading main; pass |
+| Existing five service checks (M3 Task 1 regression) | Synapse 1.164.2, `twayblade.test`: all pass with threading enabled and independent initial pagination; fixture runs serialized |
+| `spaces_hierarchy_invites_creation_restricted_join_and_selective_leave` (M3a Task 2) | Synapse 1.164.2, `twayblade.test`, fresh generated pair: nested/private spaces, 55 accessible children across actual hierarchy pages, inaccessible child, suggested restricted join, room/space accepts and DM decline, encrypted creation, denied parent permissions, multi-parent navigation and selected-space-only leave; pass |
+| Existing five service checks and thread acceptance (M3a Task 2 regression) | Synapse 1.164.2, `twayblade.test`: pass; member fixture waits for requested SDK permission state before updating powers |
+| `image_viewer_plain_encrypted_animation_limits_and_corrupt` (M3 Task 3) | Synapse 1.164.2, `twayblade.test`: plain/encrypted PNG, animated GIF/WebP, >8k image and corrupt file; SDK decryption, no cached decrypted media, explicit original-byte save and cancellation; pass |
+| `attachment_plain_encrypted_cancel_restart_round_trip` (M3 Task 3 regression) | Synapse 1.164.2, `twayblade.test`: attachment round trips, cancellation and persisted queue restart after shared atomic-save/cache changes; pass |
 | `timeline_metadata_and_send_queue_actions` (Task 6 regression) | Synapse 1.164.2: existing SDK Unicode reaction add/remove and stable timeline identity pass after shared picker integration |
-| `encrypted_delivery_profile_and_same_device_store_restore` (M4 Task 1) | Synapse 1.164.2, `matrixclient.test`, loopback TLS: core SDK display-name update, bounded avatar upload/removal, profile and encrypted delivery/store reopen pass |
-| `timeline_metadata_and_send_queue_actions` (M4 Task 4) | Synapse 1.164.2, `matrixclient.test`: existing SDK metadata and send-queue regression passes after edit-state projection |
-| `threads_send_paginate_receipts_and_closed_unread` (Notifications Task 1) | Synapse 1.164.2, `matrixclient.test`: SDK send/pagination/scoped receipts, main filtering and closed-thread unread pass with deferred unread snapshots |
-| `notification_rules_round_trip_and_second_client_changes` (Notifications Task 2) | Synapse 1.164.2, `matrixclient.test`: four defaults round-trip, keyword add/remove, room modes/reset, actual Bob-message unread then mute exclusion and second-client observation pass |
-| `encrypted_notification_delivery_and_private_preview` (Notifications Task 3) | Synapse 1.164.2, `matrixclient.test`: second-client encrypted event stored as ciphertext; SDK resolver emits decrypted typed room/sender/body, preview-off removes sender/avatar/body; pass |
+| `encrypted_delivery_profile_and_same_device_store_restore` (M4 Task 1) | Synapse 1.164.2, `twayblade.test`, loopback TLS: core SDK display-name update, bounded avatar upload/removal, profile and encrypted delivery/store reopen pass |
+| `timeline_metadata_and_send_queue_actions` (M4 Task 4) | Synapse 1.164.2, `twayblade.test`: existing SDK metadata and send-queue regression passes after edit-state projection |
+| `threads_send_paginate_receipts_and_closed_unread` (Notifications Task 1) | Synapse 1.164.2, `twayblade.test`: SDK send/pagination/scoped receipts, main filtering and closed-thread unread pass with deferred unread snapshots |
+| `notification_rules_round_trip_and_second_client_changes` (Notifications Task 2) | Synapse 1.164.2, `twayblade.test`: four defaults round-trip, keyword add/remove, room modes/reset, actual Bob-message unread then mute exclusion and second-client observation pass |
+| `encrypted_notification_delivery_and_private_preview` (Notifications Task 3) | Synapse 1.164.2, `twayblade.test`: second-client encrypted event stored as ciphertext; SDK resolver emits decrypted typed room/sender/body, preview-off removes sender/avatar/body; pass |
 
 ## Operator reports (not independently reproduced)
 

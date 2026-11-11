@@ -3,7 +3,7 @@
     reason = "Visible presence-set contracts for the separate UI implementation"
 )]
 use super::*;
-use matrix_client_core::presence::State as PresenceState;
+use twayblade_core::presence::State as PresenceState;
 impl State {
     pub(super) fn cancel_presence(&mut self) {
         if let Some(task) = self.presence_task.take() {
@@ -33,7 +33,7 @@ impl Backend {
         }
         let users: Vec<_> = users
             .into_iter()
-            .map(|id| matrix_client_core::presence::parse_user(&id))
+            .map(|id| twayblade_core::presence::parse_user(&id))
             .collect::<Option<_>>()
             .ok_or_else(|| failure("Invalid member."))?;
         let mut state = self

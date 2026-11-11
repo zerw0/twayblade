@@ -96,7 +96,7 @@ impl OAuthLogin {
             }],
             Localized::new(homeserver, []),
         );
-        metadata.client_name = Some(Localized::new("Matrix Client desktop".to_owned(), []));
+        metadata.client_name = Some(Localized::new("Twayblade desktop".to_owned(), []));
         let metadata = Raw::new(&metadata).map_err(|_| AuthError::OAuth)?;
         let result = client
             .oauth()
@@ -188,20 +188,20 @@ impl OAuthLogin {
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
-    use matrix_client_platform::SessionStore;
     use matrix_sdk::reqwest::Certificate;
     use std::{
         io::Write,
         path::{Path, PathBuf},
         process::{Command, Stdio},
     };
+    use twayblade_platform::SessionStore;
 
     fn root() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-data/local/oauth")
     }
     async fn context(scope: Uuid) -> AuthContext {
         AuthContext {
-            session_store: SessionStore::new(&format!("matrix-client.integration.oauth.{scope}")),
+            session_store: SessionStore::new(&format!("twayblade.integration.oauth.{scope}")),
             data_dir: root().join(format!("lifecycle-{scope}")),
             root_certificate: Some(
                 Certificate::from_pem(
@@ -283,7 +283,7 @@ mod tests {
                 .await
                 .expect("OAuth callback and token exchange");
             assert!(browser.await.expect("browser task").0.success());
-            assert!(account.user_id().ends_with(":oauth.matrixclient.test"));
+            assert!(account.user_id().ends_with(":oauth.twayblade.test"));
             let device = account.client.device_id().expect("device").to_string();
             tokio::fs::create_dir_all(&account.store_path)
                 .await

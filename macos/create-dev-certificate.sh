@@ -7,7 +7,7 @@
 # The certificate never leaves this Mac and is not trusted for distribution;
 # release signing still needs an Apple Developer ID.
 set -euo pipefail
-name="Matrix Client Development"
+name="Twayblade Development"
 security=(/usr/bin/security)
 if "${security[@]}" find-identity -p codesigning | grep -q "\"$name\""; then
     printf 'Identity "%s" already exists.\n' "$name"

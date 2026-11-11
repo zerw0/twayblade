@@ -171,7 +171,7 @@ fn sign_in_offers_password_and_discovered_oauth_then_changes_server(cx: &mut Tes
         app.update(cx, |app, cx| {
             app.snapshot = crate::backend::Snapshot::default();
             app.options = Some(crate::backend::LoginOptions {
-                homeserver: "https://matrix-client.example.org/".into(),
+                homeserver: "https://twayblade.example.org/".into(),
                 password: true,
                 browser: true,
                 sso: false,
@@ -505,7 +505,7 @@ fn legacy_sso_provider_buttons_show_discovered_names(cx: &mut TestAppContext) {
                 password: false,
                 browser: false,
                 sso: true,
-                providers: vec![matrix_client_core::IdentityProvider {
+                providers: vec![twayblade_core::IdentityProvider {
                     id: "local".into(),
                     name: "Local Identity".into(),
                     icon_png: None,
@@ -530,7 +530,7 @@ fn hard_logout_requires_confirmation_before_local_reset(cx: &mut TestAppContext)
     let (window, app) = preview_window(cx);
     cx.update(|cx| {
         app.update(cx, |app, cx| {
-            app.snapshot.session_state = matrix_client_core::auth::SessionState::HardLoggedOut;
+            app.snapshot.session_state = twayblade_core::auth::SessionState::HardLoggedOut;
             cx.notify();
         })
     });
@@ -561,7 +561,7 @@ fn soft_logout_retains_account_and_has_no_destructive_control(cx: &mut TestAppCo
     let (window, app) = preview_window(cx);
     cx.update(|cx| {
         app.update(cx, |app, cx| {
-            app.snapshot.session_state = matrix_client_core::auth::SessionState::SoftLoggedOut;
+            app.snapshot.session_state = twayblade_core::auth::SessionState::SoftLoggedOut;
             cx.notify();
         })
     });
@@ -620,19 +620,18 @@ fn sas_sample_has_explicit_match_mismatch_and_cancel_controls(cx: &mut TestAppCo
         app.update(cx, |app, cx| {
             app.security_open = true;
             app.snapshot.security.ready = true;
-            app.snapshot.security.verification =
-                Some(matrix_client_core::security::VerificationView {
-                    flow: "sample".into(),
-                    device: "Sample device".into(),
-                    incoming: false,
-                    phase: matrix_client_core::security::VerificationPhase::Emojis(vec![
-                        (
-                            "🐶".into(),
-                            "Dog".into()
-                        );
-                        7
-                    ]),
-                });
+            app.snapshot.security.verification = Some(twayblade_core::security::VerificationView {
+                flow: "sample".into(),
+                device: "Sample device".into(),
+                incoming: false,
+                phase: twayblade_core::security::VerificationPhase::Emojis(vec![
+                    (
+                        "🐶".into(),
+                        "Dog".into()
+                    );
+                    7
+                ]),
+            });
             cx.notify();
         })
     });
@@ -658,7 +657,7 @@ fn sas_sample_has_explicit_match_mismatch_and_cancel_controls(cx: &mut TestAppCo
                 .verification
                 .as_ref()
                 .is_some_and(
-                    |flow| flow.phase == matrix_client_core::security::VerificationPhase::Cancelled
+                    |flow| flow.phase == twayblade_core::security::VerificationPhase::Cancelled
                 )
         )
     });
@@ -701,7 +700,7 @@ fn attachment_controls_require_an_explicit_action_and_samples_cannot_upload(
             let message = app.snapshot.messages.last_mut().expect("sample message");
             message.kind = crate::backend::MessageKind::File;
             message.delivery = crate::backend::DeliveryState::Remote;
-            message.attachment = Some(matrix_client_core::conversation::Attachment {
+            message.attachment = Some(twayblade_core::conversation::Attachment {
                 filename: "report.pdf".into(),
                 size: Some(2048),
                 preview_png: None,
@@ -901,7 +900,7 @@ fn member_actions_follow_power_levels_and_confirm_destructive_steps(cx: &mut Tes
             confirm,
             Some((
                 "@sam:preview.invalid".into(),
-                matrix_client_core::room_state::MemberAction::Kick
+                twayblade_core::room_state::MemberAction::Kick
             ))
         );
     });
@@ -1081,7 +1080,7 @@ fn thread_summary_opens_panel_preserves_draft_and_yields_to_details(cx: &mut Tes
         cx.bind_keys([gpui_kit::KeyBinding::new(
             "escape",
             crate::app::CloseProfile,
-            Some("MatrixClient"),
+            Some("Twayblade"),
         )])
     });
     cx.update_window(window, |_, window, cx| {
@@ -1137,7 +1136,7 @@ fn thread_drafts_are_independent_and_stale_thread_updates_are_rejected(cx: &mut 
                 root: t.root.event_id.clone().unwrap(),
                 request: t.request,
                 messages: Vec::new(),
-                status: matrix_client_core::conversation::TimelineStatus::Failed,
+                status: twayblade_core::conversation::TimelineStatus::Failed,
                 ready: false,
                 unread: 99,
             }
@@ -1233,7 +1232,7 @@ fn room_dm_and_space_invites_have_explicit_accept_and_decline(cx: &mut TestAppCo
     cx.update(|cx| {
         app.update(cx, |app, cx| {
             app.snapshot.invites = (0..3)
-                .map(|ix| matrix_client_core::space_actions::Invite {
+                .map(|ix| twayblade_core::space_actions::Invite {
                     id: format!("invite-{ix}"),
                     name: format!("Sample invitation {ix}"),
                     direct: ix == 1,
@@ -1465,7 +1464,7 @@ fn viewer_pinch_double_click_pan_outside_click_and_stale_loads(cx: &mut TestAppC
             app.finish_viewer(
                 old,
                 app.snapshot.account_instance,
-                Err(matrix_client_core::conversation::ImageError::Download),
+                Err(twayblade_core::conversation::ImageError::Download),
                 cx,
             );
             assert!(matches!(
@@ -1805,7 +1804,7 @@ fn returning_to_the_system_scheme_follows_the_os_again(cx: &mut TestAppContext) 
 #[gpui_kit::test]
 fn notification_rules_controls_keywords_room_modes_and_context_menu(cx: &mut TestAppContext) {
     use gpui_kit::test::{TestEventExt, TestQueryExt};
-    use matrix_client_core::notifications::{DefaultLevel, RoomClass, RoomMode};
+    use twayblade_core::notifications::{DefaultLevel, RoomClass, RoomMode};
     let (main_window, app) = preview_window(cx);
     cx.update_window(main_window, |_, window, cx| {
         app.update(cx, |app, cx| {
@@ -1908,7 +1907,7 @@ fn notification_preview_click_opens_thread_and_device_controls_stay_local(cx: &m
                 Some("$sample-0:preview.invalid")
             );
             app.activate_notification(
-                matrix_client_platform::notifications::Activation {
+                twayblade_platform::notifications::Activation {
                     account: u128::MAX,
                     room: "research".into(),
                     thread: None,

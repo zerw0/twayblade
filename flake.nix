@@ -1,5 +1,5 @@
 {
-  description = "Native Matrix client development shell";
+  description = "Twayblade development shell";
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/0bb2eedc20e4739f29e8045034f2828ad7054f8f";
   outputs = { self, nixpkgs }:
     let

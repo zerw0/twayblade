@@ -4,7 +4,7 @@
 )]
 //! Gallery lifecycle, independent of view code.
 use super::*;
-use matrix_client_core::media::{MediaError, MediaItem, MediaKind, Token};
+use twayblade_core::media::{MediaError, MediaItem, MediaKind, Token};
 #[derive(Clone, Default)]
 pub(crate) struct MediaState {
     pub room: String,

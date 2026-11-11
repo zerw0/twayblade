@@ -5,7 +5,7 @@ use ::windows::{
     UI::Notifications::*,
     core::{HSTRING, IInspectable},
 };
-const APP_ID: &str = "com.matrixclient.desktop";
+const APP_ID: &str = "com.twayblade.desktop";
 fn notifier() -> ::windows::core::Result<ToastNotifier> {
     ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_ID))
 }

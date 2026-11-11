@@ -3,17 +3,17 @@
 use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
-use matrix_client_core::{
+use twayblade_core::{
     auth::{self, Account, SessionState},
     conversation::Conversation,
 };
 
-pub(super) use matrix_client_core::conversation::{
+use tokio::{runtime::Runtime, sync::watch, task::JoinHandle};
+pub(super) use twayblade_core::conversation::{
     Attachment, DeliveryState, MessageKind, MessageRow as Message, Reaction, ReplyTarget,
 };
-use matrix_client_core::conversation::{ConversationError, TimelineStatus};
-pub(super) use matrix_client_core::room_state::{Member, MemberRole, MembersState};
-use tokio::{runtime::Runtime, sync::watch, task::JoinHandle};
+use twayblade_core::conversation::{ConversationError, TimelineStatus};
+pub(super) use twayblade_core::room_state::{Member, MemberRole, MembersState};
 use zeroize::Zeroizing;
 mod media;
 pub(super) use media::MediaState;
@@ -23,10 +23,8 @@ mod notifications;
 mod presence;
 pub(super) use notifications::NotificationConfig;
 
-use matrix_client_core::{
-    DiscoveryError, auth::AuthError, profile::ProfileError, rooms::SyncStatus,
-};
-pub(super) use matrix_client_core::{
+use twayblade_core::{DiscoveryError, auth::AuthError, profile::ProfileError, rooms::SyncStatus};
+pub(super) use twayblade_core::{
     profile::UserProfile as Profile, rooms::RoomSummary as Room, spaces::SpaceSummary as Space,
 };
 
@@ -35,16 +33,16 @@ pub(super) struct Snapshot {
     pub(super) revision: u64,
     pub(super) account_instance: u128,
     pub(super) session_state: SessionState,
-    pub(super) security: matrix_client_core::security::SecuritySnapshot,
-    pub(super) notifications: matrix_client_core::notifications::RulesSnapshot,
-    pub(super) notification_permission: matrix_client_platform::notifications::Permission,
+    pub(super) security: twayblade_core::security::SecuritySnapshot,
+    pub(super) notifications: twayblade_core::notifications::RulesSnapshot,
+    pub(super) notification_permission: twayblade_platform::notifications::Permission,
     pub(super) notification_failed: bool,
-    pub(super) notification_click: Option<(u64, matrix_client_platform::notifications::Activation)>,
+    pub(super) notification_click: Option<(u64, twayblade_platform::notifications::Activation)>,
     pub(super) user_id: String,
     pub(super) rooms: Vec<Room>,
     pub(super) unread_total: u64,
     pub(super) spaces: Vec<Space>,
-    pub(super) invites: Vec<matrix_client_core::space_actions::Invite>,
+    pub(super) invites: Vec<twayblade_core::space_actions::Invite>,
     pub(super) spaces_loaded: bool,
     pub(super) selected_room: String,
     pub(super) messages: Vec<Message>,
@@ -52,13 +50,13 @@ pub(super) struct Snapshot {
     pub(super) search: SearchState,
     pub(super) focused_event: Option<String>,
     pub(super) presence_enabled: bool,
-    pub(super) own_presence: Option<matrix_client_core::presence::Presence>,
-    pub(super) presence: std::collections::HashMap<String, matrix_client_core::presence::Presence>,
+    pub(super) own_presence: Option<twayblade_core::presence::Presence>,
+    pub(super) presence: std::collections::HashMap<String, twayblade_core::presence::Presence>,
     pub(super) thread: Option<ThreadSnapshot>,
     pub(super) timeline_ready: bool,
     pub(super) members: Vec<Member>,
     pub(super) members_state: MembersState,
-    pub(super) typing: Vec<matrix_client_core::room_state::TypingUser>,
+    pub(super) typing: Vec<twayblade_core::room_state::TypingUser>,
     pub(super) typing_others: usize,
     pub(super) reduce_motion: bool,
     pub(super) sync_status: String,
@@ -87,7 +85,7 @@ pub(super) struct LoginOptions {
     pub(super) password: bool,
     pub(super) browser: bool,
     pub(super) sso: bool,
-    pub(super) providers: Vec<matrix_client_core::IdentityProvider>,
+    pub(super) providers: Vec<twayblade_core::IdentityProvider>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -105,7 +103,7 @@ fn failure(message: impl ToString) -> ServiceError {
 #[derive(Default)]
 struct State {
     account: Option<Account>,
-    security: Option<matrix_client_core::security::Security>,
+    security: Option<twayblade_core::security::Security>,
     conversation: Option<Conversation>,
     epoch: u64,
     selection: u64,
@@ -121,10 +119,10 @@ struct State {
     thread_task: Option<JoinHandle<()>>,
     thread_conversation: Option<Conversation>,
     thread_request: u64,
-    directory: Option<matrix_client_core::space_actions::Directory>,
+    directory: Option<twayblade_core::space_actions::Directory>,
     directory_request: u64,
     leave_request: u64,
-    leave_plan: Option<(String, Arc<matrix_client_core::space_actions::LeavePlan>)>,
+    leave_plan: Option<(String, Arc<twayblade_core::space_actions::LeavePlan>)>,
     typing_intent: Option<watch::Sender<Option<(String, bool)>>>,
 }
 
@@ -185,7 +183,7 @@ pub(super) struct Backend {
 }
 
 pub(super) fn render_viewer_image(
-    image: &mut matrix_client_core::conversation::ViewerImage,
+    image: &mut twayblade_core::conversation::ViewerImage,
 ) -> Arc<gpui_kit::RenderImage> {
     let mut frames = std::mem::take(&mut image.frames);
     for frame in &mut frames {
@@ -199,7 +197,7 @@ pub(super) fn render_viewer_image(
 fn publish(sender: &watch::Sender<Snapshot>, update: impl FnOnce(&mut Snapshot)) {
     sender.send_modify(|snapshot| {
         update(snapshot);
-        snapshot.reduce_motion = matrix_client_platform::reduce_motion();
+        snapshot.reduce_motion = twayblade_platform::reduce_motion();
         snapshot.revision = snapshot.revision.wrapping_add(1);
     });
 }
@@ -212,18 +210,18 @@ pub(super) enum SpaceAction {
     Invite(String, bool),
     PlanLeave(String),
     Leave(String, std::collections::HashSet<String>),
-    Create(matrix_client_core::space_actions::CreateRoom),
+    Create(twayblade_core::space_actions::CreateRoom),
     Dm(String),
 }
 pub(super) enum SpaceOutcome {
-    Directory(matrix_client_core::space_actions::DirectorySnapshot),
-    Leave(Vec<matrix_client_core::space_actions::LeaveCandidate>),
+    Directory(twayblade_core::space_actions::DirectorySnapshot),
+    Leave(Vec<twayblade_core::space_actions::LeaveCandidate>),
     Room(String),
     PartialRoom(String),
     Done,
 }
-fn space_failure(error: matrix_client_core::space_actions::SpaceError) -> ServiceError {
-    use matrix_client_core::space_actions::SpaceError::*;
+fn space_failure(error: twayblade_core::space_actions::SpaceError) -> ServiceError {
+    use twayblade_core::space_actions::SpaceError::*;
     failure(match error {
         InvalidId => "Enter a valid Matrix room or user ID and a room name when creating a room.",
         NotSpace => "This ID belongs to a room. Enter a space ID or alias.",
@@ -300,9 +298,7 @@ fn auth_failure(error: AuthError) -> ServiceError {
         AuthError::ExistingSession => {
             "A saved session already exists. Restart to restore it before signing in again."
         }
-        AuthError::AlreadyRunning => {
-            "Matrix Client is already running. Close the other window first."
-        }
+        AuthError::AlreadyRunning => "Twayblade is already running. Close the other window first.",
     })
 }
 
@@ -341,8 +337,8 @@ fn sync_status_text(status: SyncStatus) -> &'static str {
     }
 }
 
-fn media_failure(error: matrix_client_core::conversation::AttachmentError) -> ServiceError {
-    use matrix_client_core::conversation::AttachmentError::*;
+fn media_failure(error: twayblade_core::conversation::AttachmentError) -> ServiceError {
+    use twayblade_core::conversation::AttachmentError::*;
     failure(&match error {
         Limit { maximum } => format!(
             "This file exceeds the server’s upload limit of {} MB.",
@@ -382,10 +378,10 @@ impl Backend {
     ) -> Result<Arc<Self>, ServiceError> {
         let runtime = Runtime::new().map_err(|_| failure("Background runtime could not start."))?;
         let (updates, _) = watch::channel(Snapshot {
-            reduce_motion: matrix_client_platform::reduce_motion(),
+            reduce_motion: twayblade_platform::reduce_motion(),
             ..Default::default()
         });
-        let mut motion = matrix_client_platform::reduce_motion_changes();
+        let mut motion = twayblade_platform::reduce_motion_changes();
         let motion_updates = updates.clone();
         let motion_task = runtime.spawn(async move {
             while motion.changed().await.is_ok() {
@@ -411,7 +407,7 @@ impl Backend {
     pub(super) fn discover(&self, homeserver: String) -> Result<LoginOptions, ServiceError> {
         let discovery = self
             .runtime
-            .block_on(matrix_client_core::discover_login(&homeserver))
+            .block_on(twayblade_core::discover_login(&homeserver))
             .map_err(discovery_failure)?;
         Ok(LoginOptions {
             homeserver: discovery.homeserver,
@@ -613,11 +609,11 @@ impl Backend {
             }
             Ok(SecurityOutcome::Done)
         }).map_err(|error| failure(match error {
-            matrix_client_core::security::SecurityError::Unavailable => "Security information could not be loaded. Check your connection.",
-            matrix_client_core::security::SecurityError::Setup => "Secure backup could not be set up. Verify this device before trying again.",
-            matrix_client_core::security::SecurityError::Recovery => "Recovery failed. Check your recovery key or passphrase and connection.",
-            matrix_client_core::security::SecurityError::Verification => "Verification could not be completed. Start again on both devices.",
-            matrix_client_core::security::SecurityError::DeviceAuthentication => "The device could not be signed out. Check your password or your server’s authentication requirements.",
+            twayblade_core::security::SecurityError::Unavailable => "Security information could not be loaded. Check your connection.",
+            twayblade_core::security::SecurityError::Setup => "Secure backup could not be set up. Verify this device before trying again.",
+            twayblade_core::security::SecurityError::Recovery => "Recovery failed. Check your recovery key or passphrase and connection.",
+            twayblade_core::security::SecurityError::Verification => "Verification could not be completed. Start again on both devices.",
+            twayblade_core::security::SecurityError::DeviceAuthentication => "The device could not be signed out. Check your password or your server’s authentication requirements.",
         }))?;
         let state = self
             .state
@@ -691,7 +687,7 @@ impl Backend {
         let shared = self.state.clone();
         let updates = self.updates.clone();
         state.timeline_task = Some(self.runtime.spawn(async move {
-            let stream: std::pin::Pin<Box<dyn futures_util::Stream<Item = matrix_client_core::conversation::ConversationSnapshot> + Send>> = match target.clone() {
+            let stream: std::pin::Pin<Box<dyn futures_util::Stream<Item = twayblade_core::conversation::ConversationSnapshot> + Send>> = match target.clone() {
                 Some(event) => Box::pin(account.event_updates(room_id, event, selection)),
                 None => Box::pin(account.conversation_updates(room_id, selection)),
             };
@@ -712,7 +708,7 @@ impl Backend {
                     snapshot = stream.next() => {
                         let Some(mut snapshot) = snapshot else { break; };
                         current = snapshot.conversation.clone();
-                        let candidates = snapshot.messages.iter().rev().filter(|message| message.kind == matrix_client_core::conversation::MessageKind::Image).take(128).map(|message| message.id.clone()).collect::<std::collections::HashSet<_>>();
+                        let candidates = snapshot.messages.iter().rev().filter(|message| message.kind == twayblade_core::conversation::MessageKind::Image).take(128).map(|message| message.id.clone()).collect::<std::collections::HashSet<_>>();
                         attempted.retain(|id| candidates.contains(id));
                         pending.retain(|id| candidates.contains(id));
                         for message in snapshot.messages.iter_mut().rev() {
@@ -979,7 +975,7 @@ impl Backend {
                 }
                 Create(draft) => match account.create_room(draft).await {
                     Ok(id) => Ok(SpaceOutcome::Room(id)),
-                    Err(matrix_client_core::space_actions::SpaceError::ParentLink { room }) => {
+                    Err(twayblade_core::space_actions::SpaceError::ParentLink { room }) => {
                         Ok(SpaceOutcome::PartialRoom(room))
                     }
                     Err(e) => Err(space_failure(e)),
@@ -1008,7 +1004,7 @@ impl Backend {
     pub(super) fn update_profile(
         &self,
         expected: u128,
-        update: matrix_client_core::profile::ProfileUpdate,
+        update: twayblade_core::profile::ProfileUpdate,
     ) -> Result<Profile, ServiceError> {
         let account = self
             .state
@@ -1028,7 +1024,7 @@ impl Backend {
         &self,
         room: String,
         user: String,
-        action: matrix_client_core::room_state::MemberAction,
+        action: twayblade_core::room_state::MemberAction,
     ) -> Result<(), ServiceError> {
         let account = self
             .state
@@ -1163,7 +1159,7 @@ impl Backend {
         room: String,
         account: u128,
         source: crate::attachments::AttachmentSource,
-    ) -> Result<matrix_client_core::conversation::AttachmentDraft, ServiceError> {
+    ) -> Result<twayblade_core::conversation::AttachmentDraft, ServiceError> {
         let conversation = self.media_conversation(&room, account)?;
         self.runtime
             .block_on(async {
@@ -1182,7 +1178,7 @@ impl Backend {
         &self,
         room: String,
         account: u128,
-        draft: matrix_client_core::conversation::AttachmentDraft,
+        draft: twayblade_core::conversation::AttachmentDraft,
     ) -> Result<(), ServiceError> {
         let conversation = self.media_conversation(&room, account)?;
         self.runtime
@@ -1197,12 +1193,12 @@ impl Backend {
         cancel: watch::Receiver<bool>,
     ) -> Result<
         (
-            Arc<matrix_client_core::conversation::ViewerImage>,
+            Arc<twayblade_core::conversation::ViewerImage>,
             Arc<gpui_kit::RenderImage>,
         ),
-        matrix_client_core::conversation::ImageError,
+        twayblade_core::conversation::ImageError,
     > {
-        use matrix_client_core::conversation::ImageError;
+        use twayblade_core::conversation::ImageError;
         let gallery = {
             let state = self.state.lock().map_err(|_| ImageError::Unavailable)?;
             let view = self.updates.borrow();
@@ -1399,7 +1395,7 @@ impl Backend {
             .map_err(|_| failure("Session is unavailable."))?;
         state.stop();
         state.account = None;
-        matrix_client_platform::notifications::clear_launch_activation();
+        twayblade_platform::notifications::clear_launch_activation();
         publish(&self.updates, |snapshot| {
             let revision = snapshot.revision;
             *snapshot = Snapshot::default();
@@ -1418,7 +1414,7 @@ impl Backend {
 impl Backend {
     pub(super) fn notification_rule(
         &self,
-        change: matrix_client_core::notifications::RuleChange,
+        change: twayblade_core::notifications::RuleChange,
     ) -> Result<(), ServiceError> {
         let account = self
             .state
@@ -1440,7 +1436,7 @@ impl Backend {
     }
     fn connect(&self, account: Account) -> Result<(), ServiceError> {
         let _runtime = self.runtime.enter();
-        let security = matrix_client_core::security::Security::new(&account);
+        let security = twayblade_core::security::Security::new(&account);
         let mut security_updates = security.subscribe();
         let mut state = self
             .state
