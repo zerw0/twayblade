@@ -1,5 +1,37 @@
 # Local Matrix integration checks
 
+## Native MatrixRTC audio and video
+
+Inside `nix develop`, with a local Docker engine:
+
+```sh
+npm ci --prefix tests/integration/browser --ignore-scripts
+PLAYWRIGHT_BROWSERS_PATH=target/playwright tests/integration/browser/node_modules/.bin/playwright install chromium
+MATRIX_TEST_DOCKER_CONTEXT=colima-matrixclient-test bash tests/integration/run.sh call
+```
+
+The call profile runs digest-pinned Synapse, LiveKit 1.9.0, lk-jwt-service 0.9.0,
+Element Call 0.28.2 and a TLS proxy. The native headless client and pinned
+Chromium/Element peer join an encrypted room. Assertions cover memberships,
+both participant lists, encrypted key exchange (counts only), exactly two
+LiveKit participants and decrypted generated audio/video on both sides. A
+native/native case checks the same media path. No synthetic Matrix membership
+or key events, physical devices, GPUI views or WebKit are involved.
+
+Service ports bind to loopback and only this Compose project's call services
+are stopped afterward, including on failure. Existing generated test data is
+retained; both pre-rename and current fixture server aliases are supported.
+Native clients trust the fixture CA through the account certificate option;
+Chromium trusts only the fixture leaf's SPKI. No host trust roots are changed.
+Browser consoles and credential-bearing network URLs are never forwarded.
+`MATRIX_TEST_CALL_FILTER` can select one native call test during diagnosis.
+
+Physical microphone/speaker/camera permissions and media on this Mac require a
+person. Public-server Element Web, Linux and Windows are not attempted.
+[Architecture, key formats and UI contracts](../../docs/architecture/CALLS.md).
+
+## Other Matrix checks
+
 This opt-in fixture uses pinned Synapse v1.164.2 (image digest recorded in
 `compose.yaml`), SQLite and two generated test accounts. It binds only
 `127.0.0.1:18448`, with a local CA and a signed server certificate. No system

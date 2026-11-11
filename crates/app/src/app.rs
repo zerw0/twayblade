@@ -12,7 +12,7 @@ use gpui_kit::component::{
 use gpui_kit::*;
 
 use crate::{
-    backend::{Backend, LoginOptions, Profile, Snapshot, TimelineAction},
+    backend::{self, Backend, LoginOptions, Profile, Snapshot, TimelineAction},
     model::{self, Navigation},
 };
 
@@ -42,6 +42,83 @@ pub(super) struct ProfilePage {
     pub profile: Option<Profile>,
     pub loading: bool,
     pub error: String,
+}
+
+// Technical call action contracts only. Claude owns their view integration.
+#[allow(dead_code, reason = "M5 call actions awaiting UI integration")]
+impl MatrixApp {
+    pub fn start_call(
+        &self,
+        room_id: String,
+        video: bool,
+    ) -> Result<(), twayblade_core::calls::CallError> {
+        self.backend
+            .as_ref()
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?
+            .start_call(self.snapshot.account_instance, room_id, video, false)
+    }
+    pub fn join_call(&self, room_id: String) -> Result<(), twayblade_core::calls::CallError> {
+        self.backend
+            .as_ref()
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?
+            .start_call(self.snapshot.account_instance, room_id, false, true)
+    }
+    pub fn leave_call(&self) -> Result<(), twayblade_core::calls::CallError> {
+        self.backend
+            .as_ref()
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?
+            .leave_call(self.snapshot.account_instance)
+    }
+    pub fn select_input(&self, id: String) -> Result<(), twayblade_core::calls::CallError> {
+        self.backend
+            .as_ref()
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?
+            .call_control(
+                self.snapshot.account_instance,
+                backend::calls::Control::Input(id),
+            )
+    }
+    pub fn select_output(&self, id: String) -> Result<(), twayblade_core::calls::CallError> {
+        self.backend
+            .as_ref()
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?
+            .call_control(
+                self.snapshot.account_instance,
+                backend::calls::Control::Output(id),
+            )
+    }
+    pub fn select_camera(&self, id: String) -> Result<(), twayblade_core::calls::CallError> {
+        self.backend
+            .as_ref()
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?
+            .call_control(
+                self.snapshot.account_instance,
+                backend::calls::Control::Camera(id),
+            )
+    }
+    pub fn call_video_handle(&self, id: &str) -> Option<twayblade_core::calls::LatestFrame> {
+        self.backend
+            .as_ref()?
+            .call_video_handle(self.snapshot.account_instance, id)
+    }
+    pub fn set_muted(&self, muted: bool) -> Result<(), twayblade_core::calls::CallError> {
+        self.backend
+            .as_ref()
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?
+            .call_control(
+                self.snapshot.account_instance,
+                backend::calls::Control::Muted(muted),
+            )
+    }
+    pub fn set_video(&self, video: bool) -> Result<(), twayblade_core::calls::CallError> {
+        self.backend
+            .as_ref()
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?
+            .call_control(
+                self.snapshot.account_instance,
+                backend::calls::Control::Video(video),
+            )
+    }
 }
 
 pub(super) struct MatrixApp {

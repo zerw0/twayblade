@@ -30,6 +30,10 @@ app="$repo_root/target/$profile/bundle/Twayblade.app"
 mkdir -p "$app/Contents/MacOS"
 cp "target/$profile/twayblade" "$app/Contents/MacOS/"
 cp macos/Info.plist "$app/Contents/Info.plist"
+# Remove the superseded helper from a previously built development bundle.
+rm -rf "$app/Contents/Helpers/Twayblade Call.app"
+mkdir -p "$app/Contents/Resources/licenses"
+cp crates/media/licenses/libwebrtc-a545de4.md "$app/Contents/Resources/licenses/"
 # A stable identity keeps Keychain approval across rebuilds; ad-hoc signing
 # ("-") changes the signature every build. Create one with
 # macos/create-dev-certificate.sh, or set TWAYBLADE_SIGN_IDENTITY.

@@ -1,0 +1,13 @@
+port: 7880
+bind_addresses: ["0.0.0.0"]
+rtc:
+  # Advertise the host's loopback mapping, not an unreachable container IP.
+  node_ip: 127.0.0.1
+  tcp_port: 22450
+  port_range_start: 50000
+  port_range_end: 50020
+  use_external_ip: false
+keys:
+  isolated-call-fixture: isolated-call-fixture-only-never-use-outside-tests
+logging:
+  level: error

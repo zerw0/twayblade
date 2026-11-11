@@ -1,0 +1,2 @@
+# Preserve the bundled upstream license notices verbatim, including whitespace.
+crates/media/licenses/libwebrtc-a545de4.md -whitespace
