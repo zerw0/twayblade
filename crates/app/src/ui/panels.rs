@@ -1,5 +1,6 @@
 //! Trailing panels: Info (About, Members, Files), search, profile and member actions.
 use super::*;
+use crate::ui::chrome::ToolbarControl;
 
 impl MatrixApp {
     pub(crate) fn panel(&self, cx: &App) -> Stateful<Div> {
@@ -34,6 +35,7 @@ impl MatrixApp {
             )
             .child(
                 Button::new(close)
+                    .toolbar_control()
                     .ghost()
                     .small()
                     .icon(IconName::X)
