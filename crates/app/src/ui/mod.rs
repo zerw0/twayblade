@@ -307,6 +307,7 @@ impl Render for MatrixApp {
                                     .id("management-backdrop")
                                     .absolute()
                                     .inset_0()
+                                    .occlude()
                                     .bg(gpui_kit::black().opacity(0.35))
                                     .flex()
                                     .items_start()

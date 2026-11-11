@@ -30,7 +30,7 @@ jobs:
             os: windows-2022
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
@@ -76,7 +76,7 @@ jobs:
           Copy-Item target/release/twayblade.exe, README.md dist/twayblade/
           Compress-Archive -Path dist/twayblade -DestinationPath "dist/twayblade-${{ matrix.name }}.zip"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: twayblade-${{ matrix.name }}
           path: |
@@ -91,7 +91,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true

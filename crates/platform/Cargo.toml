@@ -29,8 +29,10 @@ windows = { version = "=0.62.2", features = ["Win32_Foundation", "Win32_UI_Windo
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "=3.6.3", features = ["sync-secret-service", "crypto-rust"] }
-ashpd = { version = "=0.13.13", default-features = false, features = ["tokio", "settings"] }
-zbus = { version = "=5.19.0", default-features = false, features = ["tokio"] }
+# async-io, not tokio: GPUI's Linux backend enables ashpd/async-io, and ashpd
+# refuses both. Its futures run on any executor, including our tokio runtime.
+ashpd = { version = "=0.13.13", default-features = false, features = ["async-io", "settings"] }
+zbus = { version = "=5.19.0", default-features = false, features = ["async-io"] }
 
 # Native observer registration and Win32 output pointers are isolated in audited
 # platform modules. Core/frontend retain the workspace-wide forbid policy.

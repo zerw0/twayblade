@@ -1,4 +1,6 @@
 use super::*;
+// Explicit, so it wins over the Windows SDK's own `Notification` glob import.
+use super::Notification;
 use ::windows::{
     Data::Xml::Dom::XmlDocument,
     Foundation::TypedEventHandler,

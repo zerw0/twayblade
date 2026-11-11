@@ -660,6 +660,9 @@ impl MatrixApp {
             .absolute()
             .inset_0()
             .size_full()
+            // Swallow pointer events so a click here never also reaches the
+            // window chrome underneath (e.g. the account button behind Close).
+            .occlude()
             .bg(cx.theme().background)
             .track_focus(&v.focus)
             .key_context("ImageViewer")
