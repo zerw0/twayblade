@@ -282,6 +282,20 @@ impl MatrixApp {
         });
         cx.notify();
     }
+    pub(crate) fn close_emoji(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.emoji_picker = None;
+        self.composer
+            .update(cx, |state, cx| state.focus(window, cx));
+        cx.notify();
+    }
+    /// The composer's Emoji button opens the picker, or closes it when open.
+    pub(crate) fn toggle_emoji(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.emoji_picker.is_some() {
+            self.close_emoji(window, cx);
+        } else {
+            self.open_emoji(None, window, cx);
+        }
+    }
     pub(crate) fn update_emoji_completion(&mut self, original: String, cursor: usize) {
         if self
             .emoji_picker
@@ -441,11 +455,7 @@ impl MatrixApp {
             COLUMNS
         };
         match event.keystroke.key.as_str() {
-            "escape" => {
-                self.emoji_picker = None;
-                self.composer
-                    .update(cx, |state, cx| state.focus(window, cx));
-            }
+            "escape" => self.close_emoji(window, cx),
             "enter" => {
                 if selected < values.len() {
                     self.pick_emoji(selected, window, cx);

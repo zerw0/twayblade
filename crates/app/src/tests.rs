@@ -726,7 +726,7 @@ fn attachment_controls_require_an_explicit_action_and_samples_cannot_upload(
         window.click(gpui_kit::SharedString::from(format!("open-{id}")), cx);
     })
     .expect("attachment controls");
-    cx.update(|cx| assert!(app.read(cx).attachment_draft.is_none()));
+    cx.update(|cx| assert!(app.read(cx).attachment_drafts.is_empty()));
     cx.update(|cx| {
         app.update(cx, |app, cx| {
             let message = app.snapshot.messages.last_mut().unwrap();
@@ -1942,4 +1942,54 @@ fn notification_preview_click_opens_thread_and_device_controls_stay_local(cx: &m
         );
         assert!(app.backend.is_none());
     });
+}
+
+#[gpui_kit::test]
+fn stacked_attachments_show_in_the_composer_and_can_be_removed(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            app.attachment_sample = true;
+            cx.notify();
+        })
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("attachment-tray").visible());
+        assert!(window.find("attachment-sample-0").visible());
+        assert!(window.find("attachment-sample-1").visible());
+        window.click("attachment-remove-sample-0", cx);
+    })
+    .expect("attachment tray");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find_all("attachment-tray").is_empty());
+    })
+    .expect("tray cleared");
+}
+
+#[gpui_kit::test]
+fn emoji_button_toggles_the_picker_and_escape_closes_it(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestEventExt;
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("emoji-open", cx);
+    })
+    .expect("open picker");
+    cx.update(|cx| assert!(app.read(cx).emoji_picker.is_some()));
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("emoji-open", cx);
+    })
+    .expect("toggle picker closed");
+    cx.update(|cx| assert!(app.read(cx).emoji_picker.is_none()));
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("emoji-open", cx);
+        window.render_frame(cx);
+        window.key_down("escape", false, cx);
+    })
+    .expect("escape closes picker");
+    cx.update(|cx| assert!(app.read(cx).emoji_picker.is_none()));
 }

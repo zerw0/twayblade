@@ -118,8 +118,11 @@ pub(super) struct MatrixApp {
     pub emoji_picker: Option<crate::ui::emoji::Picker>,
     pub emoji_search: Entity<InputState>,
     pub emoji_preferences: crate::ui::emoji::Preferences,
-    pub attachment_draft: Option<twayblade_core::conversation::AttachmentDraft>,
-    pub attachment_busy: bool,
+    /// Stacked attachments, in the order they were added, sent with the next message.
+    pub attachment_drafts: Vec<crate::ui::attachments::Staged>,
+    /// Attachments still being read or checked.
+    pub attachment_pending: usize,
+    pub attachment_next_id: u64,
     pub attachment_sample: bool,
     pub attachment_request: u64,
     pub security_open: bool,
@@ -394,8 +397,9 @@ impl MatrixApp {
             } else {
                 crate::ui::emoji::Preferences::load()
             },
-            attachment_draft: None,
-            attachment_busy: false,
+            attachment_drafts: Vec::new(),
+            attachment_pending: 0,
+            attachment_next_id: 0,
             attachment_sample: false,
             attachment_request: 0,
             security_open: false,
@@ -1123,7 +1127,12 @@ impl MatrixApp {
             return;
         };
         let body = self.composer.read(cx).value().to_string();
-        if body.trim().is_empty() || self.sending.contains(&room) {
+        let has_text = !body.trim().is_empty();
+        // Wait for every stacked attachment so none is left behind.
+        if (!has_text && self.attachment_drafts.is_empty())
+            || self.attachment_pending > 0
+            || self.sending.contains(&room)
+        {
             return;
         }
         if let Some(backend) = &self.backend {
@@ -1131,18 +1140,46 @@ impl MatrixApp {
         }
         self.sending.insert(room.clone());
         let account = self.snapshot.user_id.clone();
-        let sent_body = body.clone();
+        let instance = self.snapshot.account_instance;
+        let sent_body = has_text.then(|| body.clone());
         let sent_room = room.clone();
+        let staged = std::mem::take(&mut self.attachment_drafts);
+        let attachment_request = self.attachment_request;
         self.job(
             window,
             cx,
-            move |backend| backend.send_text(sent_room, sent_body),
-            move |this, result, window, cx| {
+            move |backend| {
+                // Attachments first, in order, then the text; stop at the first failure.
+                let mut staged = staged.into_iter();
+                while let Some(item) = staged.next() {
+                    if let Err(error) =
+                        backend.send_attachment(sent_room.clone(), instance, item.draft)
+                    {
+                        return (Err(error), staged.collect::<Vec<_>>());
+                    }
+                }
+                let result = match sent_body {
+                    Some(text) => backend.send_text(sent_room, text),
+                    None => Ok(()),
+                };
+                (result, Vec::new())
+            },
+            move |this, (result, unsent), window, cx| {
                 if this.snapshot.user_id != account {
                     return;
                 }
                 this.sending.remove(&room);
+                // Put unsent attachments back while the same conversation is open.
+                if !unsent.is_empty()
+                    && this.attachment_request == attachment_request
+                    && this.navigation.selected_room.as_ref() == Some(&room)
+                {
+                    let mut restored = unsent;
+                    restored.append(&mut this.attachment_drafts);
+                    this.attachment_drafts = restored;
+                }
                 match result {
+                    Ok(()) if !has_text => {}
                     Ok(()) => {
                         if let Some((state, _)) = this.composers.get(&room)
                             && state.read(cx).value().as_str() == body
