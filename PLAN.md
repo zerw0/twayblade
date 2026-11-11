@@ -524,6 +524,13 @@ M4b core 2 — Task 4, cached-search sender names (2026-11-11):
 - Compilation: pinned macOS fmt and strict locked all-target/all-feature workspace Clippy passed. Unit tests: locked all-feature workspace suite passed (125 tests; opt-in tests ignored). Linux/Windows compilation/runtime remain unverified (target standard libraries unavailable locally).
 - Live integration: isolated Synapse 1.164.2 search regression passed, including encrypted cached display names and fallback to sender IDs after removing the profile name. Actual Element-client interoperability and physical platform checks remain unverified.
 
+M4b core 2 — Task 5, spoiler/status/verification contracts (2026-11-11):
+- Sanitized `SpanKind::Spoiler {index,reason}` now carries a deterministic zero-based preorder index, unique within each message, including nested spans. UI reveal state should use `(message.event_id,index)`; repeated projection keeps indices and each message starts at zero. Existing `Snapshot.messages[].rich` / thread messages carry the data; no new snapshot root fields or reveal views/actions.
+- `Account::set_presence(state,Some(status))` trims whitespace, caps Unicode scalar characters at 256 and rejects all control characters (including edge newlines/tabs) with typed `PresenceError::InvalidStatus`. `None` clears through the SDK. Existing `MatrixApp::set_presence` and `Snapshot.own_presence.status_msg` / `presence[].status_msg` are the UI contracts; frontend backend wording explains invalid status. No status content enters Debug/log output.
+- Kept `SecuritySnapshot.verified` based exclusively on `is_cross_signed_by_owner()`. The real crypto regression asserts an existing cross-signing identity plus locally trusted own device still reports unverified, then becomes verified after recovery; another fresh device remains unverified before SAS and becomes verified afterward. `Snapshot.security.verified` and existing security actions are unchanged.
+- Compilation: pinned macOS fmt and strict locked all-target/all-feature workspace Clippy passed. Unit tests: locked all-feature workspace suite passed (127 tests; opt-in tests ignored), including spoiler stability and Unicode/status boundaries. Linux/Windows compilation/runtime remain unverified (target standard libraries unavailable locally).
+- Live integration: isolated Synapse 1.164.2 security/SAS/recovery and both presence-enabled/disabled runs passed, including trimmed status, invalid status and clearing. Actual Element interoperability, reveal controls, status-entry UI and physical platform checks remain unverified.
+
 Not yet verified:
 - Physical GUI checks of logout, pagination, IME and VoiceOver.
 - CI on any host; Linux and Windows builds and runs.

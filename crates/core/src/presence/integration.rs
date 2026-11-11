@@ -82,7 +82,7 @@ async fn presence_enabled_and_disabled_server_evidence() {
     );
     checked(alice.set_presence(State::Online, None).await, "online");
     checked(
-        bob.set_presence(State::Unavailable, Some("fixture availability".into()))
+        bob.set_presence(State::Unavailable, Some("  fixture availability  ".into()))
             .await,
         "away and status",
     );
@@ -112,6 +112,33 @@ async fn presence_enabled_and_disabled_server_evidence() {
             .expect("visible shared-room partner");
         assert_eq!(partner.state, State::Unavailable);
         assert_eq!(partner.status_msg.as_deref(), Some("fixture availability"));
+        assert!(matches!(
+            bob.set_presence(State::Unavailable, Some("invalid\nstatus".into()))
+                .await,
+            Err(PresenceError::InvalidStatus)
+        ));
+        checked(
+            bob.set_presence(State::Unavailable, None).await,
+            "clear status message",
+        );
+        checked(
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let current =
+                        checked(alice.presence(visible.clone()).await, "cleared presence");
+                    if current
+                        .users
+                        .get(&bob.user_id())
+                        .is_some_and(|p| p.status_msg.is_none())
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            })
+            .await,
+            "status clear propagation",
+        );
         checked(bob.set_presence(State::Offline, None).await, "offline");
         assert!(
             checked(alice.presence(Vec::new()).await, "empty visible set")

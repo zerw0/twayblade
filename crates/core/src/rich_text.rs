@@ -32,6 +32,8 @@ pub enum SpanKind {
         target: String,
     },
     Spoiler {
+        /// Zero-based preorder index within this message, after sanitization.
+        index: u32,
         reason: Option<String>,
     },
     Color {
@@ -203,6 +205,7 @@ fn project(
                 .then_some(SpanKind::Link { target })
         }),
         "span" if attr(node, "data-mx-spoiler").is_some() => Some(SpanKind::Spoiler {
+            index: 0,
             reason: attr(node, "data-mx-spoiler").filter(|s| !s.is_empty()),
         }),
         "span" | "font" => Some(SpanKind::Color {
@@ -228,6 +231,21 @@ fn project(
         None => children,
     })
 }
+fn index_spoilers(nodes: &mut [RichNode], next: &mut u32) {
+    for node in nodes {
+        match node {
+            RichNode::Span { kind, children } => {
+                if let SpanKind::Spoiler { index, .. } = kind {
+                    *index = *next;
+                    *next += 1;
+                }
+                index_spoilers(children, next);
+            }
+            RichNode::Block { children, .. } => index_spoilers(children, next),
+            RichNode::Text(_) => {}
+        }
+    }
+}
 pub fn incoming(formatted: &FormattedBody) -> Option<RichText> {
     if formatted.format != MessageFormat::Html {
         return None;
@@ -238,6 +256,7 @@ pub fn incoming(formatted: &FormattedBody) -> Option<RichText> {
     for node in html.children() {
         nodes.extend(project(&node, &mut budget, 0).ok()?);
     }
+    index_spoilers(&mut nodes, &mut 0);
     Some(RichText { nodes })
 }
 pub(crate) fn message(msgtype: &MessageType) -> Option<std::sync::Arc<RichText>> {
@@ -262,6 +281,38 @@ mod tests {
                     _ => false,
                 }
         })
+    }
+    #[test]
+    fn spoiler_indices_are_unique_stable_preorder_and_message_local() {
+        fn indices(nodes: &[RichNode], out: &mut Vec<u32>) {
+            for node in nodes {
+                match node {
+                    RichNode::Span { kind, children } => {
+                        if let SpanKind::Spoiler { index, .. } = kind {
+                            out.push(*index);
+                        }
+                        indices(children, out);
+                    }
+                    RichNode::Block { children, .. } => indices(children, out),
+                    _ => {}
+                }
+            }
+        }
+        let html = FormattedBody::html(
+            "<p><span data-mx-spoiler>first <span data-mx-spoiler='nested'>second</span></span></p><span data-mx-spoiler>third</span>",
+        );
+        let first = incoming(&html).unwrap();
+        assert!(first == incoming(&html).unwrap());
+        let mut result = Vec::new();
+        indices(&first.nodes, &mut result);
+        assert_eq!(result, vec![0, 1, 2]);
+        let other = incoming(&FormattedBody::html(
+            "<span data-mx-spoiler>other message</span>",
+        ))
+        .unwrap();
+        let mut result = Vec::new();
+        indices(&other.nodes, &mut result);
+        assert_eq!(result, vec![0]);
     }
     #[test]
     fn markdown_round_trip_has_html_and_exact_plain_fallback() {
