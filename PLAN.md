@@ -512,6 +512,12 @@ M4b core 2 — Task 2, gallery thumbnails (2026-11-11):
 - Compilation: pinned macOS fmt and strict locked all-target/all-feature workspace Clippy passed. Unit tests: locked all-feature workspace suite passed (125 tests; opt-in tests ignored); bounds, cache eviction and cancellation while waiting for the shared decoder are covered. Linux/Windows target standard libraries are unavailable in the pinned shell; cross-platform compilation/runtime remain unverified.
 - Live integration: isolated Synapse 1.164.2 viewer/gallery run passed, including plain/encrypted preferred and original-source thumbnails, GIF/WebP first-frame thumbnails and SDK media-store absence after fetching. Physical gallery display, actual Element media and platform acceptance remain unverified.
 
+M4b core 2 — Task 3, plain composition (2026-11-11):
+- `rich_text::compose` now returns plain `m.text` when Ruma's Markdown parser returns no formatting. Serialized plain events omit both `format` and `formatted_body`; formatted input retains sanitized HTML and the exact composer fallback. This supersedes the earlier all-HTML composition behavior.
+- UI contract is unchanged: existing `Conversation::send` / MatrixApp send actions; `Message.rich` remains absent for plain input. No new snapshot fields/actions or view changes.
+- Compilation: pinned macOS fmt and strict locked all-target/all-feature workspace Clippy passed. Unit tests: locked all-feature workspace suite passed (125 tests; opt-in tests ignored); plain Unicode, ampersands/newlines, serialized omission and formatted round-trip checks. Linux/Windows builds/runtime remain unverified (target standard libraries unavailable locally).
+- Live integration: all five isolated Synapse 1.164.2 service tests passed, including plain and formatted messages through encrypted SDK timelines. Actual Element-client interoperability and physical platform checks remain unverified.
+
 Not yet verified:
 - Physical GUI checks of logout, pagination, IME and VoiceOver.
 - CI on any host; Linux and Windows builds and runs.

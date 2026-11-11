@@ -92,21 +92,6 @@ fn sanitized(html: &str) -> Result<Html, FormattingError> {
         },
     ))
 }
-fn escaped(body: &str) -> String {
-    let mut html = String::new();
-    for ch in body.chars() {
-        match ch {
-            '&' => html.push_str("&amp;"),
-            '<' => html.push_str("&lt;"),
-            '>' => html.push_str("&gt;"),
-            '"' => html.push_str("&quot;"),
-            '\'' => html.push_str("&#39;"),
-            '\n' => html.push_str("<br>\n"),
-            ch => html.push(ch),
-        }
-    }
-    html
-}
 /// Ruma owns Markdown parsing. The plain fallback stays exactly as composed,
 /// including its Markdown syntax, as in Ruma/Element-compatible message content.
 pub fn compose(body: String) -> Result<RoomMessageEventContent, FormattingError> {
@@ -116,10 +101,10 @@ pub fn compose(body: String) -> Result<RoomMessageEventContent, FormattingError>
     if body.len() > 64 * 1024 {
         return Err(FormattingError::Limit);
     }
-    let formatted = FormattedBody::markdown(&body)
-        .map(|f| f.body)
-        .unwrap_or_else(|| escaped(&body));
-    let html = sanitized(&formatted)?.to_string();
+    let Some(formatted) = FormattedBody::markdown(&body) else {
+        return Ok(RoomMessageEventContent::text_plain(body));
+    };
+    let html = sanitized(&formatted.body)?.to_string();
     Ok(RoomMessageEventContent::text_html(body, html))
 }
 fn attr(node: &NodeRef, key: &str) -> Option<String> {
@@ -368,12 +353,19 @@ mod tests {
     }
     #[test]
     fn plain_and_oversized_inputs_keep_a_safe_fallback() {
-        let content = compose("plain & <text>".into()).unwrap();
+        let content = compose("plain & text".into()).unwrap();
         let MessageType::Text(text) = content.msgtype else {
             panic!("text");
         };
-        assert_eq!(text.body, "plain & <text>");
-        assert!(!text.formatted.unwrap().body.contains("<text>"));
+        assert_eq!(text.body, "plain & text");
+        assert!(text.formatted.is_none());
+        for body in ["Hello", "plain & text", "Здравей", "two\nlines"] {
+            let serialized = serde_json::to_value(compose(body.into()).unwrap()).unwrap();
+            assert_eq!(serialized["msgtype"], "m.text");
+            assert_eq!(serialized["body"], body);
+            assert!(serialized.get("formatted_body").is_none());
+            assert!(serialized.get("format").is_none());
+        }
         assert!(matches!(
             compose("x".repeat(65537)),
             Err(FormattingError::Limit)

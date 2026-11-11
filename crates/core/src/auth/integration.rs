@@ -254,6 +254,24 @@ async fn encrypted_delivery_profile_and_same_device_store_restore() {
     )
     .await;
     drop(rich_updates);
+    let plain = format!("plain isolated {}", Uuid::new_v4());
+    checked(
+        conversation.send(plain.clone()).await,
+        "plain application send",
+    );
+    wait_for_message(&bob, room_id.to_string(), &plain).await;
+    let mut plain_updates = Box::pin(bob.conversation_updates(room_id.to_string(), 3));
+    wait_snapshot(
+        &mut plain_updates,
+        |s| {
+            s.messages
+                .iter()
+                .any(|m| m.body == plain && m.rich.is_none())
+        },
+        "plain encrypted message without formatting",
+    )
+    .await;
+    drop(plain_updates);
     let response = checked(
         alice
             .client
