@@ -702,9 +702,11 @@ impl MatrixApp {
                     .ghost()
                     .p_0()
                     .h_auto()
+                    .w(px(72.))
                     .accessibility_label(label)
                     .child(
                         v_flex()
+                            .w(px(72.))
                             .items_center()
                             .gap(px(4.))
                             .child(
@@ -741,6 +743,8 @@ impl MatrixApp {
                             )
                             .child(
                                 div()
+                                    .w_full()
+                                    .text_center()
                                     .text_size(px(11.))
                                     .text_color(if selected {
                                         cx.theme().foreground
