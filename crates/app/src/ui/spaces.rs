@@ -1,5 +1,6 @@
 //! Native space directory, membership confirmation and conversation creation.
 use crate::theme::scaled_px as px;
+use crate::ui::chrome::ToolbarControl;
 use crate::{
     app::MatrixApp,
     backend::{SpaceAction, SpaceOutcome},
@@ -733,6 +734,7 @@ impl MatrixApp {
                     .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
                     .child(
                         Button::new("close-management")
+                            .toolbar_control()
                             .ghost()
                             .small()
                             .icon(assets::IconName::X)

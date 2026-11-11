@@ -256,7 +256,7 @@ impl MatrixApp {
                 v_flex()
                     .rounded(px(9.))
                     .border_1()
-                    .border_color(cx.theme().border)
+                    .border_color(cx.theme().input)
                     .bg(palette.field)
                     .when(stacked, |view| view.child(self.attachment_tray(cx)))
                     .child(

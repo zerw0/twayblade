@@ -14,19 +14,21 @@ impl Drop for Cleanup {
         let shared = self.shared.clone();
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
-                let signed_out = {
+                // Never hold the snapshot borrow while taking the state lock:
+                // backend actions lock state and then publish (a write on the
+                // same watch channel), so the reverse order deadlocks both
+                // threads and freezes every later room selection.
+                let snapshot_signed_out = {
                     let snapshot = updates.borrow();
-                    let account_gone = shared
-                        .lock()
-                        .map(|state| {
-                            state.account.as_ref().map(Account::instance_id) != Some(account)
-                        })
-                        .unwrap_or(true);
                     snapshot.user_id.is_empty()
-                        || account_gone
                         || snapshot.account_instance != account
                         || snapshot.session_state != SessionState::Active
                 };
+                let account_gone = shared
+                    .lock()
+                    .map(|state| state.account.as_ref().map(Account::instance_id) != Some(account))
+                    .unwrap_or(true);
+                let signed_out = snapshot_signed_out || account_gone;
                 if signed_out {
                     for id in ids {
                         os::dismiss(&id).await;

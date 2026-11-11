@@ -11,6 +11,16 @@ struct RailTile {
     unread: u64,
 }
 
+/// A control inside a toolbar. Its presses must not reach the toolbar, which
+/// on macOS is the title bar: there a press starts a window drag and two quick
+/// clicks (say, hiding then showing the sidebar) would zoom the window.
+pub(crate) trait ToolbarControl: InteractiveElement + Sized {
+    fn toolbar_control(self) -> Self {
+        self.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+    }
+}
+impl<T: InteractiveElement> ToolbarControl for T {}
+
 impl MatrixApp {
     /// A toolbar row. On macOS it is also the window's title bar: dragging moves
     /// the window and double-clicking zooms it, as in native apps.
@@ -805,6 +815,7 @@ impl MatrixApp {
                 .accessibility_label(label)
                 .tooltip(label)
                 .disabled(!enabled)
+                .toolbar_control()
         };
         self.toolbar("window-titlebar", cx)
             .h(px(40.))
@@ -861,6 +872,7 @@ impl MatrixApp {
             .child(
                 div()
                     .id("title-search")
+                    .toolbar_control()
                     .w(px(400.))
                     .max_w(relative(0.4))
                     .flex_none()
@@ -916,6 +928,7 @@ impl MatrixApp {
                     })
                     .child(
                         Button::new("open-notifications")
+                            .toolbar_control()
                             .ghost()
                             .size(px(26.))
                             .icon(IconName::Bell)
@@ -927,6 +940,7 @@ impl MatrixApp {
                     )
                     .child(
                         Button::new("open-settings")
+                            .toolbar_control()
                             .ghost()
                             .size(px(26.))
                             .icon(IconName::Settings)
@@ -936,7 +950,11 @@ impl MatrixApp {
                                 this.open_settings(crate::ui::settings::Section::Appearance, cx)
                             })),
                     )
-                    .child(self.own_menu(user.clone(), cx)),
+                    .child(
+                        div()
+                            .toolbar_control()
+                            .child(self.own_menu(user.clone(), cx)),
+                    ),
             )
             .into_any_element()
     }
