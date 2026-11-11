@@ -1,7 +1,12 @@
 //! MatrixRTC contracts and room-scoped SDK widget driver. No frontend wording.
 #[cfg(all(test, target_os = "macos"))]
 mod integration;
+mod keys;
+pub mod native;
+#[cfg(test)]
+mod native_integration;
 pub mod policy;
+mod session;
 use crate::auth::Account;
 use matrix_sdk::{
     Room, RoomState,
@@ -10,16 +15,28 @@ use matrix_sdk::{
         VirtualElementCallWidgetProperties, WidgetDriver, WidgetDriverHandle, WidgetSettings,
     },
 };
+pub use session::{NativeCall, NativeControl, CallHandle};
 use std::{collections::HashMap, path::PathBuf};
 use twayblade_call_host::{
     Frame, ORIGIN,
     supervisor::{Exit, Supervisor},
 };
+pub use twayblade_media::{Device as CallDevice, Devices as CallDevices, LatestFrame, VideoTracks};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum CallError {
     #[error("call_no_foci")]
     NoFoci,
+    #[error("call_media_e2ee_required")]
+    MediaE2eeRequired,
+    #[error("call_key_rejected")]
+    KeyRejected,
+    #[error("call_transport_failed")]
+    TransportFailed,
+    #[error("call_membership_forbidden")]
+    MembershipForbidden,
+    #[error("call_device_unavailable")]
+    DeviceUnavailable,
     #[error("call_unsupported_server")]
     UnsupportedServer,
     #[error("call_widget_rejected")]
@@ -30,6 +47,8 @@ pub enum CallError {
     RuntimeHung,
     #[error("call_permission_denied")]
     PermissionDenied,
+    #[error("call_permission_restricted")]
+    PermissionRestricted,
     #[error("call_already_active")]
     AlreadyActive,
     #[error("call_invalid_room")]
@@ -65,22 +84,50 @@ pub enum CallPhase {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Participant {
+    pub device_id: String,
+    pub speaking: Option<bool>,
+    pub connection_quality: Option<ConnectionQuality>,
     pub user_id: String,
     pub display_name: Option<String>,
     /// Unknown from MatrixRTC membership alone. Never infer device state.
     pub muted: Option<bool>,
     pub video: Option<bool>,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConnectionQuality {
+    Excellent,
+    Good,
+    Poor,
+    Lost,
+}
+#[derive(Clone, Debug, Default)]
+pub struct LocalCallState {
+    pub muted: bool,
+    pub video: bool,
+    pub input_device: Option<String>,
+    pub output_device: Option<String>,
+    pub camera: Option<String>,
+}
+#[derive(Clone, Debug)]
+pub struct CallVideoTrack {
+    pub id: String,
+    pub user_id: String,
+    pub device_id: String,
+    pub local: bool,
+}
 #[derive(Clone, Debug)]
 pub struct CallState {
+    pub local: LocalCallState,
+    pub devices: CallDevices,
+    pub video_tracks: Vec<CallVideoTrack>,
     pub room_id: String,
     pub kind: CallKind,
     pub phase: CallPhase,
     pub participants: Vec<Participant>,
-    /// Set only by io.element.device_mute acknowledgements/notifications.
+    /// Confirmed native media state; local.* is the expanded contract.
     pub muted: Option<bool>,
     pub video: Option<bool>,
-    /// Element Call 0.17 has no screen-sharing status widget action.
+    /// Screen sharing is not implemented in this phase.
     pub screen_sharing: Option<bool>,
     pub error: Option<CallError>,
 }
@@ -238,22 +285,19 @@ impl Account {
                 continue;
             }
             let mut participants = Vec::new();
-            for user in room.active_room_call_participants() {
-                if participants
-                    .iter()
-                    .any(|p: &Participant| p.user_id == user.as_str())
-                {
-                    continue;
-                }
+            for member in native::members(&room).await.unwrap_or_default() {
                 let display_name = room
-                    .get_member_no_sync(&user)
+                    .get_member_no_sync(&member.user_id)
                     .await
                     .ok()
                     .flatten()
                     .and_then(|m| m.display_name().map(str::to_owned));
                 participants.push(Participant {
-                    user_id: user.to_string(),
+                    user_id: member.user_id.to_string(),
+                    device_id: member.device_id,
                     display_name,
+                    speaking: None,
+                    connection_quality: None,
                     muted: None,
                     video: None,
                 });

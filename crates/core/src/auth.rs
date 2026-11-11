@@ -79,12 +79,13 @@ pub struct Account {
     pub(crate) sync_requests:
         Arc<Mutex<std::collections::HashMap<matrix_sdk::ruma::OwnedRoomId, usize>>>,
     pub(crate) sync_request_updates: tokio::sync::watch::Sender<Vec<matrix_sdk::ruma::OwnedRoomId>>,
+    pub(crate) call_slot: Arc<tokio::sync::Semaphore>,
     instance_id: Uuid,
     remotely_revoked: Arc<AtomicBool>,
     store_path: PathBuf,
     session_store: secrets::SessionStore,
     persistence_lock: Arc<Mutex<()>>,
-    root_certificate: Option<matrix_sdk::reqwest::Certificate>,
+    pub(crate) root_certificate: Option<matrix_sdk::reqwest::Certificate>,
     session_state: tokio::sync::watch::Receiver<SessionState>,
     _session_monitor: Arc<recovery::SessionMonitor>,
 }
@@ -114,6 +115,7 @@ impl Account {
             selected_room: tokio::sync::watch::channel(None).0,
             sync_requests: Arc::new(Mutex::new(std::collections::HashMap::new())),
             sync_request_updates: tokio::sync::watch::channel(Vec::new()).0,
+            call_slot: Arc::new(tokio::sync::Semaphore::new(1)),
             instance_id: Uuid::new_v4(),
             remotely_revoked: Arc::new(AtomicBool::new(false)),
             store_path,
@@ -125,7 +127,10 @@ impl Account {
         }
     }
 
-    fn with_certificate(mut self, certificate: Option<matrix_sdk::reqwest::Certificate>) -> Self {
+    pub(crate) fn with_certificate(
+        mut self,
+        certificate: Option<matrix_sdk::reqwest::Certificate>,
+    ) -> Self {
         self.root_certificate = certificate;
         self
     }

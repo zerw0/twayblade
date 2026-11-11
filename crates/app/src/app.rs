@@ -69,6 +69,38 @@ impl MatrixApp {
             .ok_or(twayblade_core::calls::CallError::StaleRequest)?
             .leave_call(self.snapshot.account_instance)
     }
+    pub fn select_input(&self, id: String) -> Result<(), twayblade_core::calls::CallError> {
+        self.backend
+            .as_ref()
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?
+            .call_control(
+                self.snapshot.account_instance,
+                backend::calls::Control::Input(id),
+            )
+    }
+    pub fn select_output(&self, id: String) -> Result<(), twayblade_core::calls::CallError> {
+        self.backend
+            .as_ref()
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?
+            .call_control(
+                self.snapshot.account_instance,
+                backend::calls::Control::Output(id),
+            )
+    }
+    pub fn select_camera(&self, id: String) -> Result<(), twayblade_core::calls::CallError> {
+        self.backend
+            .as_ref()
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?
+            .call_control(
+                self.snapshot.account_instance,
+                backend::calls::Control::Camera(id),
+            )
+    }
+    pub fn call_video_handle(&self, id: &str) -> Option<twayblade_core::calls::LatestFrame> {
+        self.backend
+            .as_ref()?
+            .call_video_handle(self.snapshot.account_instance, id)
+    }
     pub fn set_muted(&self, muted: bool) -> Result<(), twayblade_core::calls::CallError> {
         self.backend
             .as_ref()

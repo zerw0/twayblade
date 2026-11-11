@@ -112,6 +112,7 @@ fn failure(message: impl ToString) -> ServiceError {
 #[derive(Default)]
 struct State {
     call_request: u64,
+    call_video: twayblade_core::calls::VideoTracks,
     call_task: Option<JoinHandle<()>>,
     call_control: Option<tokio::sync::mpsc::Sender<calls::Control>>,
     account: Option<Account>,
