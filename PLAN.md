@@ -594,6 +594,14 @@ M5 — native calls, phase 1 technical layer (2026-11-11):
 - Packaging: the final macOS native debug `.app` built and signed ad hoc; helper removal, microphone/camera usage declarations and bundled libwebrtc notices are checked. No application launch, call views or physical permission prompts were exercised. Linux/Windows packaging scripts now include the notices but their builds were not run. Commands and full contract: `docs/architecture/CALLS.md`.
 - Remaining acceptance: actual microphone/speaker/camera and permission interactions on this Mac need a person. Public-server Element Web, Linux and Windows compilation/runtime are not attempted. Screen sharing, ringing/MSC4075 notifications, device removal, network changes, cross-service focus migration and GPUI view integration remain open. No M5 exit claimed.
 
+Native calls review fixes (2026-11-11):
+- Only current call members' encrypted tracks are received. Previously every LiveKit publication was subscribed and departed members' keys stayed installed, so someone who left the Matrix call but stayed in the SFU room kept playing. Departure now unsubscribes their tracks, clears their video slots and overwrites their installed key indices with random material.
+- Keys are sent on membership changes and retried only after a failed delivery. Previously the 5-second keepalive resent them to every member.
+- An unencrypted publication is left unsubscribed and its member marked `media_blocked`; the call continues. Previously one such publication ended the call for everyone.
+- After a rotation the new key is distributed first and used after 5 s (matrix-js-sdk `useKeyDelay`, as in Element Call 0.28.2), avoiding a dropout on every departure.
+- Frame-counting evidence sinks are behind the media crate's `evidence` feature (tests only); release builds attach no extra sink per remote track. Remote audio still plays through the platform audio device module; that path is not exercised without a person.
+- Checks: fmt and strict Clippy (with and without `evidence`) and the workspace tests pass. `run.sh call` passed 2/2 (133 s): native↔native audio, video, sustained refresh and the new departure case (a member who left the call but stayed in the SFU room sends no further received audio or video frames and has no video slots), and native↔Element Call 0.28.2 audio and video. No physical devices.
+
 Not yet verified:
 - Physical GUI checks of logout, pagination, IME and VoiceOver.
 - CI on any host; Linux and Windows builds and runs.

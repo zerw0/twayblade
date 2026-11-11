@@ -10198,6 +10198,7 @@ dependencies = [
  "async-trait",
  "dispatch2",
  "futures-util",
+ "getrandom 0.4.3",
  "livekit",
  "livekit-net",
  "objc2 0.6.5",

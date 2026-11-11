@@ -160,6 +160,63 @@ async fn native_matrixrtc_audio_and_video() {
     .await;
     println!("native-native sustained call: membership refresh and delayed leave remained active");
 
+    // Bob leaves the MatrixRTC call but keeps his SFU connection and keeps
+    // publishing. Alice must stop receiving him: no subscription, no frames.
+    let bob = &accounts[1];
+    let bob_room = bob.client.get_room(room.room_id()).expect("Bob's room");
+    let bob_key = super::native::state_key(
+        bob.client.user_id().unwrap().to_owned(),
+        bob.client.device_id().unwrap().as_str(),
+        bob_room
+            .version()
+            .as_ref()
+            .map(|v| v.as_str())
+            .unwrap_or("10"),
+    );
+    checked(
+        bob_room
+            .send_state_event_raw(
+                super::native::MEMBER_EVENT,
+                bob_key.as_ref(),
+                serde_json::json!({}),
+            )
+            .await,
+        "Bob removes his call membership only",
+    );
+    checked(
+        timeout(Duration::from_secs(30), async {
+            while call_a.updates.borrow().participants.len() != 1 {
+                checked(call_a.updates.changed().await, "Alice sees Bob depart");
+            }
+        })
+        .await,
+        "Alice drops the departed member",
+    );
+    // Allow in-flight frames to drain, then require silence from Bob.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let audio = call_a.evidence().audio_frames.load(Ordering::Relaxed);
+    let video = call_a.evidence().video_frames.load(Ordering::Relaxed);
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert_eq!(
+        call_a.evidence().audio_frames.load(Ordering::Relaxed),
+        audio,
+        "no audio from a member who left the call"
+    );
+    assert_eq!(
+        call_a.evidence().video_frames.load(Ordering::Relaxed),
+        video,
+        "no video from a member who left the call"
+    );
+    assert!(
+        call_a
+            .video_tracks()
+            .ids()
+            .iter()
+            .all(|id| id.starts_with("local:")),
+        "the departed member's video slots are cleared"
+    );
+    println!("native-native departure: departed member unsubscribed, no frames received");
+
     checked(call_a.leave().await, "Alice leave");
     checked(call_b.leave().await, "Bob leave");
 }

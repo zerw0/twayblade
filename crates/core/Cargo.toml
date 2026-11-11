@@ -32,6 +32,7 @@ getrandom = "=0.4.3"
 twayblade-media = { path = "../media" }
 
 [dev-dependencies]
+twayblade-media = { path = "../media", features = ["evidence"] }
 tokio = { workspace = true, features = ["process"] }
 
 [lints]

@@ -198,6 +198,11 @@ fn accept(
     })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MemberChange {
+    pub changed: bool,
+    pub rotated: bool,
+}
 pub(crate) struct SenderKeys {
     pub key: MediaKey,
     pub index: u8,
@@ -212,8 +217,13 @@ impl SenderKeys {
         })
     }
     /// Rotate on any departure, including a different device of the same user.
-    /// Returns true when current membership requires sending the key again.
-    pub fn update_members(&mut self, own: &Member, members: &[Member]) -> Result<bool, CallError> {
+    /// Returns whether recipients changed (the key must be sent) and whether
+    /// the key rotated (the sender must switch to the new index).
+    pub fn update_members(
+        &mut self,
+        own: &Member,
+        members: &[Member],
+    ) -> Result<MemberChange, CallError> {
         let next: BTreeSet<_> = members
             .iter()
             .filter(|m| m.user_id != own.user_id || m.device_id != own.device_id)
@@ -226,7 +236,7 @@ impl SenderKeys {
         }
         let changed = next != self.recipients;
         self.recipients = next;
-        Ok(changed)
+        Ok(MemberChange { changed, rotated })
     }
     pub async fn send(&self, room: &Room, own: &Member) -> Result<(), CallError> {
         // Recheck at send time. Never wildcard devices or room members who have
@@ -310,13 +320,16 @@ mod tests {
         let b = member("B");
         let mut keys = SenderKeys::new().unwrap();
         let initial = keys.key.0;
-        assert!(keys.update_members(&own, &[a.clone(), b.clone()]).unwrap());
+        let joined = keys.update_members(&own, &[a.clone(), b.clone()]).unwrap();
+        assert!(joined.changed && !joined.rotated);
         assert!(
             keys.key.0 == initial,
             "joining preserves the current sender key generation"
         );
-        assert!(!keys.update_members(&own, &[a.clone(), b.clone()]).unwrap());
-        assert!(keys.update_members(&own, &[b]).unwrap());
+        let same = keys.update_members(&own, &[a.clone(), b.clone()]).unwrap();
+        assert!(!same.changed && !same.rotated, "no resend without a change");
+        let left = keys.update_members(&own, &[b]).unwrap();
+        assert!(left.changed && left.rotated);
         assert!(keys.key.0 != initial, "departure rotates key material");
         assert_eq!(keys.index, 1);
         assert!(

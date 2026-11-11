@@ -72,6 +72,9 @@ pub struct Participant {
     /// Unknown from MatrixRTC membership alone. Never infer device state.
     pub muted: Option<bool>,
     pub video: Option<bool>,
+    /// This member published media without end-to-end encryption; it is not
+    /// received. The call continues for everyone else.
+    pub media_blocked: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConnectionQuality {
@@ -156,6 +159,7 @@ impl Account {
                     connection_quality: None,
                     muted: None,
                     video: None,
+                    media_blocked: false,
                 });
             }
             calls.insert(

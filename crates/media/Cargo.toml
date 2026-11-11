@@ -6,7 +6,13 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 
+[features]
+# Test/fixture evidence only: counts decoded audio/video frames. Never in
+# release builds; it adds a sink per remote track.
+evidence = []
+
 [dependencies]
+getrandom = "=0.4.3"
 livekit = { version = "=0.10.1", features = ["rustls-tls-native-roots"] }
 tokio.workspace = true
 futures-util.workspace = true

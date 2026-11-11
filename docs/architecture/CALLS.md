@@ -57,10 +57,25 @@ Generate independent 16-byte sender keys with the OS CSPRNG (`getrandom`).
 Application-owned material is zeroized on drop. Send only to exact current
 call `(user_id, device_id)` pairs, never wildcard devices or every room member.
 The SDK performs device lookup, Olm session establishment and encryption.
-Periodic retries handle key queries/delivery that have not completed yet.
+Keys are sent when call membership changes and retried on the 5-second
+keepalive only after a failed or timed-out delivery, never on every tick.
 Membership-change notifications trigger rotation when any participant device
-leaves. The new sender index is selected even if delivery to a remaining device
-is retrying; there is no fallback to the departed participant's key.
+leaves. The new key is installed and distributed first; the sender switches to
+its index after 5 seconds (matrix-js-sdk `useKeyDelay`, as in Element Call
+0.28.2), so remaining members don't drop audio while it arrives. The departed
+member is already unsubscribed (see Reception), so the delay only means they
+could decrypt our media for those seconds.
+
+## Reception
+
+Media subscribes only to current, unexpired call members' tracks, re-evaluated
+on every membership change; being in the LiveKit room is not enough. When a
+member departs, their tracks are unsubscribed, consumers and video slots
+cleared, and every key index installed for them is overwritten with random
+material, so frames under old keys no longer decrypt. A publication without
+AES-GCM frame encryption is never subscribed: the publisher is marked
+`media_blocked` in the participant contract and the call continues for everyone
+else. Our own media is never published unencrypted.
 
 Incoming keys need SDK decryption metadata identifying the Olm sender device,
 matching event sender/device claims, current joined-room/call membership and
@@ -115,6 +130,10 @@ and AES-GCM-128 frame encryption. PBKDF2 defaults are not used. These match the
 pinned [Element Call MatrixKeyProvider](https://github.com/element-hq/element-call/blob/v0.28.2/sdk/src/media-backend/livekit/MatrixKeyProvider.ts).
 Publishing initializes the frame cryptor and current sender index before
 enabling capture content. Message E2EE and media E2EE have separate evidence.
+Remote audio plays through the platform audio device module. Frame-counting
+sinks (decoded audio/video evidence) exist only with the media crate's
+`evidence` feature, which core enables for its tests; release builds attach no
+extra sink per remote track.
 
 Microphone/playout use libwebrtc's PlatformAudio ADM. Stable device IDs are
 validated against a fresh enumeration before switching. Device lists refresh

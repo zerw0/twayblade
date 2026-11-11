@@ -33,7 +33,16 @@ pub struct NativeCall {
     tick: tokio::time::Interval,
     pub keys_received: u64,
     pub keys_sent: u64,
+    /// The last key distribution failed or timed out; retry on the next tick.
+    keys_pending: bool,
+    /// A rotated key index to switch to once members had time to receive it.
+    switch_at: Option<(u8, tokio::time::Instant)>,
 }
+/// After a rotation, keep encrypting with the previous key this long so the
+/// remaining members receive the new one first (matrix-js-sdk MatrixRTCSession
+/// `useKeyDelay` default, as used by Element Call 0.28.2). Departed members
+/// are already unsubscribed and cannot send media we accept.
+const USE_KEY_DELAY: std::time::Duration = std::time::Duration::from_secs(5);
 impl From<MediaError> for CallError {
     fn from(value: MediaError) -> Self {
         match value {
@@ -141,6 +150,8 @@ impl NativeCall {
             tick: tokio::time::interval(native::KEEPALIVE),
             keys_received: 0,
             keys_sent: 0,
+            keys_pending: true,
+            switch_at: None,
         })
     }
     pub fn video_tracks(&self) -> VideoTracks {
@@ -216,7 +227,18 @@ impl NativeCall {
         &mut self,
         commands: &mut tokio::sync::mpsc::Receiver<DriverCommand>,
     ) -> Result<(), CallError> {
+        let switch = self.switch_at;
         tokio::select! {
+            _ = async move {
+                match switch {
+                    Some((_, at)) => tokio::time::sleep_until(at).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                if let Some((index, _)) = self.switch_at.take() {
+                    self.media.set_sender_index(index);
+                }
+            }
             command = commands.recv() => {
                 match command {
                     Some(DriverCommand::Control(NativeControl::Leave)) | None => {
@@ -234,11 +256,11 @@ impl NativeCall {
             }
             _ = self.tick.tick() => {
                 self.signalling.maintain().await?;
-                self.refresh_members(true).await?;
+                self.refresh_members().await?;
             }
             changed = self.signalling.membership_updates.changed() => {
                 changed.map_err(|_| CallError::TransportFailed)?;
-                self.refresh_members(false).await?;
+                self.refresh_members().await?;
             }
             key = self.receiver.receive.recv() => {
                 let key = key.ok_or(CallError::KeyRejected)?;
@@ -254,17 +276,8 @@ impl NativeCall {
                 if matches!(event, RoomEvent::Disconnected { .. }) {
                     return Err(CallError::TransportFailed);
                 }
-                if let RoomEvent::TrackSubscribed { publication, .. } = &event
-                    && publication.encryption_type() != livekit::e2ee::EncryptionType::Gcm
-                {
-                    return Err(CallError::MediaE2eeRequired);
-                }
-                if let RoomEvent::TrackPublished { publication, .. } = &event {
-                    if publication.encryption_type() != livekit::e2ee::EncryptionType::Gcm {
-                        return Err(CallError::MediaE2eeRequired);
-                    }
-                    publication.set_subscribed(true);
-                }
+                // Media subscribes only to current members' encrypted tracks;
+                // an unencrypted publication is left unreceived, not fatal.
                 self.media.handle_event(&event);
                 let current = members(&self.signalling.room).await?;
                 self.project(&current).await;
@@ -277,25 +290,37 @@ impl NativeCall {
         }
         Ok(())
     }
-    async fn refresh_members(&mut self, resend: bool) -> Result<(), CallError> {
+    async fn refresh_members(&mut self) -> Result<(), CallError> {
         let current = members(&self.signalling.room).await?;
-        let changed = self.keys.update_members(&self.signalling.own, &current)?;
-        if changed || resend {
+        let own = &self.signalling.own;
+        // Only current call members' media is received.
+        self.media.set_members(
+            current
+                .iter()
+                .filter(|m| m.user_id != own.user_id || m.device_id != own.device_id)
+                .map(Member::identity),
+        );
+        let change = self.keys.update_members(own, &current)?;
+        if change.rotated {
+            // Install the new key for our encryptor now, but switch to it only
+            // after the remaining members had time to receive it.
             self.media.install_key(
                 &self.signalling.own.identity(),
                 self.keys.index,
                 self.keys.key.bytes(),
             )?;
-            // Fail closed on departure, even while a remaining device's key
-            // delivery is retrying. Never keep encrypting with the departed key.
-            self.media.set_sender_index(self.keys.index);
-            if tokio::time::timeout(
+            self.switch_at = Some((self.keys.index, tokio::time::Instant::now() + USE_KEY_DELAY));
+        }
+        // Send on a membership change or to retry a failed delivery, never
+        // merely because the keepalive ticked.
+        if change.changed || self.keys_pending {
+            self.keys_pending = !tokio::time::timeout(
                 std::time::Duration::from_secs(5),
                 self.keys.send(&self.signalling.room, &self.signalling.own),
             )
             .await
-            .is_ok_and(|r| r.is_ok())
-            {
+            .is_ok_and(|r| r.is_ok());
+            if !self.keys_pending {
                 self.keys_sent += 1;
             }
         }
@@ -375,6 +400,7 @@ impl NativeCall {
                 speaking: peer.map(|p| p.is_speaking()),
                 muted,
                 video,
+                media_blocked: self.media.is_blocked(&member.identity()),
                 connection_quality,
             });
         }

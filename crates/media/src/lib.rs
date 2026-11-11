@@ -6,6 +6,8 @@ pub mod camera;
 mod transport;
 use futures_util::StreamExt;
 use livekit::options::{TrackPublishOptions, VideoCodec};
+#[cfg(feature = "evidence")]
+use livekit::webrtc::audio_stream::native::NativeAudioStream;
 use livekit::{
     e2ee::{
         E2eeOptions, EncryptionType,
@@ -13,12 +15,12 @@ use livekit::{
     },
     prelude::*,
     webrtc::{
-        audio_source::RtcAudioSource, audio_stream::native::NativeAudioStream,
-        video_frame::VideoFormatType, video_stream::native::NativeVideoStream,
+        audio_source::RtcAudioSource, video_frame::VideoFormatType,
+        video_stream::native::NativeVideoStream,
     },
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU8, AtomicU64, Ordering},
@@ -185,6 +187,15 @@ pub struct NativeMedia {
     consumers: HashMap<String, JoinHandle<()>>,
     event_pump: JoinHandle<()>,
     sender_index: AtomicU8,
+    /// Identities of current call members. Only their encrypted tracks are
+    /// subscribed; anyone else in the SFU room is never received.
+    allowed: HashSet<String>,
+    /// Members with at least one unencrypted publication (never subscribed).
+    blocked: HashSet<String>,
+    /// Key indices installed per remote identity, overwritten on departure.
+    installed: HashMap<String, HashSet<u8>>,
+    /// Remote track sid → publishing identity, to stop a departed member's tracks.
+    owners: HashMap<String, String>,
 }
 impl NativeMedia {
     pub async fn connect(
@@ -209,15 +220,8 @@ impl NativeMedia {
             let _ = room.close().await;
             return Err(MediaError::E2eeRequired);
         }
-        for peer in room.remote_participants().values() {
-            for publication in peer.track_publications().values() {
-                if publication.encryption_type() != EncryptionType::Gcm {
-                    let _ = room.close().await;
-                    return Err(MediaError::E2eeRequired);
-                }
-                publication.set_subscribed(true);
-            }
-        }
+        // Nothing is subscribed until the caller names the current members
+        // (`set_members`): SFU presence alone never grants reception.
         let room = Arc::new(room);
         trust.attach(&room);
         let (send, bounded) = mpsc::channel(64);
@@ -254,7 +258,63 @@ impl NativeMedia {
             camera: None,
             capture: None,
             consumers: HashMap::new(),
+            allowed: HashSet::new(),
+            blocked: HashSet::new(),
+            installed: HashMap::new(),
+            owners: HashMap::new(),
         })
+    }
+    /// Replace the set of call members whose media may be received. Departed
+    /// members are unsubscribed and their installed keys overwritten with
+    /// fresh random material, so frames sent under old keys stop decrypting.
+    pub fn set_members(&mut self, identities: impl IntoIterator<Item = String>) {
+        let next: HashSet<String> = identities.into_iter().collect();
+        let departed: Vec<String> = self.allowed.difference(&next).cloned().collect();
+        self.allowed = next;
+        for identity in &departed {
+            self.forget(identity);
+        }
+        for peer in self.room.remote_participants().values() {
+            let identity = peer.identity().to_string();
+            for publication in peer.track_publications().values() {
+                self.decide(&identity, publication);
+            }
+        }
+    }
+    /// True when this member published media without end-to-end encryption.
+    pub fn is_blocked(&self, identity: &str) -> bool {
+        self.blocked.contains(identity)
+    }
+    fn decide(&mut self, identity: &str, publication: &RemoteTrackPublication) {
+        let encrypted = publication.encryption_type() == EncryptionType::Gcm;
+        if !encrypted && self.allowed.contains(identity) {
+            self.blocked.insert(identity.to_owned());
+        }
+        let wanted = encrypted && self.allowed.contains(identity);
+        if publication.is_subscribed() != wanted {
+            publication.set_subscribed(wanted);
+        }
+        if !wanted {
+            self.stop_track(&publication.sid().to_string());
+        }
+    }
+    fn forget(&mut self, identity: &str) {
+        self.blocked.remove(identity);
+        let tracks: Vec<String> = self
+            .owners
+            .iter()
+            .filter(|(_, owner)| owner.as_str() == identity)
+            .map(|(sid, _)| sid.clone())
+            .collect();
+        for sid in tracks {
+            self.stop_track(&sid);
+        }
+        for index in self.installed.remove(identity).unwrap_or_default() {
+            let mut junk = vec![0; 16];
+            if getrandom::fill(&mut junk).is_ok() {
+                self.keys.set_key(&identity.into(), index as i32, junk);
+            }
+        }
     }
     pub async fn start_microphone(&mut self) -> Result<(), MediaError> {
         let audio = livekit::PlatformAudio::new().map_err(|_| MediaError::DeviceUnavailable)?;
@@ -395,13 +455,17 @@ impl NativeMedia {
             .switch_playout_device(&device.id)
             .map_err(|_| MediaError::DeviceUnavailable)
     }
-    pub fn install_key(&self, identity: &str, index: u8, key: &[u8]) -> Result<(), MediaError> {
+    pub fn install_key(&mut self, identity: &str, index: u8, key: &[u8]) -> Result<(), MediaError> {
         if !self
             .keys
             .set_key(&identity.into(), index as i32, key.to_vec())
         {
             return Err(MediaError::E2eeRequired);
         }
+        self.installed
+            .entry(identity.to_owned())
+            .or_default()
+            .insert(index);
         Ok(())
     }
     async fn activate_sender(&self, sid: &livekit::id::TrackSid) -> Result<(), MediaError> {
@@ -432,6 +496,7 @@ impl NativeMedia {
         }
     }
     fn stop_track(&mut self, id: &str) {
+        self.owners.remove(id);
         if let Some(task) = self.consumers.remove(id) {
             task.abort();
         }
@@ -441,31 +506,36 @@ impl NativeMedia {
     }
     pub fn handle_event(&mut self, event: &RoomEvent) {
         match event {
-            RoomEvent::TrackSubscribed { track, .. } => match track {
-                RemoteTrack::Video(track) => {
-                    self.consume_video(track.sid().to_string(), track.rtc_track())
+            RoomEvent::TrackPublished {
+                publication,
+                participant,
+            } => self.decide(&participant.identity().to_string(), publication),
+            RoomEvent::TrackSubscribed {
+                track,
+                publication,
+                participant,
+            } => {
+                let identity = participant.identity().to_string();
+                // A subscription can race a departure or arrive for an
+                // unencrypted publication: drop it instead of consuming it.
+                if publication.encryption_type() != EncryptionType::Gcm
+                    || !self.allowed.contains(&identity)
+                {
+                    self.decide(&identity, publication);
+                    return;
                 }
-                RemoteTrack::Audio(track) => {
-                    let id = track.sid().to_string();
-                    self.stop_track(&id);
-                    let evidence = self.evidence.clone();
-                    let mut stream = NativeAudioStream::new(track.rtc_track(), 48000, 1);
-                    self.consumers.insert(
-                        id,
-                        tokio::spawn(async move {
-                            while let Some(frame) = stream.next().await {
-                                evidence.audio_frames.fetch_add(1, Ordering::Relaxed);
-                                let sum: f64 = frame.data.iter().map(|s| (*s as f64).powi(2)).sum();
-                                if !frame.data.is_empty()
-                                    && (sum / frame.data.len() as f64).sqrt() > 200.0
-                                {
-                                    evidence.audio_signal_frames.fetch_add(1, Ordering::Relaxed);
-                                }
-                            }
-                        }),
-                    );
+                let id = track.sid().to_string();
+                match track {
+                    RemoteTrack::Video(track) => self.consume_video(id.clone(), track.rtc_track()),
+                    // Remote audio plays through the platform audio device
+                    // module; a sink is only attached to count test evidence.
+                    #[cfg(feature = "evidence")]
+                    RemoteTrack::Audio(track) => self.consume_audio(id.clone(), track.rtc_track()),
+                    #[cfg(not(feature = "evidence"))]
+                    RemoteTrack::Audio(_) => {}
                 }
-            },
+                self.owners.insert(id, identity);
+            }
             RoomEvent::TrackUnsubscribed { track, .. } => {
                 let id = track.sid().to_string();
                 self.stop_track(&id);
@@ -473,9 +543,28 @@ impl NativeMedia {
             _ => {}
         }
     }
+    #[cfg(feature = "evidence")]
+    fn consume_audio(&mut self, id: String, track: livekit::webrtc::audio_track::RtcAudioTrack) {
+        self.stop_track(&id);
+        let evidence = self.evidence.clone();
+        let mut stream = NativeAudioStream::new(track, 48000, 1);
+        self.consumers.insert(
+            id,
+            tokio::spawn(async move {
+                while let Some(frame) = stream.next().await {
+                    evidence.audio_frames.fetch_add(1, Ordering::Relaxed);
+                    let sum: f64 = frame.data.iter().map(|s| (*s as f64).powi(2)).sum();
+                    if !frame.data.is_empty() && (sum / frame.data.len() as f64).sqrt() > 200.0 {
+                        evidence.audio_signal_frames.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }),
+        );
+    }
     fn consume_video(&mut self, id: String, track: livekit::webrtc::video_track::RtcVideoTrack) {
         self.stop_track(&id);
         let slot = self.video.insert(id.clone());
+        #[cfg(feature = "evidence")]
         let evidence = self.evidence.clone();
         let mut stream = NativeVideoStream::new(track);
         self.consumers.insert(
@@ -503,6 +592,7 @@ impl NativeMedia {
                         frame.timestamp_us,
                         bgra,
                     ) {
+                        #[cfg(feature = "evidence")]
                         if !id.starts_with("local:") {
                             evidence.video_frames.fetch_add(1, Ordering::Relaxed);
                             let left = (frame.height as usize / 2 * frame.width as usize
