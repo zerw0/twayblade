@@ -17,7 +17,7 @@ use gpui_kit::{
 use twayblade_core::profile::ProfileUpdate;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) enum Section {
+pub(crate) enum Section {
     General,
     Notifications,
     #[default]
@@ -65,13 +65,13 @@ impl Section {
         }
     }
 }
-pub(super) struct SettingsWindow {
+pub(crate) struct SettingsWindow {
     pub section: Section,
     main: Entity<MatrixApp>,
     _observe: Subscription,
 }
 impl MatrixApp {
-    pub(super) fn notification_config(&self) {
+    pub(crate) fn notification_config(&self) {
         if self.preview {
             return;
         }
@@ -180,7 +180,7 @@ impl MatrixApp {
             .into_any_element()
     }
 
-    pub(super) fn notification_sample_view(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn notification_sample_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let preview = self.preferences.notifications.preview;
         v_flex()
             .id("notification-sample")
@@ -234,7 +234,7 @@ impl MatrixApp {
             .into_any_element()
     }
 
-    pub(super) fn change_notification_rule(
+    pub(crate) fn change_notification_rule(
         &mut self,
         change: twayblade_core::notifications::RuleChange,
         window: &mut Window,
@@ -403,7 +403,7 @@ impl MatrixApp {
             .into_any_element()
     }
 
-    pub(super) fn room_notification_controls(
+    pub(crate) fn room_notification_controls(
         &self,
         room: &str,
         cx: &mut Context<Self>,
@@ -454,7 +454,7 @@ impl MatrixApp {
             .into_any_element()
     }
 
-    pub(super) fn open_settings(&mut self, section: Section, cx: &mut Context<Self>) {
+    pub(crate) fn open_settings(&mut self, section: Section, cx: &mut Context<Self>) {
         let main = cx.entity();
         // GPUI draws a newly opened window immediately. Release the main entity
         // before creating it, because Settings renders controls from that entity.
@@ -538,7 +538,7 @@ impl MatrixApp {
             _observe: observe,
         }
     }
-    pub(super) fn reset_settings(
+    pub(crate) fn reset_settings(
         &mut self,
         section: Section,
         window: &mut Window,
@@ -577,7 +577,7 @@ impl MatrixApp {
         self.save_preferences(window, cx);
         cx.notify();
     }
-    pub(super) fn save_preferences(&mut self, window: &Window, cx: &Context<Self>) {
+    pub(crate) fn save_preferences(&mut self, window: &Window, cx: &Context<Self>) {
         if self.preview || !self.preferences_writable {
             return;
         }
@@ -610,16 +610,16 @@ impl MatrixApp {
         .detach();
     }
 
-    pub(super) fn change_scale(&mut self, delta: i16, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn change_scale(&mut self, delta: i16, window: &mut Window, cx: &mut Context<Self>) {
         self.preferences.appearance.scale =
             (self.preferences.appearance.scale as i16 + delta).clamp(85, 150) as u16;
         self.appearance_changed(window, cx);
     }
-    pub(super) fn reset_scale(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn reset_scale(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.preferences.appearance.scale = 100;
         self.appearance_changed(window, cx);
     }
-    pub(super) fn appearance_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn appearance_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.preview {
             Theme::sync_system_appearance(Some(window), cx);
         }
@@ -890,7 +890,7 @@ impl MatrixApp {
             .into_any_element()
     }
 
-    pub(super) fn chat_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn chat_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.scroller.update(cx, |state, cx| state.remeasure(cx));
         if let Some(thread) = &self.thread {
             thread.scroller.update(cx, |state, cx| state.remeasure(cx));

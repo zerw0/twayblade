@@ -12,7 +12,7 @@ backend graph constrains those versions. No web/JavaScript shell is used for cha
 
 - `core`: SDK clients, authentication, encrypted stores, sync, spaces, profiles and
   timelines. This remains independent of GPUI.
-- `gpui/backend.rs`: background runtime, account/selection task lifecycle and
+- `app/src/backend.rs` (+ `backend/`): background runtime, account/selection task lifecycle and
   coalesced presentation snapshots on a `watch` channel that the view awaits
   directly (no polling). Holds the single-instance lock. Tokens and SDK objects
   do not enter UI records.
@@ -20,14 +20,18 @@ backend graph constrains those versions. No web/JavaScript shell is used for cha
   the frontend maps typed core outcomes into display wording.
   Epoch/selection guards reject stale stream results. Blocking operations run on
   background workers; networking/storage never run in render.
-- `gpui/app.rs`: retained view state, commands, inputs, request guards and task
+- `app/src/app.rs`: retained view state, commands, inputs, request guards and task
   completion. Profile callbacks check request/account lifetime. Selection commands
   are serialized so rapid navigation cannot reach the backend out of order.
-- `gpui/model.rs`: Home filtering and grouping. Room IDs and SDK timeline identities
+- `app/src/model.rs`: Home filtering and grouping. Room IDs and SDK timeline identities
   are used instead of display names or list positions.
-- `gpui/workspace.rs`: Kit-based sign-in, navigation, grouped transcript, composer
-  and profile inspector. The Kit Root owns window facilities.
-- `gpui/theme.rs`: product semantic colors and typography. UI code reads theme
+- `app/src/ui/`: all views. `mod.rs` renders the window and holds shared layout
+  helpers; `sign_in`, `chrome` (title bar, rail, sidebar), `timeline`,
+  `conversation` and `panels` (Info, search, profile) are the main window's areas;
+  `settings`, `security`, `spaces`, `threads`, `viewer`, `emoji`, `attachments`,
+  `avatars` and `motion` are secondary windows, overlays and shared pieces. The Kit
+  Root owns window facilities.
+- `app/src/theme.rs`: product semantic colors and typography. UI code reads theme
   roles; source palette literals are confined to the theme definition.
 
 `preferences.rs` owns versioned, serde-defaulted frontend JSON in the OS config directory. Invalid/unknown files are preserved as `.bak`; a failed backup disables writes. File replacement is atomic and background saves reject stale revisions. Settings shares the main entity in one separate window; Security entry is discarded on exit. Semantic themes and one logical-pixel helper apply appearance without replacing drafts or scrollers. Notification rules use core SDK NotificationSettings and subscribed account-data snapshots; local preferences never simulate server rules. Core queues SDK sync candidates and uses NotificationClient with the active SyncService for decryption/filtering. Frontend wording and local device preferences feed platform notification adapters; bounded response work routes clicks through account/selection guards. Native OS acceptance remains pending.

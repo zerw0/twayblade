@@ -1158,16 +1158,16 @@ impl Backend {
         &self,
         room: String,
         account: u128,
-        source: crate::attachments::AttachmentSource,
+        source: crate::ui::attachments::AttachmentSource,
     ) -> Result<twayblade_core::conversation::AttachmentDraft, ServiceError> {
         let conversation = self.media_conversation(&room, account)?;
         self.runtime
             .block_on(async {
                 match source {
-                    crate::attachments::AttachmentSource::File(path) => {
+                    crate::ui::attachments::AttachmentSource::File(path) => {
                         conversation.prepare_file(path).await
                     }
-                    crate::attachments::AttachmentSource::Bytes(name, bytes) => {
+                    crate::ui::attachments::AttachmentSource::Bytes(name, bytes) => {
                         conversation.prepare_bytes(name, bytes).await
                     }
                 }

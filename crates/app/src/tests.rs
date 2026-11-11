@@ -590,7 +590,7 @@ fn recovery_key_can_be_written_down_or_copied_and_is_dropped(cx: &mut TestAppCon
     };
     cx.update(|cx| {
         app.update(cx, |app, cx| {
-            app.open_settings(crate::settings::Section::Security, cx)
+            app.open_settings(crate::ui::settings::Section::Security, cx)
         })
     });
     let window = cx.update(|cx| app.read(cx).settings.as_ref().unwrap().0);
@@ -637,7 +637,7 @@ fn sas_sample_has_explicit_match_mismatch_and_cancel_controls(cx: &mut TestAppCo
     });
     cx.update(|cx| {
         app.update(cx, |app, cx| {
-            app.open_settings(crate::settings::Section::Security, cx)
+            app.open_settings(crate::ui::settings::Section::Security, cx)
         })
     });
     let window = cx.update(|cx| app.read(cx).settings.as_ref().unwrap().0);
@@ -675,7 +675,7 @@ fn recovery_input_is_cleared_when_leaving_the_screen(cx: &mut TestAppContext) {
     });
     cx.update(|cx| {
         app.update(cx, |app, cx| {
-            app.open_settings(crate::settings::Section::Security, cx)
+            app.open_settings(crate::ui::settings::Section::Security, cx)
         })
     });
     let window = cx.update(|cx| app.read(cx).settings.as_ref().unwrap().0);
@@ -1192,7 +1192,7 @@ fn space_leave_defaults_to_space_only_and_creation_respects_parent_power(cx: &mu
     cx.update_window(window, |_, window, cx| {
         app.update(cx, |app, cx| {
             app.open_management(
-                crate::spaces_ui::ManageKind::Leave("design".into()),
+                crate::ui::spaces::ManageKind::Leave("design".into()),
                 window,
                 cx,
             )
@@ -1266,7 +1266,7 @@ fn room_dm_and_space_invites_have_explicit_accept_and_decline(cx: &mut TestAppCo
 fn viewer_keyboard_navigation_zoom_clipboard_and_focus_restore(cx: &mut TestAppContext) {
     use gpui_kit::test::TestEventExt;
     let (window, app) = preview_window(cx);
-    cx.update(|cx| cx.bind_keys(crate::viewer::bindings()));
+    cx.update(|cx| cx.bind_keys(crate::ui::viewer::bindings()));
     cx.update_window(window, |_, window, cx| {
         app.update(cx, |app, cx| {
             app.preview_viewer(window, cx);
@@ -1369,7 +1369,7 @@ fn viewer_keyboard_navigation_zoom_clipboard_and_focus_restore(cx: &mut TestAppC
 fn viewer_save_and_open_shortcuts_require_a_destination(cx: &mut TestAppContext) {
     use gpui_kit::test::TestEventExt;
     let (window, app) = preview_window(cx);
-    cx.update(|cx| cx.bind_keys(crate::viewer::bindings()));
+    cx.update(|cx| cx.bind_keys(crate::ui::viewer::bindings()));
     let path = std::env::temp_dir().join(format!(
         "matrix-viewer-ui-{}.png",
         std::time::SystemTime::now()
@@ -1469,7 +1469,7 @@ fn viewer_pinch_double_click_pan_outside_click_and_stale_loads(cx: &mut TestAppC
             );
             assert!(matches!(
                 app.viewer.as_ref().unwrap().load,
-                crate::viewer::ImageLoad::Ready { .. }
+                crate::ui::viewer::ImageLoad::Ready { .. }
             ));
         });
         window.pointer_down(point(px(10.), px(80.)), MouseButton::Left, cx);
@@ -1491,7 +1491,7 @@ fn settings_sections_share_one_window_and_preserve_conversation(cx: &mut TestApp
     })
     .unwrap();
     let handle = cx.update(|cx| app.read(cx).settings.as_ref().unwrap().0);
-    for section in crate::settings::Section::VISIBLE {
+    for section in crate::ui::settings::Section::VISIBLE {
         cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
             window.click(
@@ -1502,7 +1502,7 @@ fn settings_sections_share_one_window_and_preserve_conversation(cx: &mut TestApp
             // Reset exists only where there are local preferences to reset.
             let resettable = matches!(
                 section,
-                crate::settings::Section::Appearance | crate::settings::Section::Chat
+                crate::ui::settings::Section::Appearance | crate::ui::settings::Section::Chat
             );
             assert_eq!(
                 !window.find_all("reset-settings-section").is_empty(),
@@ -1513,7 +1513,7 @@ fn settings_sections_share_one_window_and_preserve_conversation(cx: &mut TestApp
     }
     cx.update(|cx| {
         app.update(cx, |app, cx| {
-            app.open_settings(crate::settings::Section::Appearance, cx)
+            app.open_settings(crate::ui::settings::Section::Appearance, cx)
         });
         let main = app.read(cx);
         assert_eq!(main.settings.as_ref().unwrap().0, handle);
@@ -1545,7 +1545,7 @@ fn live_scheme_controls_preserve_room_draft_timeline_and_thread(cx: &mut TestApp
         window.input("Scheme draft", cx);
         app.update(cx, |app, cx| {
             app.open_thread("sample-0".into(), window, cx);
-            app.open_settings(crate::settings::Section::Appearance, cx);
+            app.open_settings(crate::ui::settings::Section::Appearance, cx);
         });
     })
     .unwrap();
@@ -1674,7 +1674,7 @@ fn switching_all_styles_preserves_visible_ids_draft_anchor_thread_and_actions(
         window.input("Style draft 🦀", cx);
         app.update(cx, |app, cx| {
             app.open_thread("sample-0".into(), window, cx);
-            app.open_settings(crate::settings::Section::Chat, cx);
+            app.open_settings(crate::ui::settings::Section::Chat, cx);
             app.scroller
                 .update(cx, |state, cx| state.scroll_to_item(0, cx));
         });
@@ -1756,7 +1756,7 @@ fn leaving_security_section_discards_recovery_entry(cx: &mut TestAppContext) {
     let (_, app) = preview_window(cx);
     cx.update(|cx| {
         app.update(cx, |app, cx| {
-            app.open_settings(crate::settings::Section::Security, cx)
+            app.open_settings(crate::ui::settings::Section::Security, cx)
         })
     });
     let settings = cx.update(|cx| app.read(cx).settings.as_ref().unwrap().0);
@@ -1808,7 +1808,7 @@ fn notification_rules_controls_keywords_room_modes_and_context_menu(cx: &mut Tes
     let (main_window, app) = preview_window(cx);
     cx.update_window(main_window, |_, window, cx| {
         app.update(cx, |app, cx| {
-            app.open_settings(crate::settings::Section::Notifications, cx)
+            app.open_settings(crate::ui::settings::Section::Notifications, cx)
         });
         window.render_frame(cx);
     })
@@ -1916,7 +1916,7 @@ fn notification_preview_click_opens_thread_and_device_controls_stay_local(cx: &m
                 cx,
             );
             assert_eq!(app.navigation.selected_room.as_deref(), Some("general"));
-            app.open_settings(crate::settings::Section::Notifications, cx);
+            app.open_settings(crate::ui::settings::Section::Notifications, cx);
         });
     })
     .unwrap();

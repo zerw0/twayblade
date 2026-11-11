@@ -161,7 +161,7 @@ async fn encrypted_delivery_profile_and_same_device_store_restore() {
     checked(
         tokio::fs::write(
             &avatar_path,
-            include_bytes!("../../../gpui/assets/attachment-sample.png"),
+            include_bytes!("../../../app/assets/attachment-sample.png"),
         )
         .await,
         "prepare test avatar",

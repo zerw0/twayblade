@@ -203,7 +203,7 @@ Linux and Windows CI passed on `36f850a`; macOS CI was switched to `macos-15`
 ## Progress
 
 Done (macOS arm64, offline and isolated-server verification only):
-- Cargo workspace (`core`, `platform`, `gpui`), Nix shell, pinned dependencies.
+- Cargo workspace (`core`, `platform`, `app`), Nix shell, pinned dependencies.
 - Server-name discovery via `.well-known`, HTTPS enforcement after delegation.
 - Password sign-in, OS credential store, encrypted SDK store, restore, logout
   with store deletion, failed sign-in cleanup, single-instance lock.
@@ -510,7 +510,10 @@ Evidence log: `docs/compatibility/STATUS.md`. Architecture: `docs/architecture/G
 ```text
 crates/core/        Matrix services, auth, sync, timelines (owns all Matrix state)
 crates/platform/    OS credentials, notifications, appearance (later: deep links)
-crates/gpui/        GPUI + GPUI Kit frontend
+crates/app/         The app (crate `twayblade`): GPUI + GPUI Kit frontend
+  src/ui/           Views: window chrome, timeline, conversation, panels,
+                    settings, security, spaces, threads, viewer, emoji
+  src/backend/      Bridges the UI to core services (snapshots, actions)
 macos/              Development .app bundle helper
 tests/integration/  Isolated Synapse fixture
 docs/               Architecture and compatibility evidence

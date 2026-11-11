@@ -140,7 +140,7 @@ fn grid(query: &str, preferences: &Preferences) -> Grid {
     grid
 }
 #[derive(Default, Serialize, Deserialize)]
-pub(super) struct Preferences {
+pub(crate) struct Preferences {
     pub recents: Vec<String>,
     pub tone: usize,
 }
@@ -152,7 +152,7 @@ impl Preferences {
                 .join("emoji.json"),
         )
     }
-    pub(super) fn load() -> Self {
+    pub(crate) fn load() -> Self {
         let Some(path) = Self::path() else {
             return Self::default();
         };
@@ -196,7 +196,7 @@ impl Preferences {
         self.recents.truncate(24);
     }
 }
-pub(super) struct Picker {
+pub(crate) struct Picker {
     pub reaction: Option<String>,
     pub selected: usize,
     /// The emoji (index into the grid) whose skin-tone popover is open.
@@ -256,7 +256,7 @@ fn results(query: &str, preferences: &Preferences) -> Vec<&'static emojis::Emoji
     values
 }
 impl MatrixApp {
-    pub(super) fn open_emoji(
+    pub(crate) fn open_emoji(
         &mut self,
         reaction: Option<String>,
         window: &mut Window,
@@ -282,7 +282,7 @@ impl MatrixApp {
         });
         cx.notify();
     }
-    pub(super) fn update_emoji_completion(&mut self, original: String, cursor: usize) {
+    pub(crate) fn update_emoji_completion(&mut self, original: String, cursor: usize) {
         if self
             .emoji_picker
             .as_ref()
@@ -355,7 +355,7 @@ impl MatrixApp {
         self.emoji_preferences.tone = tone % 6;
         self.choose_emoji(variant.as_str().into(), window, cx);
     }
-    pub(super) fn choose_emoji(
+    pub(crate) fn choose_emoji(
         &mut self,
         value: String,
         window: &mut Window,
@@ -408,7 +408,7 @@ impl MatrixApp {
         }
         cx.notify();
     }
-    pub(super) fn emoji_key(
+    pub(crate) fn emoji_key(
         &mut self,
         event: &KeyDownEvent,
         window: &mut Window,
@@ -481,7 +481,7 @@ impl MatrixApp {
         window.prevent_default();
         cx.notify();
     }
-    pub(super) fn emoji_panel(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn emoji_panel(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(picker) = &self.emoji_picker else {
             return div().into_any_element();
         };

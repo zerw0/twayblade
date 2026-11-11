@@ -2,22 +2,13 @@
 extern crate gpui_kit as gpui;
 
 mod app;
-mod attachments;
-mod avatars;
 mod backend;
-mod emoji;
 mod model;
-mod motion;
 mod preferences;
-mod security;
-mod settings;
-mod spaces_ui;
 #[cfg(all(test, feature = "capture"))]
 mod tests;
 mod theme;
-mod threads;
-mod viewer;
-mod workspace;
+mod ui;
 
 use app::{
     CloseProfile, DecreaseScale, FindConversation, IncreaseScale, JoinSpace, MatrixApp,
@@ -105,7 +96,7 @@ fn main() {
                 KeyBinding::new(if cfg!(target_os = "macos") { "cmd--" } else { "ctrl--" }, DecreaseScale, Some("Twayblade")),
                 KeyBinding::new(if cfg!(target_os = "macos") { "cmd-0" } else { "ctrl-0" }, ResetScale, Some("Twayblade")),
             ]);
-            cx.bind_keys(viewer::bindings());
+            cx.bind_keys(ui::viewer::bindings());
             cx.on_action(|_: &Quit, cx| cx.quit());
             use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
             cx.set_menus([
@@ -130,7 +121,7 @@ fn main() {
                     ],
                     disabled: false,
                 },
-                Menu { name: "Image".into(), items: vec![MenuItem::action("Previous Image",viewer::PreviousImage),MenuItem::action("Next Image",viewer::NextImage),MenuItem::Separator,MenuItem::action("Zoom In",viewer::ZoomIn),MenuItem::action("Zoom Out",viewer::ZoomOut),MenuItem::action("Fit to Window",viewer::FitImage),MenuItem::Separator,MenuItem::action("Save Image…",viewer::SaveImage),MenuItem::action("Copy Image",viewer::CopyImage),MenuItem::action("Open in Default App…",viewer::OpenImage),MenuItem::action("Show in Timeline",viewer::RevealImage),MenuItem::action("Close Image",viewer::CloseViewer)], disabled: false },
+                Menu { name: "Image".into(), items: vec![MenuItem::action("Previous Image",ui::viewer::PreviousImage),MenuItem::action("Next Image",ui::viewer::NextImage),MenuItem::Separator,MenuItem::action("Zoom In",ui::viewer::ZoomIn),MenuItem::action("Zoom Out",ui::viewer::ZoomOut),MenuItem::action("Fit to Window",ui::viewer::FitImage),MenuItem::Separator,MenuItem::action("Save Image…",ui::viewer::SaveImage),MenuItem::action("Copy Image",ui::viewer::CopyImage),MenuItem::action("Open in Default App…",ui::viewer::OpenImage),MenuItem::action("Show in Timeline",ui::viewer::RevealImage),MenuItem::action("Close Image",ui::viewer::CloseViewer)], disabled: false },
                 Menu {
                     name: "View".into(),
                     items: vec![MenuItem::action("Increase Interface Scale", IncreaseScale), MenuItem::action("Decrease Interface Scale", DecreaseScale), MenuItem::action("Actual Interface Size", ResetScale), MenuItem::Separator, MenuItem::action("Room Details", ToggleDetails), MenuItem::action("Close Panel", CloseProfile)],
@@ -233,7 +224,7 @@ fn main() {
                         }
                     }
                     if args.iter().any(|arg| arg == "--preview-viewer") { view.preview_viewer(window,cx); }
-                    if args.iter().any(|arg| arg == "--preview-directory") { view.open_management(spaces_ui::ManageKind::Directory("design".into()),window,cx); }
+                    if args.iter().any(|arg| arg == "--preview-directory") { view.open_management(ui::spaces::ManageKind::Directory("design".into()),window,cx); }
                     if args.iter().any(|arg| arg == "--preview-invites") { view.status = "Sample data · Invitations preview".into(); view.snapshot.invites = vec![twayblade_core::space_actions::Invite { id: "sample-room".into(), name: "Planning".into(), ..Default::default() },twayblade_core::space_actions::Invite { id: "sample-dm".into(), name: "Sam".into(), direct: true, ..Default::default() },twayblade_core::space_actions::Invite { id: "sample-space".into(), name: "Product team".into(), space: true, ..Default::default() }]; }
                     if args.iter().any(|arg| arg == "--preview-notification") { view.notification_sample = true;
                         if args.iter().any(|arg| arg == "--preview-no-message-preview") { view.preferences.notifications.preview = false; } }
@@ -255,7 +246,7 @@ fn main() {
             })
             .expect("The application window could not open");
             if args.iter().any(|arg| arg == "--preview-settings") {
-                view.update(cx, |view, cx| view.open_settings(args.iter().position(|arg| arg == "--preview-settings").and_then(|ix| args.get(ix + 1)).and_then(|name| settings::Section::ALL.into_iter().find(|section| section.label().eq_ignore_ascii_case(name))).unwrap_or_default(), cx));
+                view.update(cx, |view, cx| view.open_settings(args.iter().position(|arg| arg == "--preview-settings").and_then(|ix| args.get(ix + 1)).and_then(|name| ui::settings::Section::ALL.into_iter().find(|section| section.label().eq_ignore_ascii_case(name))).unwrap_or_default(), cx));
             }
             let accent_view = view.downgrade();
             cx.spawn(async move |cx| {
