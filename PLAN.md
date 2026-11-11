@@ -518,6 +518,12 @@ M4b core 2 — Task 3, plain composition (2026-11-11):
 - Compilation: pinned macOS fmt and strict locked all-target/all-feature workspace Clippy passed. Unit tests: locked all-feature workspace suite passed (125 tests; opt-in tests ignored); plain Unicode, ampersands/newlines, serialized omission and formatted round-trip checks. Linux/Windows builds/runtime remain unverified (target standard libraries unavailable locally).
 - Live integration: all five isolated Synapse 1.164.2 service tests passed, including plain and formatted messages through encrypted SDK timelines. Actual Element-client interoperability and physical platform checks remain unverified.
 
+M4b core 2 — Task 4, cached-search sender names (2026-11-11):
+- Encrypted cached search resolves each distinct room/sender through `Room::get_member_no_sync`, using the SDK member store without member-network fetches. Per-room name lookup caches are bounded by the existing 1,000-result cap. Missing, empty or unreadable display names keep the full Matrix sender ID; no plaintext index or additional persistence.
+- UI contract: existing `Snapshot.search.results[].sender_name` now contains the stored display name where available; `sender` remains the stable ID. `MatrixApp::search_messages` / `search_more` are unchanged; no new fields/actions or view changes.
+- Compilation: pinned macOS fmt and strict locked all-target/all-feature workspace Clippy passed. Unit tests: locked all-feature workspace suite passed (125 tests; opt-in tests ignored). Linux/Windows compilation/runtime remain unverified (target standard libraries unavailable locally).
+- Live integration: isolated Synapse 1.164.2 search regression passed, including encrypted cached display names and fallback to sender IDs after removing the profile name. Actual Element-client interoperability and physical platform checks remain unverified.
+
 Not yet verified:
 - Physical GUI checks of logout, pagination, IME and VoiceOver.
 - CI on any host; Linux and Windows builds and runs.

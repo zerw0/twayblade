@@ -167,6 +167,9 @@ impl Account {
                     .room(room.room_id())
                     .await
                     .map_err(|_| SearchError::Unavailable)?;
+                // Per-room cache is bounded by the 1,000-result cap. Member reads
+                // use the SDK store only; never fetch members for search results.
+                let mut names = std::collections::HashMap::<String, Option<String>>::new();
                 // No pagination or network fetching: only already-decrypted cache events.
                 for event in cache
                     .events()
@@ -180,8 +183,29 @@ impl Account {
                         break;
                     }
                     if let Ok(value) = serde_json::from_str(event.raw().json().get())
-                        && let Some(result) = project(&value, room.room_id().as_str(), &query, true)
+                        && let Some(mut result) =
+                            project(&value, room.room_id().as_str(), &query, true)
                     {
+                        if !names.contains_key(&result.sender) {
+                            let name =
+                                if let Ok(user) = matrix_sdk::ruma::UserId::parse(&result.sender) {
+                                    room.get_member_no_sync(&user)
+                                        .await
+                                        .ok()
+                                        .flatten()
+                                        .and_then(|m| {
+                                            m.display_name()
+                                                .filter(|n| !n.is_empty())
+                                                .map(str::to_owned)
+                                        })
+                                } else {
+                                    None
+                                };
+                            names.insert(result.sender.clone(), name);
+                        }
+                        if let Some(Some(name)) = names.get(&result.sender) {
+                            result.sender_name = name.clone();
+                        }
                         cached.push(result);
                     }
                 }

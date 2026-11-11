@@ -73,6 +73,13 @@ async fn search_server_cached_encryption_pagination_and_event_context() {
             .await,
         "login",
     );
+    checked(
+        client
+            .account()
+            .set_display_name(Some("Cached Search Sender"))
+            .await,
+        "search sender profile",
+    );
     let account = Account::new(
         client.clone(),
         path,
@@ -133,6 +140,9 @@ async fn search_server_cached_encryption_pagination_and_event_context() {
             let page = checked(account.search(query.clone(), next).await, "search page");
             assert_eq!(page.limited, encrypted);
             for item in page.results {
+                if encrypted {
+                    assert_eq!(item.sender_name, "Cached Search Sender");
+                }
                 assert!(ids.insert(item.event_id));
                 assert!(item.snippet.contains(&text));
                 assert!(!item.match_ranges.is_empty());
@@ -188,6 +198,38 @@ async fn search_server_cached_encryption_pagination_and_event_context() {
     }
     assert_eq!(seen.len(), 2);
     assert!(room_ids.iter().all(|r| seen.contains(r.as_str())));
+    checked(
+        client.account().set_display_name(None).await,
+        "clear sender display name",
+    );
+    checked(
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                let page = checked(
+                    account
+                        .search(
+                            SearchQuery {
+                                text: text.clone(),
+                                room: Some(matrix_sdk::ruma::RoomId::parse(&room_ids[1]).unwrap()),
+                                sender: None,
+                                has_file: false,
+                            },
+                            None,
+                        )
+                        .await,
+                    "unnamed sender search",
+                );
+                if !page.results.is_empty()
+                    && page.results.iter().all(|r| r.sender_name == r.sender)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await,
+        "member store profile removal",
+    );
     checked(client.matrix_auth().logout().await, "logout");
     sync.abort();
 }
