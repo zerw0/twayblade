@@ -776,6 +776,50 @@ mod integration {
                     "gallery decrypt in memory",
                 );
                 assert!(gallery_bytes == bytes, "gallery original bytes differ");
+                if error.is_none() {
+                    let (_cancel, cancel) = tokio::sync::watch::channel(false);
+                    let png = checked(
+                        account
+                            .gallery_thumbnail(&gallery.items[0], cancel.clone())
+                            .await,
+                        "preferred gallery thumbnail",
+                    );
+                    let decoded = checked(image::load_from_memory(&png), "thumbnail PNG");
+                    assert!(decoded.width() <= 168 && decoded.height() <= 168);
+                    let mut original = gallery.items[0].clone();
+                    original.thumbnail_source = None;
+                    let thumbnail_request = MediaRequestParameters {
+                        source: request.source.clone(),
+                        format: MediaFormat::Thumbnail(
+                            matrix_sdk::media::MediaThumbnailSettings::new(
+                                168u32.into(),
+                                168u32.into(),
+                            ),
+                        ),
+                    };
+                    checked(
+                        client
+                            .media()
+                            .remove_media_content(&thumbnail_request)
+                            .await,
+                        "clear thumbnail cache",
+                    );
+                    let png = checked(
+                        account.gallery_thumbnail(&original, cancel).await,
+                        "original gallery thumbnail",
+                    );
+                    let decoded = checked(image::load_from_memory(&png), "original thumbnail PNG");
+                    assert!(decoded.width() <= 168 && decoded.height() <= 168);
+                    let store = checked(client.media_store().lock().await, "thumbnail cache");
+                    assert!(
+                        checked(
+                            store.get_media_content(&thumbnail_request).await,
+                            "uncached thumbnail"
+                        )
+                        .is_none(),
+                        "thumbnail must not persist decrypted bytes"
+                    );
+                }
                 if encrypted && name == "full.png" {
                     let forwarded = checked(
                         client.create_room(create_room::v3::Request::new()).await,

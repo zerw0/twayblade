@@ -49,6 +49,8 @@ pub(super) struct Snapshot {
     pub(super) selected_room: String,
     pub(super) messages: Vec<Message>,
     pub(super) media: MediaState,
+    pub(super) media_thumbnails: std::collections::HashMap<String, Arc<Vec<u8>>>,
+    pub(super) media_thumbnail_order: std::collections::VecDeque<String>,
     pub(super) directory: DirectoryState,
     pub(super) room_preview: PreviewState,
     pub(super) search: SearchState,
@@ -115,6 +117,7 @@ struct State {
     timeline_task: Option<JoinHandle<()>>,
     media_task: Option<JoinHandle<()>>,
     media_request: u64,
+    media_cancel: Option<watch::Sender<bool>>,
     discovery_task: Option<JoinHandle<()>>,
     discovery_request: u64,
     preview_task: Option<JoinHandle<()>>,
@@ -686,6 +689,8 @@ impl Backend {
         publish(&self.updates, |snapshot| {
             snapshot.focused_event = None;
             snapshot.media = MediaState::default();
+            snapshot.media_thumbnails.clear();
+            snapshot.media_thumbnail_order.clear();
             snapshot.room_preview = PreviewState::default();
             snapshot.directory.loading = false;
             snapshot.selected_room = room_id.clone();
@@ -1136,6 +1141,8 @@ impl Backend {
         publish(&self.updates, |snapshot| {
             snapshot.focused_event = None;
             snapshot.media = MediaState::default();
+            snapshot.media_thumbnails.clear();
+            snapshot.media_thumbnail_order.clear();
             snapshot.room_preview = PreviewState::default();
             snapshot.directory.loading = false;
             snapshot.selected_room.clear();
