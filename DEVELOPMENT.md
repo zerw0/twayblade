@@ -161,7 +161,7 @@ cargo run --locked -p twayblade --features capture -- \
 
 The `capture` feature enables Kit's test/render support; it requires additional
 build dependencies. Captures require an offline preview and are rejected for
-normal sessions. Keep captures outside commits. On macOS, the build helper enables
+normal sessions. Keep captures outside commits, except the README screenshots in `docs/screenshots/`. On macOS, the build helper enables
 capture support automatically when passed `--capture`:
 
 ```sh
