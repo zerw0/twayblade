@@ -15,6 +15,16 @@ case "$matrix_endpoint" in
 esac
 compose=(docker --context "$matrix_context" compose -f tests/integration/compose.yaml)
 case "${1:-test}" in
+    call)
+        mkdir -p test-data/local/integration
+        "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py generate
+        "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py call-config
+        trap '"${compose[@]}" --profile call stop call-proxy lk-jwt-service livekit synapse' EXIT
+        "${compose[@]}" --profile call up -d --wait --wait-timeout 90 synapse livekit lk-jwt-service call-proxy
+        "${compose[@]}" exec -T synapse python /bootstrap.py register-pair
+        bash macos/build-call-host.sh
+        cargo test --locked -p twayblade-core --all-features element_call_runtime_signalling -- --ignored --nocapture
+        ;;
     presence)
         mkdir -p test-data/local/integration
         "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py generate

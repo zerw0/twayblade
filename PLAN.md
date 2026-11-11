@@ -225,7 +225,7 @@ Linux and Windows CI passed on `36f850a`; macOS CI was switched to `macos-15`
 5. **M4b chat polish.** Search, room media gallery, presence, motion, typing
    indicator, formatting, room discovery, message editing, stacked
    attachments, timeline image size and keyboard shortcuts (see Milestones).
-6. **M5 calls.** Element Call runtime, direct and group calls.
+6. **M5 calls.** macOS runtime base exists. Next: allow the SFU origin and its short-lived LiveKit token (the bridge currently blocks both, so no call can connect), add a CSP, and pin the fixture certificate for WebKit; WebRTC egress isolation remains open (see Progress).
 7. **M6 release.** Accessibility pass, packaging, signing, updates.
 
 ## Progress
@@ -577,6 +577,18 @@ Stacked attachments and sync restart (2026-11-11):
 - The SDK sync service stops for good after an error or unexpected termination. While the session is active it is now restarted with backoff (1 s, doubling up to 60 s), showing "Offline · reconnecting…". Previously the app stayed disconnected until relaunched.
 - Checks: fmt, strict Clippy and the workspace tests pass (offline UI test for the tray and its removal; restart backoff unit test). Isolated Synapse sync service tests pass. Sending stacked attachments to a live server, and the restart path against a real failing server, have not been exercised.
 
+M5 — macOS call-runtime spike, technical layer (2026-11-11):
+- Added the separate `twayblade-call-host` executable (Tao 0.37.2/Wry 0.57.2), signed helper bundle and macOS packaging. GPUI and WebKit never share a process/main thread. Private length-prefixed stdio has 256 KiB frames and 32-frame queues; main-loop health probes detect hangs. Cancellation kills the child. Account/request tickets gate admission/publication; logout/account replacement/backend shutdown and leaving the joined room end the call. No views changed.
+- Embedded Element Call **0.17.0**, archive SHA-256 `ba0f3f3b04b62577587faed603c3768465b1f9db33b15583473265531ca00121`; 154 assets are pinned and verified before custom-protocol serving from the bundle. Remote app navigation, popups, downloads and unrelated permissions are denied; release devtools are disabled. Upstream license files are preserved. Complete process/network confinement is not claimed.
+- SDK `experimental-widgets` owns the room-scoped `WidgetDriver`, encrypted/joined-room validation, HTTPS well-known RTC-focus selection and capability enforcement. Matrix credentials stay in the parent; call keys/OpenID assertions may cross the bridge and are never logged. Own call membership writes, key events and selected metadata are granted; timeline/media/legacy/ringing capabilities are denied. Extra filtering prevents other-room to-device key disclosure and rejects outbound recipients outside joined membership. SDK internal widget channels remain unbounded; application bridge queues/outstanding requests are bounded.
+- UI contract: `Snapshot.call: Option<CallState>` exposes `room_id,kind:Direct|Group,phase:Starting|Joining|Connected|Ended(reason),participants,muted,video,screen_sharing,error`. Participants expose `user_id,display_name,muted,video`. `Snapshot.room_calls: HashMap<String,ActiveCall>` projects SDK nonexpired memberships, deduplicated participants and the earliest available `started_ms`. **Contract refinement:** media booleans and `started_ms` are optional to represent unknown values; `display_name` is optional. Full types/phase semantics: `docs/architecture/CALL-HOST.md`.
+- Actions: `MatrixApp::{start_call(room_id,video),join_call(room_id),leave_call(),set_muted(bool),set_video(bool)}` return typed errors. Start/join share the only spawn path. Mute/video use `io.element.device_mute` and publish only acknowledged/reported state; requests are bounded with a five-second deadline. Screen-sharing state has no widget action in this pin and remains unknown. Claude owns view integration and user-facing wording.
+- Compilation: macOS pinned-shell fmt, strict locked workspace all-target/all-feature Clippy, shell syntax and Compose validation passed. Unit/offline tests: locked all-feature workspace suite passed **139 tests**, 23 opt-in tests ignored, covering capabilities, cross-room key rejection, framing/caps, real child crash/hang/cancellation and stale tickets. An earlier watchdog run saw an unexplained immediate child exit; targeted, supervisor-suite and final workspace reruns passed.
+- Runtime evidence on this Mac: actual helper windows, assets, IPC and widget/SDK exchange exercised. A bare executable reported `secure_context=true,media_devices=false,script_transform=true`; the signed helper with usage declarations reported all three true. The two-account timed run saw 10 widget messages, 8 SDK messages and widget join notifications per side, but zero received call-key messages. Widget joins do not prove SFU connectivity or an encrypted call.
+- Isolated-server signalling: added digest-pinned LiveKit 1.9.0, lk-jwt-service 0.9.0 and TLS proxy; Synapse serves RTC foci. `run.sh call` creates two isolated accounts in an encrypted room and drives real embedded clients. It **fails** rather than substituting synthetic events. The final run reports WebKit `trusted_tls_service_reachable=false`. No host CA was installed and WebKit TLS was not bypassed. Membership, both participant lists and key-exchange acceptance remain incomplete.
+- Production blockers: WebKit fixture trust; SFU transport without JWTs in WebSocket URLs (credential-bearing network URLs are rejected); SFU-only WebRTC ICE egress (CSP cannot enforce it); complete SDK/pin compatibility and bounded SDK internals. Ringing/incoming notifications are next steps; legacy `m.call.*` remains out of scope. Screen-share permission needs per-OS checks; Linux WebKitGTK/Wayland/X11 and Windows WebView2 are unattempted.
+- Physical media on this Mac: **not attempted**, needs a person for permissions, two windows and actual audio/video/media-E2EE checks. No fake WebKit devices; the signalling scenario starts muted. Element Web interop: **not attempted**. Linux/Windows compilation/runtime: **not attempted**. TLS and encoded-transform availability do not prove media E2EE. No M5 exit claimed. Architecture/commands: `docs/architecture/CALL-HOST.md`.
+
 Not yet verified:
 - Physical GUI checks of logout, pagination, IME and VoiceOver.
 - CI on any host; Linux and Windows builds and runs.
@@ -590,6 +602,7 @@ Evidence log: `docs/compatibility/STATUS.md`. Architecture: `docs/architecture/G
 crates/core/        Matrix services, auth, sync, timelines (owns all Matrix state)
 crates/platform/    OS credentials, notifications, appearance (later: deep links)
 crates/app/         The app (crate `twayblade`): GPUI + GPUI Kit frontend
+crates/call-host/   Credential-free Element Call process/protocol (macOS spike)
   src/ui/           Views: window chrome, timeline, conversation, panels,
                     settings, security, spaces, threads, viewer, emoji
   src/backend/      Bridges the UI to core services (snapshots, actions)
@@ -598,7 +611,7 @@ tests/integration/  Isolated Synapse fixture
 docs/               Architecture and compatibility evidence
 ```
 
-Add `call-host` (Element Call runtime) when M5 starts, not before.
+`call-host` is present for the M5 spike; encrypted-call acceptance remains blocked.
 
 ## References
 

@@ -1,5 +1,36 @@
 name: twayblade-integration
 services:
+  livekit:
+    profiles: [call]
+    image: livekit/livekit-server:v1.9.0@sha256:3602a85840d51981808d0519aefca170a3dbe3dec7bc8c5b87cbd52a503ea89f
+    command: ["--config", "/etc/livekit.yaml"]
+    volumes: ["./livekit.yaml:/etc/livekit.yaml:ro"]
+    ports: ["127.0.0.1:22450:7881", "127.0.0.1:50000-50020:50000-50020/udp"]
+    restart: "no"
+  lk-jwt-service:
+    profiles: [call]
+    image: ghcr.io/element-hq/lk-jwt-service:0.9.0@sha256:d210fd778ba38b7e42e6fc64e8a24a7d66ccc3b938fb20d73bd713224af2dfea
+    environment:
+      LIVEKIT_URL: wss://127.0.0.1:22449/sfu
+      LIVEKIT_KEY: isolated-call-fixture
+      LIVEKIT_SECRET: isolated-call-fixture-only-never-use-outside-tests
+      LIVEKIT_JWT_BIND: ":8080"
+      LIVEKIT_FULL_ACCESS_HOMESERVERS: twayblade.test
+      LIVEKIT_CS_API_URL_OVERRIDES: twayblade.test=https://synapse:8448
+      # Container-only test certificate; no trust-store changes on the Mac.
+      LIVEKIT_INSECURE_SKIP_VERIFY_TLS: YES_I_KNOW_WHAT_I_AM_DOING
+      LIVEKIT_LOG_LEVEL: error
+    depends_on: [livekit, synapse]
+    restart: "no"
+  call-proxy:
+    profiles: [call]
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    ports: ["127.0.0.1:22449:8443"]
+    volumes:
+      - ./call-Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../../test-data/local/integration:/fixture:ro
+    depends_on: [lk-jwt-service]
+    restart: "no"
   synapse:
     image: ghcr.io/element-hq/synapse:v1.164.2@sha256:f0df87cff259872637b4b5e5174b9977e5e3046dd421505407803b5e45c5f842
     user: "0:0"

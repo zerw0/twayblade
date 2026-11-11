@@ -3,6 +3,7 @@
 
 pub mod auth;
 pub mod avatars;
+pub mod calls;
 pub mod conversation;
 pub mod directory;
 pub mod media;

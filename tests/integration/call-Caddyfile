@@ -1,0 +1,13 @@
+{
+    auto_https off
+    admin off
+}
+https://:8443 {
+    tls /fixture/tls.crt /fixture/tls.key
+    handle_path /jwt/* {
+        reverse_proxy lk-jwt-service:8080
+    }
+    handle_path /sfu/* {
+        reverse_proxy livekit:7880
+    }
+}
