@@ -5,7 +5,6 @@
 //! Gallery lifecycle, independent of view code.
 use super::*;
 use matrix_client_core::media::{MediaError, MediaItem, MediaKind, Token};
-const MAX_ITEMS: usize = 2000;
 #[derive(Clone, Default)]
 pub(crate) struct MediaState {
     pub room: String,
@@ -17,6 +16,9 @@ pub(crate) struct MediaState {
     pub error: Option<MediaError>,
     next: Option<Token>,
 }
+fn current_request(expected: (u128, u64, u64), actual: (Option<u128>, u64, u64)) -> bool {
+    actual == (Some(expected.0), expected.1, expected.2)
+}
 impl State {
     pub(super) fn cancel_media(&mut self) {
         if let Some(task) = self.media_task.take() {
@@ -25,19 +27,34 @@ impl State {
         self.media_request = self.media_request.wrapping_add(1);
     }
     fn accepts_media(&self, account: u128, selection: u64, request: u64) -> bool {
-        self.account.as_ref().map(Account::instance_id) == Some(account)
-            && self.selection == selection
-            && self.media_request == request
+        current_request(
+            (account, selection, request),
+            (
+                self.account.as_ref().map(Account::instance_id),
+                self.selection,
+                self.media_request,
+            ),
+        )
     }
 }
 impl Backend {
-    pub(crate) fn load_media(&self, kind: MediaKind) -> Result<(), ServiceError> {
-        self.request_media(Some(kind))
+    pub(crate) fn load_media(
+        &self,
+        kind: MediaKind,
+        account: u128,
+        room: &str,
+    ) -> Result<(), ServiceError> {
+        self.request_media(Some(kind), account, room)
     }
-    pub(crate) fn load_more_media(&self) -> Result<(), ServiceError> {
-        self.request_media(None)
+    pub(crate) fn load_more_media(&self, account: u128, room: &str) -> Result<(), ServiceError> {
+        self.request_media(None, account, room)
     }
-    fn request_media(&self, kind: Option<MediaKind>) -> Result<(), ServiceError> {
+    fn request_media(
+        &self,
+        kind: Option<MediaKind>,
+        expected_account: u128,
+        expected_room: &str,
+    ) -> Result<(), ServiceError> {
         let mut state = self
             .state
             .lock()
@@ -48,6 +65,9 @@ impl Backend {
             .ok_or_else(|| failure("Sign in first."))?;
         let view = self.updates.borrow().clone();
         let room = view.selected_room;
+        if account.instance_id() != expected_account || room != expected_room {
+            return Err(failure("Conversation changed."));
+        }
         if room.is_empty() {
             return Err(failure("Select a conversation first."));
         }
@@ -88,15 +108,12 @@ impl Backend {
                 match result {
                     Ok(page) => {
                         for item in page.items {
-                            if !view.media.items.iter().any(|i| i.event_id == item.event_id)
-                                && view.media.items.len() < MAX_ITEMS
-                            {
+                            if !view.media.items.iter().any(|i| i.event_id == item.event_id) {
                                 view.media.items.push(item);
                             }
                         }
                         view.media.next = page.next;
-                        view.media.exhausted =
-                            view.media.next.is_none() || view.media.items.len() == MAX_ITEMS;
+                        view.media.exhausted = view.media.next.is_none();
                     }
                     Err(error) => view.media.error = Some(error),
                 }
@@ -108,6 +125,18 @@ impl Backend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn media_pages_require_the_same_account_selection_and_request() {
+        assert!(current_request((1, 2, 3), (Some(1), 2, 3)));
+        for actual in [
+            (None, 2, 3),
+            (Some(9), 2, 3),
+            (Some(1), 9, 3),
+            (Some(1), 2, 9),
+        ] {
+            assert!(!current_request((1, 2, 3), actual));
+        }
+    }
     #[test]
     fn room_switch_aborts_media_and_invalidates_requests() {
         let runtime = Runtime::new().unwrap();

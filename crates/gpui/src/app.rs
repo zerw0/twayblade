@@ -1601,11 +1601,25 @@ impl MatrixApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.job(window, cx, move |b| b.load_media(kind), |_, _, _, _| {});
+        if let Some(backend) = &self.backend
+            && let Some(room) = &self.navigation.selected_room
+            && let Err(error) = backend.load_media(kind, self.snapshot.account_instance, room)
+        {
+            self.status = error.to_string();
+            cx.notify();
+        }
+        let _ = window;
     }
     #[allow(dead_code, reason = "Gallery UI entry point")]
     pub fn load_more_media(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.job(window, cx, |b| b.load_more_media(), |_, _, _, _| {});
+        if let Some(backend) = &self.backend
+            && let Some(room) = &self.navigation.selected_room
+            && let Err(error) = backend.load_more_media(self.snapshot.account_instance, room)
+        {
+            self.status = error.to_string();
+            cx.notify();
+        }
+        let _ = window;
     }
     fn gallery_entries(&self) -> Vec<crate::viewer::ImageEntry> {
         self.snapshot
@@ -1634,7 +1648,8 @@ impl MatrixApp {
     #[allow(dead_code, reason = "Gallery UI entry point")]
     pub fn open_media_image(&mut self, event: &str, window: &mut Window, cx: &mut Context<Self>) {
         use crate::viewer::{ImageLoad, Viewer};
-        if self.snapshot.media.room != self.snapshot.selected_room
+        if self.navigation.selected_room.as_deref() != Some(self.snapshot.media.room.as_str())
+            || self.snapshot.media.room != self.snapshot.selected_room
             || self.snapshot.media.kind != matrix_client_core::media::MediaKind::Images
         {
             return;

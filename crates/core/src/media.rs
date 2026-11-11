@@ -20,6 +20,7 @@ pub enum MediaKind {
 }
 #[derive(Clone)]
 pub struct Token {
+    account: u128,
     room: String,
     kind: MediaKind,
     position: String,
@@ -52,6 +53,13 @@ pub enum MediaError {
     Unavailable,
     #[error("media_pagination")]
     Pagination,
+}
+fn validate_chunk_size(requested: usize, actual: usize) -> Result<(), MediaError> {
+    if actual > requested {
+        Err(MediaError::Pagination)
+    } else {
+        Ok(())
+    }
 }
 fn page_limit(limit: usize) -> Result<usize, MediaError> {
     if (1..=100).contains(&limit) {
@@ -145,7 +153,7 @@ impl Account {
         let limit = page_limit(limit)?;
         if from
             .as_ref()
-            .is_some_and(|t| t.room != room_id || t.kind != kind)
+            .is_some_and(|t| t.account != self.instance_id() || t.room != room_id || t.kind != kind)
         {
             return Err(MediaError::InvalidRequest);
         }
@@ -165,8 +173,8 @@ impl Account {
                 options.limit = ((limit - items.len()) as u32).into();
                 if filtered {
                     options.filter.types = Some(vec!["m.room.message".into()]);
-                    options.filter.url_filter =
-                        Some(matrix_sdk::ruma::api::client::filter::UrlFilter::EventsWithUrl);
+                    // contains_url misses encrypted `file.url` sources forwarded
+                    // into plain rooms; use the safe event-type filter instead.
                 }
                 options
             };
@@ -179,6 +187,7 @@ impl Account {
                     .map_err(|_| MediaError::Pagination)?,
                 Err(_) => return Err(MediaError::Pagination),
             };
+            validate_chunk_size(limit - items.len(), page.chunk.len())?;
             for event in page.chunk {
                 if let Ok(event) = event.raw().deserialize()
                     && let Some(mut item) = project(event, kind)
@@ -206,6 +215,7 @@ impl Account {
         Ok(MediaPage {
             items,
             next: position.map(|position| Token {
+                account: self.instance_id(),
                 room: room_id.to_owned(),
                 kind,
                 position,
@@ -241,16 +251,18 @@ impl Account {
             _ = cancel.changed() => return Err(ImageError::Cancelled),
             result = tokio::time::timeout(std::time::Duration::from_secs(30), self.media_bytes(&item.source)) => result.map_err(|_| ImageError::Download)?.map_err(|_| ImageError::Download)?,
         };
-        let filename = item.filename.clone();
-        tokio::select! {
-            _ = cancel.changed() => Err(ImageError::Cancelled),
-            result = tokio::task::spawn_blocking(move || crate::conversation::decode_viewer_image(bytes, &filename)) => result.map_err(|_| ImageError::Corrupt)?,
-        }
+        crate::conversation::decode_viewer_bytes(bytes, item.filename.clone(), cancel).await
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn oversized_server_pages_are_rejected_before_projection() {
+        assert_eq!(validate_chunk_size(1, 2), Err(MediaError::Pagination));
+        assert_eq!(validate_chunk_size(50, 50), Ok(()));
+        assert_eq!(validate_chunk_size(50, 0), Ok(()));
+    }
     #[test]
     fn page_bounds_are_explicit() {
         for limit in [0, 101, usize::MAX] {

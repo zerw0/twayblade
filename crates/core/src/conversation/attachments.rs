@@ -778,6 +778,41 @@ mod integration {
                     "gallery decrypt in memory",
                 );
                 assert!(gallery_bytes == bytes, "gallery original bytes differ");
+                if encrypted && name == "full.png" {
+                    let forwarded = checked(
+                        client.create_room(create_room::v3::Request::new()).await,
+                        "forward destination",
+                    );
+                    let content =
+                        matrix_sdk::ruma::events::room::message::ImageMessageEventContent::new(
+                            "forwarded.png".into(),
+                            request.source.clone(),
+                        );
+                    checked(
+                        forwarded
+                            .send(matrix_sdk::ruma::events::room::message::RoomMessageEventContent::new(MessageType::Image(content)))
+                            .await,
+                        "forward encrypted source into plain room",
+                    );
+                    let page = checked(
+                        account
+                            .room_media(
+                                forwarded.room_id().as_str(),
+                                crate::media::MediaKind::Images,
+                                None,
+                                1,
+                            )
+                            .await,
+                        "forwarded encrypted gallery item",
+                    );
+                    assert_eq!(page.items.len(), 1);
+                    assert!(
+                        checked(
+                            account.media_bytes(&page.items[0].source).await,
+                            "forwarded source decrypt"
+                        ) == bytes
+                    );
+                }
                 let (_cancel, cancel) = tokio::sync::watch::channel(false);
                 let result = conversation.viewer_image(&id, cancel).await;
                 if let Some(error) = error {
