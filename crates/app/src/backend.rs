@@ -346,7 +346,7 @@ fn sync_status_text(status: SyncStatus) -> &'static str {
         SyncStatus::Syncing => "Syncing conversations…",
         SyncStatus::Connected => "Connected",
         SyncStatus::Offline => "Offline · reconnecting…",
-        SyncStatus::Failed => "Synchronization failed · reconnect to retry",
+        SyncStatus::Failed => "Synchronization couldn't start · restart Twayblade",
         SyncStatus::Stopped => "Synchronization stopped",
     }
 }
