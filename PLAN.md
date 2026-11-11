@@ -7,7 +7,8 @@ Updated 2026-11-11. Status: M0 in progress; no milestone exit claimed.
 A simple, native desktop Matrix client. macOS is the primary UX and acceptance
 platform; Linux and Windows build from the same source and get their own release
 gates. Required for 1.0: E2EE, spaces, threads, OAuth/OIDC, legacy SSO, and
-direct/group calls through Element Call.
+direct/group MatrixRTC calls with a native call interface, interoperable with
+Element Call.
 
 ## Decisions
 
@@ -19,7 +20,7 @@ direct/group calls through Element Call.
 | Server entry | Users type a server name (`matrix.org`); `.well-known` discovery resolves it. Only HTTPS homeservers are accepted, including after delegation. |
 | Storage | SDK SQLite stores, encrypted with a passphrase held in the OS credential store. No plaintext fallback. Logout and failed sign-in delete the local store. |
 | Instances | One running instance per OS user, enforced by a lock file in the app data directory. |
-| Calls | Element Call in a separate, capability-restricted web runtime (Wry candidate). Chat UI stays native. Legacy `m.call.*` is out of scope for 1.0. |
+| Calls | Native (decision 2026-11-11, replacing the Element Call web runtime): MatrixRTC signalling in `core` through the Matrix SDK (call membership, call-key exchange over encrypted to-device messages), media through the LiveKit Rust SDK with end-to-end frame encryption, and a GPUI call interface. Interoperates with Element Call. Legacy `m.call.*` is out of scope for 1.0. |
 | Appearance | Default: system light/dark and system accent, neutral surfaces, contrasting foregrounds. Users can override scheme, accent, fonts, scale and chat style in Settings (M4). |
 | Settings | A native-style Settings window (⌘,) with sections. Preferences are stored locally as plain JSON, never with credentials. Notification rules are Matrix push rules on the server, so they sync with other clients. |
 | Toolchain | Rust minimum = the version actually built and tested (1.99). Nix shell is optional. |
@@ -35,7 +36,8 @@ In:
   undecryptable-message state. Never silently downgrade encryption.
 - Spaces: navigation, nested hierarchy, join/leave. Threads: read, reply, unread.
 - Unicode emoji picker and reactions.
-- Direct and group calls via Element Call: ringing, mute, device choice, screen share.
+- Direct and group MatrixRTC calls with a native interface, interoperable with
+  Element Call: ringing, mute, device choice, screen share.
 - Notifications, unread counts, keyboard shortcuts.
 - Settings: notifications, UI scaling, fonts, colour schemes, chat styles
   (bubbles, IRC, minimal), security and account (see M4).
@@ -186,8 +188,10 @@ here are reflected in Element for the same account.
   drift; no custom rebinding in 1.0. Sticker shortcuts are out of scope
   (stickers are deferred past 1.0).
 
-**M5 — calls (5–7 weeks).** Start with a macOS call-runtime spike, then the
-complete lifecycle and Linux/Windows. Exit: encrypted direct and group calls with
+**M5 — calls (8–11 weeks).** Native MatrixRTC calls. Start with an
+encrypted audio call between Twayblade and Element Call on macOS, then video,
+devices, screen sharing, ringing and Linux/Windows. The Element Call web
+runtime spike (`call-host`) is removed once the native path works. Exit: encrypted direct and group calls with
 Element on each OS, including denied permissions, device removal, network change
 and screen sharing (Wayland and X11). Transport TLS is not media E2EE.
 
@@ -225,7 +229,7 @@ Linux and Windows CI passed on `36f850a`; macOS CI was switched to `macos-15`
 5. **M4b chat polish.** Search, room media gallery, presence, motion, typing
    indicator, formatting, room discovery, message editing, stacked
    attachments, timeline image size and keyboard shortcuts (see Milestones).
-6. **M5 calls.** macOS runtime base exists. Next: allow the SFU origin and its short-lived LiveKit token (the bridge currently blocks both, so no call can connect), add a CSP, and pin the fixture certificate for WebKit; WebRTC egress isolation remains open (see Progress).
+6. **M5 calls.** Native calls (decision 2026-11-11): MatrixRTC in `core`, LiveKit Rust SDK media, GPUI call interface. The merged Element Call web-runtime spike is superseded and will be removed once native calls work.
 7. **M6 release.** Accessibility pass, packaging, signing, updates.
 
 ## Progress
@@ -611,7 +615,7 @@ tests/integration/  Isolated Synapse fixture
 docs/               Architecture and compatibility evidence
 ```
 
-`call-host` is present for the M5 spike; encrypted-call acceptance remains blocked.
+`call-host` is the superseded Element Call spike; it is removed once native calls work.
 
 ## References
 

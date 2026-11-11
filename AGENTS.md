@@ -5,8 +5,8 @@
 - Keep the shared Matrix application core in Rust. Use GPUI + GPUI Kit for the shared macOS/Linux/Windows frontend; the user approved replacing the split frontend.
 - macOS is the primary UX and acceptance platform. Preserve Linux/Windows portability while prioritizing Mac conventions.
 - Use compact typography, the system accent with contrasting foregrounds, system appearance, standard window decorations, and clear product language. Keep protocol identifiers and discovery diagnostics out of normal sign-in screens.
-- Keep the chat UI native. Element Call may use a dedicated web runtime, behind a restricted bridge.
-- Required release features: E2EE, spaces, threads, OAuth/OIDC, legacy SSO, and direct/group Element Call calls.
+- Keep the chat and call UI native. Calls are native MatrixRTC (LiveKit media), interoperable with Element Call; no web runtime.
+- Required release features: E2EE, spaces, threads, OAuth/OIDC, legacy SSO, and direct/group MatrixRTC calls.
 - Modern MatrixRTC direct calls and legacy `m.call.*` calls are separate compatibility targets.
 
 ## Architecture
@@ -15,7 +15,7 @@
 - Keep SDK clients and credentials out of public UI snapshots. Bound update queues, cancel account/selection tasks, and reject stale snapshots.
 - `core`: Matrix SDK integration, authentication, messaging, crypto, and session lifecycle. It owns Matrix state.
 - `platform`: credentials, notifications, deep links, OS permissions, packaging integration.
-- `call-host` (planned, M5): isolated Element Call runtime and capability-restricted IPC.
+- Calls (M5): MatrixRTC signalling and call-key exchange in `core` through the SDK; LiveKit media with end-to-end frame encryption; video frames reach GPUI through bounded, latest-frame handles. `call-host` is a superseded spike to remove.
 - `core` returns data and typed errors; user-facing wording belongs in the frontend.
 - Use SDK timelines, sync, crypto, and stores rather than reimplementing protocol state or cryptography.
 - Add crates and dependencies when needed; avoid empty abstraction layers and speculative features.
@@ -25,7 +25,7 @@
 - Never log passwords, access/refresh tokens, recovery keys, message bodies, or authentication callback URLs.
 - Do not persist credentials before OS-backed secret storage is implemented. No plaintext fallback.
 - Never silently downgrade encryption. Treat message E2EE and media E2EE as separate acceptance checks.
-- Restrict web origins, navigation, permissions, and bridge capabilities. Never put account tokens in call URLs.
+- Restrict web origins, navigation and permissions. Never send Matrix access tokens to call services; LiveKit JWTs and OpenID tokens stay in memory and out of logs. Call keys go only to call members' devices over encrypted to-device messages.
 - Use isolated test accounts and local test services. No production changes, publication, or credential reuse without authorization.
 
 ## Development and validation
