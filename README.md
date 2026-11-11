@@ -12,14 +12,6 @@
 > Twayblade is in early development and not ready for daily use yet.
 > Try it with a test account.
 
-<table>
-  <tr>
-    <td><img src="docs/screenshots/main-light.png" alt="A conversation in a space, with formatted messages, reactions, a thread and attachments, in the light theme"></td>
-    <td><img src="docs/screenshots/main-dark.png" alt="The same conversation with the member list open, in the dark theme"></td>
-  </tr>
-</table>
-<p align="center"><sub>Screenshots from the built-in offline preview, which uses sample data.</sub></p>
-
 ## Features
 
 - **End-to-end encryption** with device verification, secure backup and recovery
