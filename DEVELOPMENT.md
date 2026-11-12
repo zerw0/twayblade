@@ -171,6 +171,69 @@ capture support automatically when passed `--capture`:
 bash macos/build.sh --run --preview --capture /tmp/matrix-gpui.png
 ```
 
+## Diagnostics
+
+Logging is **off by default**. Start the app from a terminal with an opt-in
+tracing filter (quit an existing instance first):
+
+```sh
+TWAYBLADE_LOG=1 cargo run --locked -p twayblade
+# With the project's pinned shell:
+TWAYBLADE_LOG=1 nix develop --command cargo run --locked -p twayblade
+# A narrower filter; SDK store-lock spans include acquisition and completion:
+TWAYBLADE_LOG='off,twayblade_core=debug,matrix_sdk::event_cache=trace,matrix_sdk_common::cross_process_lock=debug,matrix_sdk_sqlite=info' cargo run --locked -p twayblade
+```
+
+`1` enables our crates at debug, `matrix_sdk`, `matrix_sdk_ui`,
+`matrix_sdk_base`, `matrix_sdk_sqlite` and cross-process-lock spans at info.
+The filter changes verbosity, never the privacy policy. Invalid filters or log
+initialization failures leave logging disabled and print only a generic warning.
+This does not enable reqwest/HTTP wire logs.
+
+Files are in `~/Library/Logs/Twayblade/` on macOS,
+`$XDG_STATE_HOME/Twayblade/logs/` on Linux (default
+`~/.local/state/Twayblade/logs/`), or
+`%LOCALAPPDATA%\Twayblade\logs\` on Windows. `diagnostics.log` rotates through
+`diagnostics.1.log`–`diagnostics.3.log`: four files, at most 2 MiB each (8 MiB
+in total), plus an empty `.diagnostics.lock` file preventing concurrent writers
+from racing rotation. A second writer leaves its logging disabled. On Unix the directory is private (0700) and files are 0600. Rotation
+closes the file before renaming, including on Windows. Windows/Linux runtime
+acceptance remains separate from the macOS checks.
+
+The formatter writes static span names/targets, start/end times, parent/span
+IDs and allowlisted numeric/boolean counters. It deliberately omits **all**
+free text, string/Debug/error fields, request/response payloads, URLs, room/user
+IDs and unknown fields. This is stronger than just redacting `body`,
+`formatted_body`, `token` and `password`: SDK warnings can embed content in
+`message` or `error`. Even a trace filter cannot bypass this policy. No access
+or refresh tokens, recovery keys, message bodies or authentication callback
+URLs should appear. Raw SDK errors are not formatted. The log is intended to
+answer *where and how long*, rather than preserve server error text.
+
+For a stuck room, locate `room_open` by its selection `generation` and
+`attempt`, then follow span/parent IDs through `event_cache_for_room`,
+`encryption_state_fetch`, `timeline_build` and `timeline_subscribe`. Each stage
+records `elapsed_ms` and `cancelled` when it completes or is dropped. An open
+SDK `read`, `write` or `spin_lock` child span identifies an in-progress store
+lock acquisition; a completed `spin_lock` distinguishes acquisition from later
+storage work. `room_open_retry` records timeout versus returned error and the
+retry delay; `first_snapshot` records readiness. Background SDK task spans may
+have independent roots. There is no claim that a crypto-lease heartbeat alone
+identifies the cause of a room-open wait.
+
+The 15-second open budget and base 1–30-second backoff remain; parsed Matrix
+rate-limit retry-after hints can extend that delay. Interactive SDK HTTP
+requests make one attempt with a 10-second timeout, so transient 5xx/rate-limit
+responses return control to the app rather than sleeping invisibly in the SDK.
+SDK operations that explicitly supply a request configuration, such as sliding
+sync (long polling) or member fetching, retain their own limits. Unknown room
+encryption state is fetched through the SDK before timeline construction;
+a fetch failure leaves the room retrying, without assuming it is unencrypted.
+
+Remove `TWAYBLADE_LOG` from the environment to disable logging. Log files are not
+automatically uploaded. Isolated reproduction commands and their limitations
+are in [the integration guide](tests/integration/README.md).
+
 ## Checks
 
 ```sh

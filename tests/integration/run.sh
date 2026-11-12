@@ -69,7 +69,7 @@ case "${1:-test}" in
             cargo test --locked -p twayblade-core --all-features oauth_keychain_lifecycle_across_processes -- --ignored --nocapture
         fi
         ;;
-    up|test|keychain|services|security|media|threads|spaces|viewer|search|directory|notifications|notification-delivery)
+    up|test|keychain|services|security|media|threads|spaces|viewer|search|directory|notifications|notification-delivery|room-open)
         mkdir -p test-data/local/integration
         "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py generate
         if [[ "${1:-test}" == spaces ]]; then
@@ -83,7 +83,10 @@ case "${1:-test}" in
         if [[ "${1:-test}" != up ]]; then
             # Keep encrypted fixture data for inspection; stop only our test service.
             trap '"${compose[@]}" stop' EXIT
-            if [[ "${1:-test}" == directory ]]; then
+            if [[ "${1:-test}" == room-open ]]; then
+                "${compose[@]}" exec -T synapse python /bootstrap.py register-security
+                cargo test --locked -p twayblade-core --all-features auth::room_open:: -- --ignored --nocapture --test-threads=1
+            elif [[ "${1:-test}" == directory ]]; then
                 cargo test --locked -p twayblade-core --all-features public_directory_pagination_filter_links_preview_and_knock -- --ignored --nocapture
             elif [[ "${1:-test}" == search ]]; then
                 "${compose[@]}" exec -T synapse python /bootstrap.py register-security
@@ -119,5 +122,5 @@ case "${1:-test}" in
         ;;
     down) "${compose[@]}" down ;;
     status) "${compose[@]}" ps ;;
-    *) printf 'Usage: bash tests/integration/run.sh [up|test|keychain|services|presence|oauth|sso|recovery|security|media|threads|spaces|viewer|search|notifications|notification-delivery|down|status]\n' >&2; exit 1 ;;
+    *) printf 'Usage: bash tests/integration/run.sh [up|test|keychain|services|presence|oauth|sso|recovery|security|media|threads|spaces|viewer|search|notifications|notification-delivery|room-open|down|status]\n' >&2; exit 1 ;;
 esac

@@ -12,6 +12,7 @@ use matrix_sdk_ui::timeline::{
 };
 use std::sync::Arc;
 
+mod open;
 mod previews;
 pub use previews::{PreviewSize, TimelinePreview};
 mod editing;
@@ -95,7 +96,7 @@ pub struct Attachment {
 }
 
 /// Time allowed for one attempt at opening a room's timeline.
-const OPEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+pub(crate) const OPEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// Pause before reopening: 1 s, doubling, at most 30 s.
 fn open_retry_delay(attempt: u32) -> std::time::Duration {
@@ -590,21 +591,26 @@ impl Account {
             // each attempt so a stuck one is replaced instead of loading forever.
             let mut attempt = 0u32;
             let (timeline, mut items, updates) = loop {
-                let opened = tokio::time::timeout(OPEN_TIMEOUT, async {
-                    let timeline = room.timeline_builder().with_focus(focus.clone()).track_read_marker_and_receipts(TimelineReadReceiptTracking::MessageLikeEvents).build().await?;
-                    let (items, updates) = timeline.subscribe().await;
-                    Ok::<_, matrix_sdk_ui::timeline::Error>((Arc::new(timeline), items, updates))
-                }).await;
+                let span = tracing::info_span!("room_open", generation, attempt, elapsed_ms=tracing::field::Empty, cancelled=tracing::field::Empty);
+                let opened = tokio::time::timeout(OPEN_TIMEOUT, open::step(span, async {
+                    let timeline = Box::pin(open::timeline(&room, focus.clone())).await?;
+                    let (items, updates) = open::step(tracing::info_span!("timeline_subscribe", elapsed_ms=tracing::field::Empty, cancelled=tracing::field::Empty), Box::pin(timeline.subscribe())).await;
+                    Ok::<_, open::OpenError>((timeline, items, updates))
+                })).await;
                 match opened {
                     Ok(Ok(opened)) => break opened,
-                    Ok(Err(_)) => {
+                    Ok(Err(open::OpenError::Failed)) => {
                         snapshot.status = TimelineStatus::Failed;
                         yield snapshot; return;
                     }
-                    Err(_) => {
+                    retry => {
+                        let timed_out = retry.is_err();
+                        let server_hint = match retry { Ok(Err(open::OpenError::Retry(hint))) => hint, _ => None };
+                        let delay = open::retry_delay(attempt, server_hint);
+                        tracing::warn!(name: "room_open_retry", timeout=timed_out, generation, attempt, retry_ms=delay.as_millis() as u64);
                         snapshot.status = TimelineStatus::Retrying;
                         yield snapshot.clone();
-                        tokio::time::sleep(open_retry_delay(attempt)).await;
+                        tokio::time::sleep(delay).await;
                         attempt = attempt.saturating_add(1);
                     }
                 }
@@ -646,6 +652,7 @@ impl Account {
             unread_cache.project(&mut snapshot.messages, root.as_deref());
             if let Some(root) = &root { snapshot.unread = unread_cache.value(root); }
             snapshot.status = TimelineStatus::Ready;
+            tracing::info!(name: "first_snapshot", generation, success=true);
             yield snapshot.clone();
             let mut updates = Box::pin(updates);
             // Fetch an initial page without blocking consumption of timeline updates.
