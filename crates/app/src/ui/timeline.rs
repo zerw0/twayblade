@@ -176,10 +176,26 @@ impl MatrixApp {
                                     this.open_viewer(id.clone(), in_thread, window, cx)
                                 }));
                             if let Some(image) = thumbnail {
-                                button = button
-                                    .w(px(280.))
-                                    .h(px(180.))
-                                    .child(img(image).size_full().object_fit(ObjectFit::Contain));
+                                // Keep the picture's shape inside the box for the
+                                // chosen size (Settings › Chat › Images).
+                                let (max_w, max_h) = match self.preferences.chat.preview_size {
+                                    twayblade_core::conversation::PreviewSize::Default => {
+                                        (280., 180.)
+                                    }
+                                    twayblade_core::conversation::PreviewSize::Large => {
+                                        (560., 420.)
+                                    }
+                                };
+                                let size = image.size(0);
+                                let (w, h) = (
+                                    (size.width.0 as f32).max(1.),
+                                    (size.height.0 as f32).max(1.),
+                                );
+                                let scale = (max_w / w).min(max_h / h);
+                                button =
+                                    button.w(px(w * scale)).h(px(h * scale)).max_w_full().child(
+                                        img(image).size_full().object_fit(ObjectFit::Contain),
+                                    );
                             } else {
                                 button = button.small().label("Open Image");
                             }
@@ -382,6 +398,30 @@ impl MatrixApp {
                             .disabled(!self.preview && disabled)
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.open_emoji(Some(message_id.clone()), window, cx)
+                            })),
+                    ),
+            );
+        }
+        if message.editable
+            && let Some(event_id) = message.event_id.clone()
+        {
+            let focus = self.image_focus(&format!("edit-action-{}", message.id), cx);
+            actions = actions.child(
+                div()
+                    .track_focus(&focus)
+                    .focus(|style| style.opacity(1.))
+                    .opacity(0.)
+                    .group_hover("message", |style| style.opacity(1.))
+                    .child(
+                        Button::new(SharedString::from(format!("edit-{}", message.id)))
+                            .track_focus(&focus)
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::Pencil)
+                            .accessibility_label("Edit message")
+                            .tooltip("Edit")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.start_edit(event_id.clone(), in_thread, window, cx)
                             })),
                     ),
             );
@@ -616,6 +656,7 @@ impl MatrixApp {
         let Some(range) = groups.get(ix).cloned() else {
             return div().into_any_element();
         };
+        self.note_visible_images(&messages[range.clone()], in_thread, cx);
         let palette = theme::palette(cx);
         let muted = cx.theme().muted_foreground;
         let first = messages[range.start].clone();

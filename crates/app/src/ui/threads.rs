@@ -187,6 +187,19 @@ impl MatrixApp {
     }
 
     pub fn close_thread(&mut self, cx: &mut Context<Self>) {
+        if self
+            .edit_session
+            .as_ref()
+            .is_some_and(|session| session.in_thread)
+            && let Some(session) = self.edit_session.take()
+        {
+            if let Some(backend) = &self.backend {
+                backend.cancel_edit();
+            }
+            if let Some(thread) = &self.thread {
+                self.edit_restore = Some((thread.composer.clone(), session.draft));
+            }
+        }
         let Some(thread) = self.thread.take() else {
             return;
         };
@@ -325,6 +338,9 @@ impl MatrixApp {
     }
 
     pub fn send_thread(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.save_edit_from_composer(true, window, cx) {
+            return;
+        }
         if self.preview {
             return;
         }
@@ -491,47 +507,91 @@ impl MatrixApp {
             })
             // Same field as the main composer: rounded, bordered, send inside.
             .child(
-                div().px(px(12.)).pt(px(4.)).pb(px(12.)).child(
-                    h_flex()
-                        .items_end()
-                        .gap(px(2.))
-                        .min_h(px(32.))
-                        .py(px(3.))
-                        .pl(px(10.))
-                        .pr(px(3.))
-                        .rounded(px(16.))
-                        .border_1()
-                        .border_color(cx.theme().border)
-                        .bg(crate::theme::palette(cx).field)
-                        .child(
-                            div()
-                                .id("thread-composer-panel")
-                                .flex_1()
-                                .min_w_0()
-                                .py(px(1.))
-                                .child(
-                                    Textarea::new(&t.composer)
-                                        .accessibility_id("thread-composer")
-                                        .aria_label("Reply in thread")
-                                        .appearance(false)
-                                        .w_full()
-                                        .disabled(!t.ready),
-                                ),
-                        )
-                        .child(
-                            Button::new("thread-send")
-                                .primary()
-                                .xsmall()
-                                .rounded(px(12.))
-                                .icon(assets::IconName::ArrowUp)
-                                .accessibility_label("Send thread reply")
-                                .tooltip("Send Reply  ↩")
-                                .disabled(self.preview || !t.ready || empty || t.sending)
-                                .on_click(
-                                    cx.listener(|this, _, window, cx| this.send_thread(window, cx)),
-                                ),
-                        ),
-                ),
+                div()
+                    .px(px(12.))
+                    .pt(px(4.))
+                    .pb(px(12.))
+                    .children(self.edit_bar(true, cx))
+                    .child(
+                        h_flex()
+                            .items_end()
+                            .gap(px(2.))
+                            .min_h(px(32.))
+                            .py(px(3.))
+                            .pl(px(10.))
+                            .pr(px(3.))
+                            .rounded(px(16.))
+                            .border_1()
+                            .border_color(cx.theme().input)
+                            .bg(crate::theme::palette(cx).field)
+                            .child(
+                                div()
+                                    .id("thread-composer-panel")
+                                    // ↑/↓ start or step an edit before the
+                                    // text field moves its cursor.
+                                    // Escape inside the field cancels an edit; the field would
+                                    // otherwise take the key.
+                                    .capture_action(cx.listener(
+                                        |this,
+                                         _: &gpui_kit::component::input::Escape,
+                                         window,
+                                         cx| {
+                                            if this
+                                                .edit_session
+                                                .as_ref()
+                                                .is_some_and(|session| session.in_thread)
+                                            {
+                                                this.end_edit(window, cx);
+                                                cx.stop_propagation();
+                                            }
+                                        },
+                                    ))
+                                    .capture_action(cx.listener(
+                                        |this,
+                                         _: &gpui_kit::component::input::MoveUp,
+                                         window,
+                                         cx| {
+                                            if this.edit_navigation_key("up", true, window, cx) {
+                                                cx.stop_propagation();
+                                            }
+                                        },
+                                    ))
+                                    .capture_action(cx.listener(
+                                        |this,
+                                         _: &gpui_kit::component::input::MoveDown,
+                                         window,
+                                         cx| {
+                                            if this.edit_navigation_key("down", true, window, cx) {
+                                                cx.stop_propagation();
+                                            }
+                                        },
+                                    ))
+                                    .flex_1()
+                                    .min_w_0()
+                                    .py(px(1.))
+                                    .child(
+                                        Textarea::new(&t.composer)
+                                            .accessibility_id("thread-composer")
+                                            .aria_label("Reply in thread")
+                                            .appearance(false)
+                                            .w_full()
+                                            .disabled(!t.ready),
+                                    ),
+                            )
+                            .child(
+                                Button::new("thread-send")
+                                    .primary()
+                                    .xsmall()
+                                    .rounded(px(12.))
+                                    .icon(assets::IconName::ArrowUp)
+                                    .accessibility_label("Send thread reply")
+                                    .tooltip("Send Reply  ↩")
+                                    .disabled(self.preview || !t.ready || empty || t.sending)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.send_thread(window, cx)
+                                    })),
+                            ),
+                    ),
             )
             .into_any_element()
     }

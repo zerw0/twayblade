@@ -13,6 +13,7 @@ mod timeline;
 // Secondary windows, overlays and shared pieces.
 pub(crate) mod attachments;
 pub(crate) mod avatars;
+pub(crate) mod editing;
 pub(crate) mod emoji;
 pub(crate) mod motion;
 pub(crate) mod security;
@@ -391,6 +392,8 @@ impl Render for MatrixApp {
                     this.close_viewer(window, cx);
                 } else if this.emoji_picker.is_some() {
                     this.close_emoji(window, cx);
+                } else if this.edit_session.is_some() {
+                    this.end_edit(window, cx);
                 } else if this
                     .management
                     .as_ref()

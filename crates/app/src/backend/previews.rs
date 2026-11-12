@@ -107,11 +107,6 @@ impl State {
         self.previews.invalidate();
     }
 }
-fn save_size(path: &std::path::Path, size: PreviewSize) -> std::io::Result<()> {
-    let mut preferences = crate::preferences::Preferences::load(path)?;
-    preferences.chat.preview_size = size;
-    preferences.save(path)
-}
 impl Backend {
     pub(crate) fn preview_size(&self) -> PreviewSize {
         self.state
@@ -119,20 +114,8 @@ impl Backend {
             .map(|s| s.previews.size)
             .unwrap_or_default()
     }
-    /// Settings persistence; keeps other preferences. The MatrixApp adapter also
-    /// updates its preference model so subsequent Settings saves keep this value.
-    pub(crate) fn set_preview_size(&self, size: PreviewSize) -> Result<(), ServiceError> {
-        let _lifecycle = self
-            .lifecycle
-            .lock()
-            .map_err(|_| failure("Settings are unavailable."))?;
-        let path = crate::preferences::Preferences::path()
-            .ok_or_else(|| failure("Settings are unavailable."))?;
-        save_size(&path, size)
-            .map_err(|_| failure("The image preview preference could not be saved."))?;
-        self.apply_preview_size(size)
-    }
-    pub(super) fn apply_preview_size(&self, size: PreviewSize) -> Result<(), ServiceError> {
+    /// Apply in memory; Settings persists through the app's preference writer.
+    pub(crate) fn apply_preview_size(&self, size: PreviewSize) -> Result<(), ServiceError> {
         let mut state = self
             .state
             .lock()
@@ -148,7 +131,7 @@ impl Backend {
         Ok(())
     }
     /// Selected room contract. This applies a supplied size without persisting;
-    /// Settings uses set_preview_size. Viewport reporting follows selection.
+    /// Settings uses apply_preview_size. Viewport reporting follows selection.
     pub(crate) fn select_room_with_preview_size(
         &self,
         room: String,
@@ -469,9 +452,10 @@ mod tests {
         preferences.chat.avatars = false;
         preferences.notifications.sound = false;
         preferences.save(&path).unwrap();
+        // Settings saves the whole model through the app's writer.
         for size in [PreviewSize::Large, PreviewSize::Default] {
-            save_size(&path, size).unwrap();
             preferences.chat.preview_size = size;
+            preferences.save(&path).unwrap();
             assert_eq!(
                 crate::preferences::Preferences::load(&path).unwrap(),
                 preferences
