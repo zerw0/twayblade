@@ -303,6 +303,8 @@ pub(super) struct MatrixApp {
     pub(super) call_end_dismissed: bool,
     /// The newest device notice the user dismissed.
     pub(super) call_event_seen: u64,
+    /// When the shown room started loading, and a wake-up for its time limit.
+    pub(super) room_loading: Option<(String, std::time::Instant, Task<()>)>,
     /// Last automatic re-selection, to rate-limit recovery.
     selection_retry: Option<std::time::Instant>,
 }
@@ -613,6 +615,7 @@ impl MatrixApp {
             call_clock: None,
             call_end_dismissed: false,
             call_event_seen: 0,
+            room_loading: None,
             selection_retry: None,
         };
         crate::theme::set_appearance(this.preferences.appearance.clone(), cx);
@@ -1266,6 +1269,19 @@ impl MatrixApp {
         self.snapshot.selected_room == room
             && (self.snapshot.timeline_ready
                 || self.snapshot.timeline_status == crate::backend::LOADING_STATUS)
+    }
+    /// Opens the shown room again from scratch. Also drops a selection still
+    /// waiting in the queue, so a stuck earlier request cannot block it.
+    pub(crate) fn retry_room(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some(room) = self.navigation.selected_room.clone() else {
+            return;
+        };
+        tracing::info!(name: "ui_room_retry", pending = self.selection_pending);
+        self.selection_task = None;
+        self.selection_pending = 0;
+        self.room_loading = None;
+        self.queue_selection(Some(room), window, cx);
+        cx.notify();
     }
     fn queue_selection(&mut self, room: Option<String>, window: &Window, cx: &Context<Self>) {
         self.queue_selection_focus(room, None, window, cx);

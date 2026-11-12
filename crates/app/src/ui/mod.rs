@@ -5,7 +5,7 @@
 
 // Areas of the main window.
 mod chrome;
-mod conversation;
+pub(crate) mod conversation;
 mod panels;
 mod sign_in;
 mod timeline;
@@ -228,6 +228,7 @@ impl Render for MatrixApp {
             viewer.clamp_pan(window);
         }
         self.sync_call_views(cx);
+        self.sync_room_loading(cx);
         if self.security_open {
             self.security_open = false;
             self.open_settings(crate::ui::settings::Section::Security, cx);

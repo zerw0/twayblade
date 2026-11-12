@@ -79,6 +79,8 @@ pub(super) struct Snapshot {
     pub(super) reduce_motion: bool,
     pub(super) sync_status: String,
     pub(super) timeline_status: String,
+    /// Main timeline state behind `timeline_status`, for the view's layout.
+    pub(super) timeline_phase: TimelineStatus,
 }
 
 #[derive(Clone)]
@@ -743,6 +745,7 @@ impl Backend {
             snapshot.typing.clear();
             snapshot.typing_others = 0;
             snapshot.timeline_status = LOADING_STATUS.into();
+            snapshot.timeline_phase = TimelineStatus::Loading;
         });
         let shared = self.state.clone();
         let updates = self.updates.clone();
@@ -770,6 +773,7 @@ impl Backend {
                 publish(&updates, |view| {
                     view.timeline_ready = state.conversation.is_some();
                     view.timeline_status = timeline_status_text(snapshot.status).into();
+                    view.timeline_phase = snapshot.status;
                     view.focused_event = target
                         .as_ref()
                         .filter(|id| {
@@ -1208,6 +1212,7 @@ impl Backend {
             snapshot.typing.clear();
             snapshot.typing_others = 0;
             snapshot.timeline_status.clear();
+            snapshot.timeline_phase = TimelineStatus::Ready;
         });
         drop(state);
         self.observe_presence(Vec::new())

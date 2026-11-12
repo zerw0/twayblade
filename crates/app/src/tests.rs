@@ -2210,3 +2210,30 @@ fn keyboard_shortcuts_open_the_keyboard_settings(cx: &mut TestAppContext) {
         )
     });
 }
+
+#[gpui_kit::test]
+fn failed_room_load_offers_try_again_instead_of_loading_text(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            app.preview = false;
+            app.backend = Some(crate::backend::Backend::with_lock(None).expect("isolated backend"));
+            let room = app.navigation.selected_room.clone().expect("sample room");
+            app.snapshot.selected_room = room.clone();
+            app.snapshot.messages.clear();
+            app.groups.clear();
+            app.snapshot.timeline_ready = false;
+            app.snapshot.timeline_phase = twayblade_core::conversation::TimelineStatus::Loading;
+            assert!(app.room_load(&room) == crate::ui::conversation::RoomLoad::Loading);
+            app.snapshot.timeline_phase = twayblade_core::conversation::TimelineStatus::Failed;
+            assert!(app.room_load(&room) == crate::ui::conversation::RoomLoad::Failed);
+            cx.notify();
+        })
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("room-retry", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+}
