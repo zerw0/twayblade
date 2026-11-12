@@ -16,7 +16,7 @@ use tracing_subscriber::{EnvFilter, Layer, layer::Context, prelude::*, registry:
 
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
 const FILES: usize = 4;
-const DEFAULT_FILTER: &str = "off,twayblade=debug,twayblade_core=debug,twayblade_platform=debug,twayblade_media=debug,matrix_sdk=info,matrix_sdk_ui=info,matrix_sdk_base=info,matrix_sdk_common::cross_process_lock=info,matrix_sdk_sqlite=info";
+const DEFAULT_FILTER: &str = "off,twayblade=debug,twayblade_core=debug,twayblade_platform=debug,twayblade_media=debug,matrix_sdk=info,matrix_sdk_ui=info,matrix_sdk_base=warn,matrix_sdk_common::cross_process_lock=info,matrix_sdk_sqlite=info,matrix_sdk_sqlite::crypto_store=warn";
 
 pub fn log_directory() -> Option<PathBuf> {
     let base = directories::BaseDirs::new()?;
@@ -169,6 +169,11 @@ impl SafeFields {
                 | "success"
                 | "timeout"
                 | "cancelled"
+                | "pending"
+                | "matched"
+                | "ready"
+                | "revision"
+                | "stale"
         )
     }
 }
