@@ -258,6 +258,10 @@ pub(super) struct MatrixApp {
     preview_report: Option<Task<()>>,
     /// Selections queued but not yet applied by the backend.
     selection_pending: u32,
+    /// Last logged (room matched, timeline ready, selections pending).
+    selection_trace: Option<(bool, bool, u32)>,
+    /// When the shown room started loading, and a wake-up for its time limit.
+    pub(super) room_loading: Option<(String, std::time::Instant, Task<()>)>,
     /// Last automatic re-selection, to rate-limit recovery.
     selection_retry: Option<std::time::Instant>,
 }
@@ -563,6 +567,8 @@ impl MatrixApp {
             reported_images: Default::default(),
             preview_report: None,
             selection_pending: 0,
+            selection_trace: None,
+            room_loading: None,
             selection_retry: None,
         };
         crate::theme::set_appearance(this.preferences.appearance.clone(), cx);
@@ -651,6 +657,7 @@ impl MatrixApp {
         cx: &mut Context<Self>,
     ) {
         if self.started && snapshot.revision <= self.snapshot.revision {
+            tracing::debug!(name: "ui_snapshot_stale", revision = snapshot.revision);
             return;
         }
         if self.snapshot.session_state != snapshot.session_state {
@@ -730,6 +737,7 @@ impl MatrixApp {
         {
             // The backend lost or never applied the shown room; ask again.
             self.selection_retry = Some(std::time::Instant::now());
+            tracing::info!(name: "ui_selection_retry", pending = self.selection_pending);
             self.queue_selection(Some(room), window, cx);
         }
         if self.navigation.selected_room.as_deref().unwrap_or_default() != snapshot.selected_room {
@@ -811,6 +819,26 @@ impl MatrixApp {
         self.update_thread(snapshot.thread.as_ref(), cx);
         self.groups = groups;
         self.snapshot = snapshot;
+        // Window-side room loading state, logged only when it changes.
+        let shown = self.navigation.selected_room.is_some().then(|| {
+            (
+                self.navigation.selected_room.as_deref() == Some(&self.snapshot.selected_room),
+                self.snapshot.timeline_ready,
+                self.selection_pending,
+            )
+        });
+        if shown != self.selection_trace {
+            self.selection_trace = shown;
+            if let Some((matched, ready, pending)) = shown {
+                tracing::info!(
+                    name: "ui_room_state",
+                    matched,
+                    ready,
+                    pending,
+                    revision = self.snapshot.revision
+                );
+            }
+        }
         self.sync_edit(window, cx);
         self.notification_config();
         if let Some((serial, target)) = self.snapshot.notification_click.clone()
@@ -1195,6 +1223,19 @@ impl MatrixApp {
             && (self.snapshot.timeline_ready
                 || self.snapshot.timeline_status == crate::backend::LOADING_STATUS)
     }
+    /// Opens the shown room again from scratch. Also drops a selection still
+    /// waiting in the queue, so a stuck earlier request cannot block it.
+    pub(crate) fn retry_room(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some(room) = self.navigation.selected_room.clone() else {
+            return;
+        };
+        tracing::info!(name: "ui_room_retry", pending = self.selection_pending);
+        self.selection_task = None;
+        self.selection_pending = 0;
+        self.room_loading = None;
+        self.queue_selection(Some(room), window, cx);
+        cx.notify();
+    }
     fn queue_selection(&mut self, room: Option<String>, window: &Window, cx: &Context<Self>) {
         self.queue_selection_focus(room, None, window, cx);
     }
@@ -1216,10 +1257,12 @@ impl MatrixApp {
         };
         let previous = self.selection_task.take();
         self.selection_pending += 1;
+        tracing::info!(name: "ui_selection_queued", pending = self.selection_pending);
         self.selection_task = Some(cx.spawn_in(window, async move |view, cx| {
             if let Some(previous) = previous {
                 previous.await;
             }
+            tracing::info!(name: "ui_selection_started", "");
             let target = room.clone();
             let result = cx
                 .background_spawn(async move {
@@ -1232,7 +1275,8 @@ impl MatrixApp {
                     }
                 })
                 .await;
-            let _ = view.update_in(cx, |this, _, cx| {
+            tracing::info!(name: "ui_selection_finished", success = result.is_ok());
+            let applied = view.update_in(cx, |this, _, cx| {
                 this.selection_pending = this.selection_pending.saturating_sub(1);
                 if this.navigation.selected_room == target
                     && let Err(error) = result
@@ -1241,6 +1285,9 @@ impl MatrixApp {
                     cx.notify();
                 }
             });
+            if applied.is_err() {
+                tracing::warn!(name: "ui_selection_unapplied", "");
+            }
         }));
     }
 

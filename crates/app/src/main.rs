@@ -20,6 +20,9 @@ use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
 
 fn main() {
+    if twayblade_platform::diagnostics::init().is_err() {
+        eprintln!("Diagnostics could not start; logging is disabled.");
+    }
     let args: Vec<_> = std::env::args().collect();
     let preview = args.iter().any(|arg| arg.starts_with("--preview"));
     let capture = args

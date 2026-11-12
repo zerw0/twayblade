@@ -287,6 +287,7 @@ async fn client(
         .await
         .map_err(|_| AuthError::Storage)?;
     let mut builder = Client::builder()
+        .request_config(crate::request_policy::interactive())
         .with_threading_support(matrix_sdk::ThreadingSupport::Enabled {
             with_subscriptions: false,
         })
@@ -467,3 +468,6 @@ fn install_session_callbacks(
 
 #[cfg(test)]
 mod integration;
+
+#[cfg(test)]
+mod room_open;
