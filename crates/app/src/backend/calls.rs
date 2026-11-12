@@ -302,9 +302,8 @@ async fn run(
     }
     let mut native = NativeCall::start(&account, &room, video).await?;
     if !join {
-        tokio::time::timeout(std::time::Duration::from_secs(10), native.ring(video))
-            .await
-            .map_err(|_| CallError::TransportFailed)??;
+        // A failed ring leaves a working call that others can still join.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(10), native.ring(video)).await;
     }
     let mut call = native.drive();
     {
@@ -414,14 +413,22 @@ async fn incoming_notifications(
             {
                 continue;
             }
-            let title = if live.device.preview {
-                format!("{} · {}", call.caller_name, call.room_name)
+            let video = call.kind == twayblade_core::calls::ringing::CallIntent::Video;
+            let (title, body) = if !live.device.preview {
+                ("Twayblade".to_owned(), "Incoming call".to_owned())
+            } else if call.room_name == call.caller_name {
+                let kind = if video { "video call" } else { "call" };
+                (call.caller_name.clone(), format!("Incoming {kind}"))
             } else {
-                "Twayblade".into()
+                let kind = if video { "a video call" } else { "a call" };
+                (
+                    call.room_name.clone(),
+                    format!("{} started {kind}", call.caller_name),
+                )
             };
             let notification = os::Notification {
                 title,
-                body: "Incoming call".into(),
+                body,
                 sound: live.device.sound,
                 action_label: "Open",
                 target: os::Activation {

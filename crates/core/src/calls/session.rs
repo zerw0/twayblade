@@ -90,12 +90,15 @@ impl NativeCall {
         }
         let mut call = Self::connect(account, room, lease).await?;
         call.media.start_microphone().await?;
-        if let Some(id) = twayblade_platform::media_devices::default_audio(true) {
-            call.media.select_input(&id)?;
+        // CoreAudio UIDs and WebRTC IDs can disagree; keep WebRTC's choice then.
+        if let Some(id) = twayblade_platform::media_devices::default_audio(true)
+            && call.media.select_input(&id).is_ok()
+        {
             call.state.local.input_device = Some(id);
         }
-        if let Some(id) = twayblade_platform::media_devices::default_audio(false) {
-            call.media.select_output(&id)?;
+        if let Some(id) = twayblade_platform::media_devices::default_audio(false)
+            && call.media.select_output(&id).is_ok()
+        {
             call.state.local.output_device = Some(id);
         }
         // Camera capture is attached below through the native capture adapter.
@@ -223,7 +226,7 @@ impl NativeCall {
             .clone()
             .ok_or(CallError::TransportFailed)?;
         // Modern Element readers require an open slot, including Compatibility mode.
-        room.send_state_event_raw(SLOT_EVENT, SLOT, serde_json::json!({"status":"open","application":{"type":"m.call"},"encryption":{"type":"org.matrix.msc4143.per_member"}})).await.map_err(|_|CallError::MembershipForbidden)?;
+        room.send_state_event_raw(SLOT_EVENT, SLOT, serde_json::json!({"status":"open","application":{"type":"m.call"},"encryption":{"type":"org.matrix.msc4143.per_member"}})).await.ok(); // Groups often forbid custom state; still notify.
         let users = room
             .members_no_sync(matrix_sdk::RoomMemberships::JOIN)
             .await
@@ -346,11 +349,15 @@ impl NativeCall {
             _ = self.permission_tick.tick() => { self.check_permissions().await; }
             _ = async move { match reconnect_deadline {Some(at)=>tokio::time::sleep_until(at).await, None=>std::future::pending().await} } => {return Err(CallError::ReconnectTimeout);}
             _ = async move { match ring_remaining {Some(duration)=>tokio::time::sleep(duration).await, None=>std::future::pending().await} } => {
-                self.leave().await?;
-                self.state.phase = CallPhase::Ended(EndReason::RingExpired);
+                if self.state.kind == CallKind::Direct {
+                    self.leave().await?;
+                    self.state.phase = CallPhase::Ended(EndReason::RingExpired);
+                } else {
+                    self.ring = None;
+                }
             }
             decline = self.declines.recv() => {
-                if let (Some(decline),Some(ring)) = (decline,&self.ring) && let Some((parent,sender)) = decline.split_once('\n') && parent == ring.event_id && sender != self.signalling.own.user_id.as_str() && self.signalling.room.get_member_no_sync(&matrix_sdk::ruma::UserId::parse(sender).map_err(|_|CallError::InvalidRoom)?).await.ok().flatten().is_some_and(|m|m.membership() == &matrix_sdk::ruma::events::room::member::MembershipState::Join) {
+                if let (Some(decline),Some(ring)) = (decline,&self.ring) && self.state.kind == CallKind::Direct && let Some((parent,sender)) = decline.split_once('\n') && parent == ring.event_id && sender != self.signalling.own.user_id.as_str() && self.signalling.room.get_member_no_sync(&matrix_sdk::ruma::UserId::parse(sender).map_err(|_|CallError::InvalidRoom)?).await.ok().flatten().is_some_and(|m|m.membership() == &matrix_sdk::ruma::events::room::member::MembershipState::Join) {
                     let current = members(&self.signalling.room).await?;
                     let joined = current.iter().any(|m|m.user_id != self.signalling.own.user_id);
                     let phase = ring.phase(super::ringing::now_ms(),joined,true);
@@ -460,11 +467,12 @@ impl NativeCall {
         self.state.events.push((self.event_serial, event));
     }
     async fn check_permissions(&mut self) {
-        use twayblade_platform::media_permissions::{CapturePermission, check};
+        use twayblade_platform::media_permissions::{CapturePermission, PermissionError, check};
         // Synthetic sources do not own OS capture grants.
         if self.media.uses_microphone()
             && !self.state.local.muted
-            && let Err(error) = check(CapturePermission::Microphone)
+            && let Err(error @ (PermissionError::Denied(_) | PermissionError::Restricted(_))) =
+                check(CapturePermission::Microphone)
         {
             let _ = self.media.set_muted(true);
             self.state.local.muted = true;
@@ -477,7 +485,8 @@ impl NativeCall {
             });
         }
         if self.state.local.video
-            && let Err(error) = check(CapturePermission::Camera)
+            && let Err(error @ (PermissionError::Denied(_) | PermissionError::Restricted(_))) =
+                check(CapturePermission::Camera)
         {
             let _ = self.media.configure_camera(None).await;
             self.state.local.video = false;
