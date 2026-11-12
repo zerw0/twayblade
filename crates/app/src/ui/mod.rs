@@ -15,6 +15,7 @@ pub(crate) mod attachments;
 pub(crate) mod avatars;
 pub(crate) mod editing;
 pub(crate) mod emoji;
+pub(crate) mod keyboard;
 pub(crate) mod motion;
 pub(crate) mod security;
 pub(crate) mod settings;
@@ -370,6 +371,11 @@ impl Render for MatrixApp {
             .on_action(cx.listener(|this, _: &crate::app::OpenSettings, _, cx| {
                 this.open_settings(crate::ui::settings::Section::Appearance, cx)
             }))
+            .on_action(
+                cx.listener(|this, _: &crate::shortcuts::ShowKeyboardShortcuts, _, cx| {
+                    this.open_settings(crate::ui::settings::Section::Keyboard, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &FindConversation, window, cx| {
                 this.search.update(cx, |state, cx| state.focus(window, cx))
             }))
