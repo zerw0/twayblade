@@ -1,5 +1,20 @@
 //! The conversation column: header, timeline, composer and typing row.
 use super::*;
+use gpui_kit::component::spinner::Spinner;
+use twayblade_core::conversation::TimelineStatus;
+
+/// How long a room may load before the view offers to try again.
+const LOAD_LIMIT: std::time::Duration = std::time::Duration::from_secs(15);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RoomLoad {
+    Ready,
+    Loading,
+    /// Past the time limit, or the backend is retrying a timed-out open.
+    Slow,
+    Failed,
+    Unavailable,
+}
 
 impl MatrixApp {
     pub(crate) fn conversation_view(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -37,6 +52,7 @@ impl MatrixApp {
                 )
                 .into_any_element();
         };
+        let load = self.room_load(&room.id);
         let ready = self.snapshot.timeline_ready && !self.preview && !self.busy;
         let editable = !self.busy && (self.preview || self.snapshot.timeline_ready);
         let empty = self.composer.read(cx).value().trim().is_empty();
@@ -113,6 +129,25 @@ impl MatrixApp {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(room.name.clone()),
             )
+            .when(load == RoomLoad::Loading, |header| {
+                header.child(
+                    div()
+                        .id("room-loading")
+                        .flex_none()
+                        .child(if self.snapshot.reduce_motion {
+                            Icon::new(IconName::Loader)
+                                .size(px(14.))
+                                .text_color(muted)
+                                .into_any_element()
+                        } else {
+                            Spinner::new().small().color(muted).into_any_element()
+                        })
+                        .tooltip(|window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new("Loading messages")
+                                .build(window, cx)
+                        }),
+                )
+            })
             .child(
                 Button::new("favourite-room")
                     .ghost()
@@ -187,7 +222,11 @@ impl MatrixApp {
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_details(cx))),
             );
 
-        let body = if self.groups.is_empty() {
+        let body = if self.groups.is_empty() && load == RoomLoad::Loading {
+            div().flex_1().min_h_0().into_any_element()
+        } else if self.groups.is_empty() && load != RoomLoad::Ready {
+            self.room_load_error(load, cx)
+        } else if self.groups.is_empty() {
             v_flex()
                 .flex_1()
                 .min_h_0()
@@ -200,15 +239,7 @@ impl MatrixApp {
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(room.name.clone()),
                 )
-                .child(
-                    div()
-                        .text_color(muted)
-                        .child(if self.snapshot.timeline_ready {
-                            "No messages yet."
-                        } else {
-                            "Loading conversation…"
-                        }),
-                )
+                .child(div().text_color(muted).child("No messages yet."))
                 .into_any_element()
         } else {
             let weak = cx.weak_entity();
@@ -224,8 +255,14 @@ impl MatrixApp {
             .into_any_element()
         };
 
-        let notices: Vec<String> = [&self.status, &self.snapshot.timeline_status]
-            .into_iter()
+        let timeline_notice =
+            if load == RoomLoad::Loading || (self.groups.is_empty() && load != RoomLoad::Ready) {
+                None
+            } else {
+                Some(&self.snapshot.timeline_status)
+            };
+        let notices: Vec<String> = std::iter::once(&self.status)
+            .chain(timeline_notice)
             .filter(|text| !text.is_empty())
             .cloned()
             .collect();
@@ -432,6 +469,108 @@ impl MatrixApp {
             .on_drop::<ExternalPaths>(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 this.add_attachments(paths.0.iter().cloned(), window, cx);
             }))
+            .into_any_element()
+    }
+
+    /// The shown room's loading state, as the view presents it.
+    pub(crate) fn room_load(&self, room: &str) -> RoomLoad {
+        if self.preview {
+            return RoomLoad::Ready;
+        }
+        let current = self.snapshot.selected_room == room;
+        match self.snapshot.timeline_phase {
+            TimelineStatus::Failed if current => return RoomLoad::Failed,
+            TimelineStatus::Unavailable if current => return RoomLoad::Unavailable,
+            TimelineStatus::Retrying if current => return RoomLoad::Slow,
+            _ => {}
+        }
+        if current && self.snapshot.timeline_ready {
+            RoomLoad::Ready
+        } else if self
+            .room_loading
+            .as_ref()
+            .is_some_and(|(id, since, _)| id == room && since.elapsed() >= LOAD_LIMIT)
+        {
+            RoomLoad::Slow
+        } else {
+            RoomLoad::Loading
+        }
+    }
+
+    /// Starts the load clock when a room begins loading, and wakes the view
+    /// when the limit passes.
+    pub(crate) fn sync_room_loading(&mut self, cx: &mut Context<Self>) {
+        let loading = self.navigation.selected_room.clone().filter(|room| {
+            !self.preview && (self.snapshot.selected_room != *room || !self.snapshot.timeline_ready)
+        });
+        let Some(room) = loading else {
+            self.room_loading = None;
+            return;
+        };
+        if self
+            .room_loading
+            .as_ref()
+            .is_some_and(|(id, _, _)| *id == room)
+        {
+            return;
+        }
+        let wake = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(LOAD_LIMIT).await;
+            let _ = this.update(cx, |_, cx| cx.notify());
+        });
+        self.room_loading = Some((room, std::time::Instant::now(), wake));
+    }
+
+    fn room_load_error(&self, load: RoomLoad, cx: &mut Context<Self>) -> AnyElement {
+        let muted = cx.theme().muted_foreground;
+        let (icon, title, detail) = match load {
+            RoomLoad::Unavailable => (
+                IconName::CircleSlash,
+                "This conversation isn't available",
+                "You may have left it, or it no longer exists.",
+            ),
+            RoomLoad::Failed => (
+                IconName::TriangleAlert,
+                "Couldn't load messages",
+                "Something went wrong while opening this conversation.",
+            ),
+            _ => (
+                IconName::WifiOff,
+                "Messages are taking longer than usual",
+                "Twayblade keeps trying in the background. Check your connection, or try again now.",
+            ),
+        };
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .items_center()
+            .justify_center()
+            .gap(px(6.))
+            .px(px(24.))
+            .child(Icon::new(icon).size(px(28.)).text_color(muted))
+            .child(
+                div()
+                    .pt(px(4.))
+                    .text_size(px(14.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(title),
+            )
+            .child(
+                div()
+                    .max_w(px(360.))
+                    .text_center()
+                    .text_color(muted)
+                    .child(detail),
+            )
+            .child(
+                Button::new("room-retry")
+                    .outline()
+                    .mt(px(8.))
+                    .h(px(28.))
+                    .px(px(12.))
+                    .label("Try Again")
+                    .on_click(cx.listener(|this, _, window, cx| this.retry_room(window, cx))),
+            )
             .into_any_element()
     }
 }
