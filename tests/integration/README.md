@@ -30,6 +30,39 @@ Physical microphone/speaker/camera permissions and media on this Mac require a
 person. Public-server Element Web, Linux and Windows are not attempted.
 [Architecture, key formats and UI contracts](../../docs/architecture/CALLS.md).
 
+## Room-opening faults
+
+Run sequentially with the service/viewer checks, inside the project shell:
+
+```sh
+MATRIX_TEST_DOCKER_CONTEXT=colima-matrixclient-test bash tests/integration/run.sh room-open
+MATRIX_TEST_DOCKER_CONTEXT=colima-matrixclient-test bash tests/integration/run.sh services
+MATRIX_TEST_DOCKER_CONTEXT=colima-matrixclient-test bash tests/integration/run.sh viewer
+```
+
+`room-open` generates a fresh isolated identity and runs four bounded cases
+against real Synapse with encrypted SQLite stores. A per-test Python TLS proxy
+binds to an ephemeral **loopback-only** port, verifies the upstream fixture CA,
+and can return 503/429, hold a response, or drop a connection. Login delegation
+is disabled in these test clients to prevent bypassing the proxy. Controls and
+stats contain only fault modes and counts. No HTTP headers, URLs, credentials,
+bodies or SDK error payloads are printed. The child proxy is killed on drop;
+the runner stops its Synapse service, including on failure.
+
+The SDK-default control stays pending on a transient state fetch. The fixed
+opener reports retry promptly, respects Matrix retry-after delays, and opens
+after recovery without reselection. Additional cases cover a stalled
+request (cut off by the 15-second open budget), abrupt disconnect, selection cancellation mid-fetch and reopen,
+unknown encryption state, a competing event-cache holder over the same store,
+a held/expired crypto lease, a room opened before first sync, and a room opened
+while sync is stalled/restarting. The 15-second outer opening guard stays.
+Permanent HTTP errors remain terminal. No SDK caches are deleted to recover.
+
+These establish reproducible failure/recovery paths, not the exact cause of the
+original real-account Mac report or a permanent SDK deadlock. Use the opt-in
+[payload-free diagnostics](../../DEVELOPMENT.md#diagnostics) to locate the await
+if it recurs; the crypto heartbeat alone is inconclusive.
+
 ## Other Matrix checks
 
 This opt-in fixture uses pinned Synapse v1.164.2 (image digest recorded in
@@ -42,7 +75,8 @@ Requirements: a running **local** Docker engine with Compose, and the project's
 Rust toolchain. No accounts/passwords from the normal app are used. Generated
 configuration, TLS keys, account passwords and SDK stores stay under the ignored
 `test-data/local/integration/` directory. Never share that directory or enable
-HTTP/SDK debug logs for these tests.
+unfiltered HTTP/SDK payload logs. The app's opt-in diagnostics formatter drops
+SDK free text and sensitive fields even with a trace filter.
 
 ```sh
 bash tests/integration/run.sh
