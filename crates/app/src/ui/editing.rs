@@ -20,7 +20,7 @@ pub(crate) struct EditSession {
 }
 
 impl MatrixApp {
-    fn edit_composer(&self, in_thread: bool) -> Option<Entity<TextareaState>> {
+    pub(crate) fn edit_composer(&self, in_thread: bool) -> Option<Entity<TextareaState>> {
         if in_thread {
             self.thread.as_ref().map(|t| t.composer.clone())
         } else {

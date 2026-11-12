@@ -10159,6 +10159,7 @@ dependencies = [
  "tokio",
  "twayblade-core",
  "twayblade-platform",
+ "unicode-segmentation",
  "url",
  "zeroize",
 ]

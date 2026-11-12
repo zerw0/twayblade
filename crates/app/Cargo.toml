@@ -19,6 +19,7 @@ chrono.workspace = true
 zeroize.workspace = true
 thiserror.workspace = true
 emojis = "=0.9.1"
+unicode-segmentation = "=1.13.3"
 directories.workspace = true
 serde.workspace = true
 serde_json.workspace = true
