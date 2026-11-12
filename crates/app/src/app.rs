@@ -47,8 +47,7 @@ pub(super) struct ProfilePage {
     pub error: String,
 }
 
-// Technical call action contracts only. Claude owns their view integration.
-#[allow(dead_code, reason = "M5 call actions awaiting UI integration")]
+// Call actions used by `ui::calls`.
 impl MatrixApp {
     pub fn start_call(
         &self,
@@ -59,6 +58,42 @@ impl MatrixApp {
             .as_ref()
             .ok_or(twayblade_core::calls::CallError::StaleRequest)?
             .start_call(self.snapshot.account_instance, room_id, video, false)
+    }
+    pub fn accept_call(
+        &self,
+        room_id: String,
+        video: bool,
+    ) -> Result<(), twayblade_core::calls::CallError> {
+        let backend = self
+            .backend
+            .as_ref()
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?;
+        backend.accept_call(self.snapshot.account_instance, room_id.clone(), video)?;
+        backend.incoming_action(
+            self.snapshot.account_instance,
+            twayblade_core::calls::IncomingAction::Dismiss(room_id),
+        )
+    }
+    pub fn decline_call(&self, room_id: String) -> Result<(), twayblade_core::calls::CallError> {
+        self.backend
+            .as_ref()
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?
+            .incoming_action(
+                self.snapshot.account_instance,
+                twayblade_core::calls::IncomingAction::Decline(room_id),
+            )
+    }
+    pub fn dismiss_incoming(
+        &self,
+        room_id: String,
+    ) -> Result<(), twayblade_core::calls::CallError> {
+        self.backend
+            .as_ref()
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?
+            .incoming_action(
+                self.snapshot.account_instance,
+                twayblade_core::calls::IncomingAction::Dismiss(room_id),
+            )
     }
     pub fn join_call(&self, room_id: String) -> Result<(), twayblade_core::calls::CallError> {
         self.backend
@@ -260,6 +295,14 @@ pub(super) struct MatrixApp {
     selection_pending: u32,
     /// Last logged (room matched, timeline ready, selections pending).
     selection_trace: Option<(bool, bool, u32)>,
+    /// One video view per shown call track, keyed by track ID.
+    pub(super) call_tiles: HashMap<String, Entity<crate::ui::calls::VideoTile>>,
+    /// Repaints once a second during a call for its duration.
+    pub(super) call_clock: Option<Task<()>>,
+    /// The ended-call summary was closed.
+    pub(super) call_end_dismissed: bool,
+    /// The newest device notice the user dismissed.
+    pub(super) call_event_seen: u64,
     /// When the shown room started loading, and a wake-up for its time limit.
     pub(super) room_loading: Option<(String, std::time::Instant, Task<()>)>,
     /// Last automatic re-selection, to rate-limit recovery.
@@ -568,6 +611,10 @@ impl MatrixApp {
             preview_report: None,
             selection_pending: 0,
             selection_trace: None,
+            call_tiles: HashMap::new(),
+            call_clock: None,
+            call_end_dismissed: false,
+            call_event_seen: 0,
             room_loading: None,
             selection_retry: None,
         };

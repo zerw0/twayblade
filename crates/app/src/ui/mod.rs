@@ -13,6 +13,7 @@ mod timeline;
 // Secondary windows, overlays and shared pieces.
 pub(crate) mod attachments;
 pub(crate) mod avatars;
+pub(crate) mod calls;
 pub(crate) mod editing;
 pub(crate) mod emoji;
 pub(crate) mod keyboard;
@@ -226,6 +227,7 @@ impl Render for MatrixApp {
         if let Some(viewer) = &mut self.viewer {
             viewer.clamp_pan(window);
         }
+        self.sync_call_views(cx);
         self.sync_room_loading(cx);
         if self.security_open {
             self.security_open = false;
@@ -303,6 +305,7 @@ impl Render for MatrixApp {
                             )
                         })
                         .children(panel)
+                        .children(self.incoming_call_card(cx))
                         // Create Room / New DM / Join Space: a small sheet over a dimmed window.
                         .when(dialog, |row| {
                             row.child(

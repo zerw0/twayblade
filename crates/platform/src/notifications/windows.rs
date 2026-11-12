@@ -5,7 +5,7 @@ use ::windows::{
     Data::Xml::Dom::XmlDocument,
     Foundation::TypedEventHandler,
     UI::Notifications::*,
-    core::{HSTRING, IInspectable},
+    core::{HSTRING, IInspectable, Interface},
 };
 const APP_ID: &str = "com.twayblade.desktop";
 fn notifier() -> ::windows::core::Result<ToastNotifier> {
@@ -24,21 +24,38 @@ pub async fn request_permission() -> Permission {
 pub async fn notify(
     id: String,
     notification: Notification,
+    call: bool,
 ) -> Result<PendingNotification, NotificationError> {
     let build = || -> ::windows::core::Result<_> {
         let xml = XmlDocument::new()?;
-        xml.LoadXml(&HSTRING::from(format!("<toast><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual>{}</toast>", super::escape_xml(&notification.title), super::escape_xml(&notification.body), if notification.sound { "" } else { "<audio silent=\"true\"/>" })))?;
+        let actions = if call {
+            "<actions><action content=\"Accept\" arguments=\"accept\" activationType=\"foreground\"/><action content=\"Decline\" arguments=\"decline\" activationType=\"foreground\"/></actions>"
+        } else {
+            ""
+        };
+        xml.LoadXml(&HSTRING::from(format!("<toast><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual>{}{actions}</toast>", super::escape_xml(&notification.title), super::escape_xml(&notification.body), if notification.sound { "" } else { "<audio silent=\"true\"/>" })))?;
         let toast = ToastNotification::CreateToastNotification(&xml)?;
         toast.SetTag(&HSTRING::from(&id))?;
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let sender = std::sync::Arc::new(std::sync::Mutex::new(Some(sender)));
         let click = sender.clone();
         let activated = toast.Activated(
-            &TypedEventHandler::<ToastNotification, IInspectable>::new(move |_, _| {
+            &TypedEventHandler::<ToastNotification, IInspectable>::new(move |_, args| {
+                let action = args
+                    .as_ref()
+                    .and_then(|a| a.cast::<ToastActivatedEventArgs>().ok())
+                    .and_then(|a| a.Arguments().ok())
+                    .map(|a| a.to_string())
+                    .unwrap_or_default();
+                let action = match action.as_str() {
+                    "accept" if call => NotificationAction::Accept,
+                    "decline" if call => NotificationAction::Decline,
+                    _ => NotificationAction::Open,
+                };
                 if let Ok(mut sender) = click.lock()
                     && let Some(sender) = sender.take()
                 {
-                    let _ = sender.send(true);
+                    let _ = sender.send(Some(action));
                 }
                 Ok(())
             }),
@@ -50,7 +67,7 @@ pub async fn notify(
             if let Ok(mut sender) = sender.lock()
                 && let Some(sender) = sender.take()
             {
-                let _ = sender.send(false);
+                let _ = sender.send(None);
             }
             Ok(())
         }))?;
@@ -61,10 +78,13 @@ pub async fn notify(
     Ok(PendingNotification {
         id,
         response: Box::pin(async move {
-            let clicked = receiver.await.unwrap_or(false);
+            let action = receiver.await.ok().flatten();
             let _ = toast.RemoveActivated(activated);
             let _ = toast.RemoveDismissed(dismissed);
-            clicked.then_some(notification.target)
+            action.map(|action| NotificationResponse {
+                target: notification.target,
+                action,
+            })
         }),
     })
 }

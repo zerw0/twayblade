@@ -410,6 +410,9 @@ impl NativeMedia {
         }
         Ok(())
     }
+    pub fn uses_microphone(&self) -> bool {
+        self.audio.is_some()
+    }
     pub fn devices(&self) -> Devices {
         let Some(audio) = &self.audio else {
             return Devices {
@@ -506,6 +509,11 @@ impl NativeMedia {
     }
     pub fn handle_event(&mut self, event: &RoomEvent) {
         match event {
+            RoomEvent::Reconnected => {
+                // Republished cryptors must resume the last active Matrix key
+                // index, including the old index during a delayed rotation.
+                self.set_sender_index(self.sender_index.load(Ordering::Relaxed));
+            }
             RoomEvent::TrackPublished {
                 publication,
                 participant,

@@ -1,8 +1,8 @@
 # Native MatrixRTC calls
 
 Decision: 2026-11-11. The technical layer uses Matrix SDK signalling and
-LiveKit/libwebrtc media. Claude owns the GPUI views. Screen sharing and ringing
-are later work. This document describes the native implementation; acceptance
+LiveKit/libwebrtc media. Claude owns the GPUI views. Screen sharing remains later work; phase 2a
+ringing and resilience contracts are described below. This document describes the native implementation; acceptance
 levels are recorded in `PLAN.md`.
 
 ## Protocol and compatibility target
@@ -137,8 +137,8 @@ extra sink per remote track.
 
 Microphone/playout use libwebrtc's PlatformAudio ADM. Stable device IDs are
 validated against a fresh enumeration before switching. Device lists refresh
-with session updates/keepalives; device-removal recovery is still an acceptance
-gap. `None` for the selected input/output means the system default. Camera
+with session updates and phase 2a hot-plug listeners; physical device-removal
+acceptance remains open. `None` for the selected input/output means the system default. Camera
 capture uses AVFoundation on a dedicated worker, a serial callback queue,
 `alwaysDiscardsLateVideoFrames`, bounded pixel dimensions and a native SDK video
 source. Camera-off stops capture; switching replaces the source. The platform
@@ -229,5 +229,134 @@ These synthetic checks do not establish physical capture/playout acceptance.
 
 Acceptance still requires a person to test actual microphone/speaker/camera
 permissions and media on this Mac. Public-server Element Web interoperability,
-Linux and Windows are not attempted. Screen sharing, MSC4075 ringing and
-notifications, device removal and network changes remain open M5 work.
+Linux and Windows are not attempted. Screen sharing remains open M5 work.
+Phase 2a below adds ringing, notification, device-removal and reconnect
+contracts with separate acceptance limits.
+
+## Phase 2a: ringing, incoming calls and resilience
+
+Technical contracts only; call views and ringtone playback remain with Claude.
+The normal `start_call(room, video)` path notifies, while `join_call` and
+`accept_call(room, video)` join without sending another invitation.
+
+Outgoing notifications use `org.matrix.msc4075.rtc.notification`, matching
+Element Call 0.28.2's pinned SDK `MatrixRTCSession.sendCallNotify`. Content
+includes `notification_type` (`ring` for a DM, `notification` for a group),
+`notify_type` for older readers, `sender_ts`, a 90-second `lifetime`,
+`m.call.intent`, explicit `m.mentions.user_ids`, `slot_id` and an `m.reference`
+to the acknowledged membership event. The modern default slot is **`m.call#ROOM`**;
+Element maps the compatibility membership's empty `call_id` to `ROOM`. Opening
+`org.matrix.msc4143.rtc.slot` requires the room's state-event permission. A
+notification failure is typed and cleans up the local call. Group start is the
+explicit notify action; joining an existing call never rings it again.
+
+Read both that event and `m.call.notify` / `org.matrix.msc4075.call.notify`.
+Legacy notify support is not legacy VoIP invite/answer support. Sender clocks
+more than 20 seconds ahead of the server use the server timestamp; lifetime is
+capped at two minutes. Own-user events from every device, ignored users,
+nonjoined rooms, expired invitations, other slots and mismatched membership
+references are rejected. Room mentions require permission; direct user mentions
+do not. The caller device is resolved from SDK-parsed current membership,
+not trusted from arbitrary JSON. `verified` is true only when SDK decryption
+metadata authenticates that exact sender/device as verified with no forwarder.
+Unencrypted or unverified invitations are explicitly unverified.
+
+`Snapshot.incoming_calls` is newest first, one entry per room, at most **8**:
+`IncomingCall { room_id, room_name, caller_user, caller_device, caller_name,
+kind: Audio|Video, notify_type: Ring|Notification, event_id, since, expires,
+verified, ringing }`. Times are Unix milliseconds. The observer uses SDK sync
+handlers and room updates; timers only expire SDK memberships/invitations.
+Intake is bounded at 32 events, payloads at 16 KiB, and dismissal tombstones at
+256 until expiry. Selection does not control reception. Caller departure,
+room exit or any own-user membership (including another device answering)
+removes the invitation. `accept_call(room, video)`, `decline_call(room)` and
+`dismiss_incoming(room)` are frontend actions; queue acceptance precedes the
+confirmed snapshot. Decline sends `org.matrix.msc4310.rtc.decline` with an
+`m.reference` to the notification. The pinned Element SPA **consumes** this event
+and leaves its outgoing ringing call; its embedding host supplies the incoming
+decline action. Local dismissal sends no event. Sticky-event delivery/replay
+(MSC4354) remains outside this SDK/state-mode implementation.
+
+`CallPhase::Ringing { since, expires }` is outgoing waiting-for-pickup, separate
+from established encrypted transport. A peer joining stops it. Decline or
+90-second expiry leaves the session with `EndReason::Declined` or `RingExpired`;
+explicit leave cancels the attempt. A joined peer wins a simultaneous decline.
+`Reconnecting` follows LiveKit's signal/ICE recovery events. The deadline is
+**45 seconds**: it permits several SDK retries while remaining shorter than the
+120-second membership fallback. The driver leaves with `ReconnectTimeout` on
+budget exhaustion, followed by bounded cleanup. In-flight bounded signalling
+operations can complete before the deadline is observed. The SDK owns ICE
+restart and republishing; this layer does not build a second transport.
+
+On reconnection, refresh membership and redistribute the current sender key;
+preserve its index and pending delayed sender switch. Restart the existing
+delayed leave, or replace it only after `NotFound`, then republish membership.
+This handles a delayed leave firing during an outage without orphaning the old
+ID. End/cancellation clears membership and cancels the delayed leave only after
+that clear is acknowledged; otherwise leave the server timer armed. If cancel
+cannot be acknowledged, retain the account reservation through the old
+15-second timer before another local session can reuse its state key. A wholly
+unreachable homeserver cannot acknowledge immediate cleanup: server delayed
+leave and bounded membership expiry remain the final safeguards.
+
+macOS device changes use CoreAudio property listeners for the device list and
+system input/output defaults, plus AVFoundation connect/disconnect notifications.
+Other targets have a two-second list-refresh timer. Selected-device removal
+chooses the OS default only; never an arbitrary first microphone/camera.
+CoreAudio supplies stable default audio UIDs and AVFoundation the default camera.
+On unsupported default discovery, or with no replacement, report
+`DeviceUnavailable` and mute/stop affected capture. Cross-platform default-device
+resolution and physical hot-plug remain acceptance gaps. Existing permission
+grants are checked without prompts every two seconds on macOS; revocation
+mutes/stops the affected track and reports its typed permission error.
+
+`CallState.events` contains at most 16 `(serial, CallEvent)` entries per call.
+Deduplicate by serial for toasts; reset the cursor for each new call. Events are `DeviceFallback { kind:
+Input|Output|Camera, from, to }` and `PermissionRevoked { kind, error }`.
+The confirmed local selection and mute/video fields update with these events.
+Frames and secrets remain outside snapshots.
+
+Incoming rings use platform notifications with caller/room titles, generic
+“Incoming call” bodies and the existing enabled, preview, sound and room-mute
+preferences. Private previews hide caller/room names. Standard OS notification
+presentation delegates Focus/DND to the OS; no critical/time-sensitive bypass.
+macOS categories, freedesktop actions and Windows toast actions expose Accept
+(audio) and Decline; default activation opens the room. Cold activation opens
+only, and live actions revalidate account, invitation ID and expiry. Notifications
+are withdrawn on removal/expiry/account cancellation. The UI consumes `ringing`
+for ringtone playback; no audio assets are bundled.
+
+Phase 2a verification is recorded separately in PLAN.md. The ringing fixture
+uses the real pinned SPA to originate notifications and react to declines;
+its host decline path uses the SPA's bundled `sendRtcDecline` API.
+The standalone SPA emits `Room.timeline` before Megolm decryption, while its
+outgoing decline lifecycle listens only to that initial event. The ringing
+fixture explicitly forwards the original decrypted decline through the room
+emitter to model the embedding host's decrypted-event boundary. Contents,
+sender, event IDs and the actual call lifecycle are unchanged. This is qualified
+host-boundary evidence, **not** standalone encrypted-decline acceptance or a
+live Element Web/widget test. No plaintext fallback is introduced. Receiving a Matrix event in
+that SDK is distinct from an Element Web incoming-call interface. Synthetic
+SFU interruption checks do not establish Wi-Fi changes, physical device removal,
+OS notification interaction, permission revocation, or Linux/Windows acceptance.
+
+Ringing implementation references:
+[SDK MatrixRTCSession](https://github.com/matrix-org/matrix-js-sdk/blob/3f05dc4d104a3dfc753c5e3549a18c74fab4b076/src/matrixrtc/MatrixRTCSession.ts),
+[SDK notification validation](https://github.com/matrix-org/matrix-js-sdk/blob/3f05dc4d104a3dfc753c5e3549a18c74fab4b076/src/matrixrtc/types.ts),
+[SDK sendRtcDecline](https://github.com/matrix-org/matrix-js-sdk/blob/3f05dc4d104a3dfc753c5e3549a18c74fab4b076/src/client.ts),
+[Element ringing lifecycle](https://github.com/element-hq/element-call/blob/v0.28.2/src/state/CallViewModel/CallNotificationLifecycle.ts).
+The isolated ringing test is `native_matrixrtc_ringing_element_host`. Set
+`MATRIX_TEST_ELEMENT_STANDALONE=1` to disable simulated decrypted-event forwarding;
+the unforwarded encrypted-decline path was observed failing on 2026-11-12.
+
+Final-source offline verification (2026-11-12): formatting, strict locked
+all-target/all-feature Clippy, production library/binary Clippy without media
+`evidence`, and all-feature workspace tests passed (190 passed, 30 opt-in tests
+ignored). The production dependency graph enables no media evidence feature.
+`run.sh services` passed 6/6 and `run.sh room-open` passed 4/4. Final-source
+`run.sh call` passed 3/3 in 171.67 seconds: both existing media cases (including
+20-second SFU interruption recovery), plus four explicitly qualified host-boundary
+ringing scenarios. The native call retained membership and resumed bidirectional
+decrypted audio/video after the interruption. PLAN.md also records the standalone
+decline limitation and the earlier transient Element media failure; two subsequent
+complete runs passed. No physical or cross-platform acceptance is claimed.

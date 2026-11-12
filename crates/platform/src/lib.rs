@@ -4,6 +4,7 @@ use zeroize::Zeroizing;
 #[cfg(target_os = "linux")]
 mod accent;
 pub mod diagnostics;
+pub mod media_devices;
 mod motion;
 pub mod notifications;
 pub use motion::{reduce_motion, reduce_motion_changes};

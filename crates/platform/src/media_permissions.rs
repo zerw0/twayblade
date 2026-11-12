@@ -23,6 +23,20 @@ mod macos {
     use objc2_av_foundation::{
         AVAuthorizationStatus, AVCaptureDevice, AVMediaTypeAudio, AVMediaTypeVideo,
     };
+    pub fn check(kind: CapturePermission) -> Result<(), PermissionError> {
+        let media = unsafe {
+            match kind {
+                CapturePermission::Microphone => AVMediaTypeAudio,
+                CapturePermission::Camera => AVMediaTypeVideo,
+            }
+        }
+        .ok_or(PermissionError::Unsupported)?;
+        match unsafe { AVCaptureDevice::authorizationStatusForMediaType(media) } {
+            AVAuthorizationStatus::Authorized => Ok(()),
+            AVAuthorizationStatus::Restricted => Err(PermissionError::Restricted(kind)),
+            _ => Err(PermissionError::Denied(kind)),
+        }
+    }
     pub async fn request(kind: CapturePermission) -> Result<(), PermissionError> {
         // SAFETY: AVFoundation exports immutable NSString constants. These APIs
         // accept retained blocks; the callback captures only a thread-safe sender.
@@ -66,6 +80,19 @@ pub async fn request(kind: CapturePermission) -> Result<(), PermissionError> {
     #[cfg(target_os = "macos")]
     {
         macos::request(kind).await
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = kind;
+        Err(PermissionError::Unsupported)
+    }
+}
+
+/// Check an existing grant without prompting during an active call.
+pub fn check(kind: CapturePermission) -> Result<(), PermissionError> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::check(kind)
     }
     #[cfg(not(target_os = "macos"))]
     {
