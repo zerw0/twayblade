@@ -3,12 +3,23 @@
 //! notices. Call state comes from the backend snapshot; video from bounded
 //! latest-frame handles, each drawn by its own small view so only it repaints.
 use super::*;
+use crate::shortcuts::{ShortcutAction as Action, hint};
 use std::sync::Arc;
 use twayblade_core::calls::{
     CallError, CallEvent, CallKind, CallPhase, CallState, CallVideoTrack, DeviceKind, EndReason,
     IncomingCall, LatestFrame, Participant, ScreenShare, VideoSource,
     ringing::{CallIntent, NotifyType},
 };
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CallShortcut {
+    Mute,
+    Camera,
+    Screen,
+    Leave,
+    Answer,
+    Decline,
+}
 
 /// More than this many people share one "+N" tile.
 const MAX_TILES: usize = 8;
@@ -976,7 +987,10 @@ impl MatrixApp {
                         .selected(muted)
                         .disabled(connecting)
                         .accessibility_label(if muted { "Unmute" } else { "Mute" })
-                        .tooltip(if muted { "Unmute" } else { "Mute" })
+                        .tooltip(hint(
+                            if muted { "Unmute" } else { "Mute" },
+                            Action::ToggleMute,
+                        ))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             let result = this.set_muted(!muted);
                             this.call_result(result, cx)
@@ -1002,11 +1016,14 @@ impl MatrixApp {
                         } else {
                             "Turn camera on"
                         })
-                        .tooltip(if camera {
-                            "Turn Camera Off"
-                        } else {
-                            "Turn Camera On"
-                        })
+                        .tooltip(hint(
+                            if camera {
+                                "Turn Camera Off"
+                            } else {
+                                "Turn Camera On"
+                            },
+                            Action::ToggleCamera,
+                        ))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             let result = this.set_video(!camera);
                             this.call_result(result, cx)
@@ -1032,11 +1049,14 @@ impl MatrixApp {
                             ScreenShare::Choosing => "Cancel screen sharing",
                             ScreenShare::Live => "Stop sharing screen",
                         })
-                        .tooltip(match screen {
-                            ScreenShare::Off => "Share Screen",
-                            ScreenShare::Choosing => "Cancel Sharing",
-                            ScreenShare::Live => "Stop Sharing",
-                        })
+                        .tooltip(hint(
+                            match screen {
+                                ScreenShare::Off => "Share Screen",
+                                ScreenShare::Choosing => "Cancel Sharing",
+                                ScreenShare::Live => "Stop Sharing",
+                            },
+                            Action::ToggleScreenShare,
+                        ))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             let result = this.set_screen_share(screen == ScreenShare::Off);
                             this.call_result(result, cx)
@@ -1054,6 +1074,14 @@ impl MatrixApp {
                         } else {
                             "Leave call"
                         })
+                        .tooltip(hint(
+                            if ringing_direct {
+                                "Cancel Call"
+                            } else {
+                                "Leave Call"
+                            },
+                            Action::LeaveCall,
+                        ))
                         .child(
                             h_flex()
                                 .gap(px(5.))
@@ -1172,14 +1200,80 @@ impl MatrixApp {
             .into_any_element()
     }
 
-    /// A card for the newest incoming call, over the window's top-right corner.
-    pub(crate) fn incoming_call_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let busy_room = self.live_call().map(|call| call.room_id.clone());
-        let mut calls = self
-            .snapshot
+    /// Incoming calls the card can show: not for the room you're already in a call in.
+    fn shown_incoming(&self) -> impl Iterator<Item = &IncomingCall> {
+        let busy_room = self.live_call().map(|call| call.room_id.as_str());
+        self.snapshot
             .incoming_calls
             .iter()
-            .filter(|call| busy_room.as_deref() != Some(&call.room_id));
+            .filter(move |call| busy_room != Some(call.room_id.as_str()))
+    }
+
+    /// Rings while the card shows a ringing call, unless you're already in a
+    /// call, the room is muted or notification sound is off.
+    pub(crate) fn sync_ringtone(&mut self) {
+        let ring = !self.preview
+            && self.preferences.notifications.sound
+            && self.live_call().is_none()
+            && self.shown_incoming().any(|call| {
+                call.ringing
+                    && call.notify_type == NotifyType::Ring
+                    && self.snapshot.notifications.room_mode(&call.room_id)
+                        != twayblade_core::notifications::RoomMode::Mute
+            });
+        if !ring {
+            self.ringtone = None;
+        } else if self.ringtone.is_none() {
+            self.ringtone = twayblade_platform::ringtone::start();
+        }
+    }
+
+    /// Keyboard shortcuts act on the current call or the call on the card.
+    pub(crate) fn call_shortcut(
+        &mut self,
+        shortcut: CallShortcut,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.preview {
+            return;
+        }
+        let incoming = self
+            .shown_incoming()
+            .next()
+            .map(|call| (call.room_id.clone(), call.notify_type == NotifyType::Ring));
+        let current = self.live_call().map(|call| {
+            (
+                call.local.muted,
+                call.local.video,
+                call.local.screen,
+                matches!(call.phase, CallPhase::Starting),
+            )
+        });
+        let result = match (shortcut, current, incoming) {
+            (CallShortcut::Answer, None, Some((room, _))) => {
+                if let Some(window) = window {
+                    self.answer(room, false, window, cx);
+                }
+                return;
+            }
+            (CallShortcut::Decline, _, Some((room, true))) => self.decline_call(room),
+            (CallShortcut::Decline, _, Some((room, false))) => self.dismiss_incoming(room),
+            (_, Some((_, _, _, true)), _) => return,
+            (CallShortcut::Mute, Some((muted, ..)), _) => self.set_muted(!muted),
+            (CallShortcut::Camera, Some((_, video, ..)), _) => self.set_video(!video),
+            (CallShortcut::Screen, Some((_, _, screen, _)), _) => {
+                self.set_screen_share(screen == ScreenShare::Off)
+            }
+            (CallShortcut::Leave, Some(_), _) => self.leave_call(),
+            _ => return,
+        };
+        self.call_result(result, cx);
+    }
+
+    /// A card for the newest incoming call, over the window's top-right corner.
+    pub(crate) fn incoming_call_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let mut calls = self.shown_incoming();
         let call: &IncomingCall = calls.next()?;
         let more = calls.count();
         let direct = self
@@ -1226,6 +1320,7 @@ impl MatrixApp {
                         .danger()
                         .flex_1()
                         .h(px(28.))
+                        .tooltip(hint("Decline", Action::DeclineCall))
                         .child(
                             h_flex()
                                 .gap(px(5.))
@@ -1242,6 +1337,7 @@ impl MatrixApp {
                         .success()
                         .flex_1()
                         .h(px(28.))
+                        .tooltip(hint("Answer with audio", Action::AnswerCall))
                         .child(
                             h_flex()
                                 .gap(px(5.))

@@ -1831,6 +1831,7 @@ fn keyboard_settings(cx: &App) -> AnyElement {
         (Area::Navigation, "Navigation"),
         (Area::Window, "Window"),
         (Area::Viewer, "Image viewer"),
+        (Area::Calls, "Calls"),
     ];
     let mut body = v_flex().gap(px(6.));
     for (index, (area, title)) in sections.into_iter().enumerate() {

@@ -12,7 +12,13 @@ gpui_kit::actions!(
         FormatLink,
         HistoryPrevious,
         HistoryNext,
-        ShowKeyboardShortcuts
+        ShowKeyboardShortcuts,
+        ToggleMute,
+        ToggleCamera,
+        ToggleScreenShare,
+        LeaveCall,
+        AnswerCall,
+        DeclineCall
     ]
 );
 
@@ -22,6 +28,7 @@ pub enum Area {
     Navigation,
     Window,
     Viewer,
+    Calls,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Platform {
@@ -121,6 +128,12 @@ pub enum ShortcutAction {
     HistoryPrevious,
     HistoryNext,
     ShowKeyboardShortcuts,
+    ToggleMute,
+    ToggleCamera,
+    ToggleScreenShare,
+    LeaveCall,
+    AnswerCall,
+    DeclineCall,
 }
 impl ShortcutAction {
     fn binding(self, keys: &'static str, context: Option<&str>) -> KeyBinding {
@@ -156,6 +169,12 @@ impl ShortcutAction {
             Self::HistoryPrevious => KeyBinding::new(keys, HistoryPrevious, context),
             Self::HistoryNext => KeyBinding::new(keys, HistoryNext, context),
             Self::ShowKeyboardShortcuts => KeyBinding::new(keys, ShowKeyboardShortcuts, context),
+            Self::ToggleMute => KeyBinding::new(keys, ToggleMute, context),
+            Self::ToggleCamera => KeyBinding::new(keys, ToggleCamera, context),
+            Self::ToggleScreenShare => KeyBinding::new(keys, ToggleScreenShare, context),
+            Self::LeaveCall => KeyBinding::new(keys, LeaveCall, context),
+            Self::AnswerCall => KeyBinding::new(keys, AnswerCall, context),
+            Self::DeclineCall => KeyBinding::new(keys, DeclineCall, context),
         }
     }
 }
@@ -177,6 +196,66 @@ pub struct ShortcutEntry {
     pub context: Option<&'static str>,
 }
 pub const SHORTCUTS: &[Shortcut] = &[
+    Shortcut {
+        area: Area::Calls,
+        label: "Mute or unmute",
+        keys: KeyChord {
+            mac: "shift-cmd-m",
+            other: "ctrl-shift-m",
+        },
+        action: Some(ShortcutAction::ToggleMute),
+        context: Some("Twayblade"),
+    },
+    Shortcut {
+        area: Area::Calls,
+        label: "Turn camera on or off",
+        keys: KeyChord {
+            mac: "shift-cmd-o",
+            other: "ctrl-shift-o",
+        },
+        action: Some(ShortcutAction::ToggleCamera),
+        context: Some("Twayblade"),
+    },
+    Shortcut {
+        area: Area::Calls,
+        label: "Share screen or stop sharing",
+        keys: KeyChord {
+            mac: "shift-cmd-e",
+            other: "ctrl-shift-e",
+        },
+        action: Some(ShortcutAction::ToggleScreenShare),
+        context: Some("Twayblade"),
+    },
+    Shortcut {
+        area: Area::Calls,
+        label: "Leave call",
+        keys: KeyChord {
+            mac: "shift-cmd-h",
+            other: "ctrl-shift-h",
+        },
+        action: Some(ShortcutAction::LeaveCall),
+        context: Some("Twayblade"),
+    },
+    Shortcut {
+        area: Area::Calls,
+        label: "Answer incoming call",
+        keys: KeyChord {
+            mac: "shift-cmd-a",
+            other: "ctrl-shift-a",
+        },
+        action: Some(ShortcutAction::AnswerCall),
+        context: Some("Twayblade"),
+    },
+    Shortcut {
+        area: Area::Calls,
+        label: "Decline incoming call",
+        keys: KeyChord {
+            mac: "shift-cmd-d",
+            other: "ctrl-shift-d",
+        },
+        action: Some(ShortcutAction::DeclineCall),
+        context: Some("Twayblade"),
+    },
     Shortcut {
         area: Area::Composer,
         label: "Paste",
@@ -673,6 +752,22 @@ pub fn bindings_for(platform: Platform) -> Vec<KeyBinding> {
         })
         .collect()
 }
+/// `label` followed by its keys for this platform, for tooltips.
+pub fn hint(label: &str, action: ShortcutAction) -> String {
+    let platform = Platform::current();
+    match SHORTCUTS.iter().find(|s| s.action == Some(action)) {
+        Some(s) => {
+            let parts = s.keys.parts(platform);
+            let keys = if platform == Platform::MacOS {
+                parts.concat()
+            } else {
+                parts.join("+")
+            };
+            format!("{label}  {keys}")
+        }
+        None => label.to_owned(),
+    }
+}
 pub fn list() -> Vec<ShortcutEntry> {
     list_for(Platform::current())
 }
@@ -719,6 +814,21 @@ mod tests {
                     .binding(s.keys.resolve(platform), s.context);
                 assert_eq!(actual.keystrokes(), expected.keystrokes());
                 assert!(actual.action().partial_eq(expected.action()));
+            }
+        }
+    }
+    #[test]
+    fn call_shortcuts_work_while_typing() {
+        // The composer's context is deeper than the window's, so a shared chord
+        // would be taken by the composer whenever it has focus.
+        for platform in [Platform::MacOS, Platform::Linux, Platform::Windows] {
+            for call in SHORTCUTS.iter().filter(|s| s.area == Area::Calls) {
+                assert!(
+                    !SHORTCUTS.iter().any(|s| s.context == Some("Composer")
+                        && s.keys.resolve(platform) == call.keys.resolve(platform)),
+                    "{} is taken by the composer",
+                    call.label
+                );
             }
         }
     }

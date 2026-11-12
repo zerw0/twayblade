@@ -89,6 +89,20 @@ fn main() {
                     disabled: false,
                 },
                 Menu {
+                    name: "Call".into(),
+                    items: vec![
+                        MenuItem::action("Mute or Unmute", shortcuts::ToggleMute),
+                        MenuItem::action("Turn Camera On or Off", shortcuts::ToggleCamera),
+                        MenuItem::action("Share Screen or Stop Sharing", shortcuts::ToggleScreenShare),
+                        MenuItem::Separator,
+                        MenuItem::action("Answer", shortcuts::AnswerCall),
+                        MenuItem::action("Decline", shortcuts::DeclineCall),
+                        MenuItem::Separator,
+                        MenuItem::action("Leave Call", shortcuts::LeaveCall),
+                    ],
+                    disabled: false,
+                },
+                Menu {
                     name: "Help".into(),
                     items: vec![MenuItem::action("Keyboard Shortcuts", shortcuts::ShowKeyboardShortcuts)],
                     disabled: false,

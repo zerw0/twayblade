@@ -311,6 +311,8 @@ pub(super) struct MatrixApp {
     pub(super) call_tiles: HashMap<String, Entity<crate::ui::calls::VideoTile>>,
     /// Repaints once a second during a call for its duration.
     pub(super) call_clock: Option<Task<()>>,
+    /// Plays while an incoming call rings; dropping it stops the sound.
+    pub(super) ringtone: Option<twayblade_platform::ringtone::Ringtone>,
     /// The screen share the user chose to show large, by track ID.
     pub(super) call_screen_focus: Option<String>,
     /// Generated frames for preview captures, by track ID.
@@ -629,6 +631,7 @@ impl MatrixApp {
             selection_trace: None,
             call_tiles: HashMap::new(),
             call_clock: None,
+            ringtone: None,
             call_screen_focus: None,
             preview_frames: HashMap::new(),
             call_end_dismissed: false,
