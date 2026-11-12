@@ -2152,3 +2152,61 @@ fn formatting_adapter_uses_byte_selection_and_preserves_undo(cx: &mut TestAppCon
     })
     .expect("formatting adapter");
 }
+
+/// ⌘B / ⌘I go through the real bindings to whichever composer has focus.
+#[gpui_kit::test]
+fn formatting_shortcuts_reach_main_and_thread_composers(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestEventExt;
+    let (window, app) = preview_window(cx);
+    cx.update(|cx| cx.bind_keys(crate::shortcuts::bindings()));
+    let (bold, italic) = if cfg!(target_os = "macos") {
+        ("cmd-b", "cmd-i")
+    } else {
+        ("ctrl-b", "ctrl-i")
+    };
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.within("composer-panel").click("input-state", cx);
+        window.input("hello", cx);
+        let composer = app.read(cx).composer.clone();
+        composer.update(cx, |state, cx| state.set_selected_range(0..5, cx));
+        window.key_down(bold, false, cx);
+        assert_eq!(composer.read(cx).value().as_str(), "**hello**");
+
+        window.click("thread-sample-0", cx);
+        window.render_frame(cx);
+        window
+            .within("thread-composer-panel")
+            .click("input-state", cx);
+        window.input("hi", cx);
+        let thread = app.read(cx).thread.as_ref().unwrap().composer.clone();
+        thread.update(cx, |state, cx| state.set_selected_range(0..2, cx));
+        window.key_down(italic, false, cx);
+        assert_eq!(thread.read(cx).value().as_str(), "_hi_");
+        // ⌘I in a composer formats; it no longer opens room details.
+        assert_eq!(composer.read(cx).value().as_str(), "**hello**");
+    })
+    .expect("formatting shortcuts");
+}
+
+/// Help › Keyboard Shortcuts (⌘/) opens Settings at the Keyboard section.
+#[gpui_kit::test]
+fn keyboard_shortcuts_open_the_keyboard_settings(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.within("composer-panel").click("input-state", cx);
+        window.dispatch_action(Box::new(crate::shortcuts::ShowKeyboardShortcuts), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let (handle, view) = cx.update(|cx| app.read(cx).settings.clone().unwrap());
+    cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+        .unwrap();
+    cx.update(|cx| {
+        assert_eq!(
+            view.upgrade().unwrap().read(cx).section,
+            crate::ui::settings::Section::Keyboard
+        )
+    });
+}

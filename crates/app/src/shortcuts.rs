@@ -1,8 +1,4 @@
 //! Binding registry and platform-resolved data for Claude's shortcut views.
-#![allow(
-    dead_code,
-    reason = "Public data contracts awaiting Claude's Settings/Help integration"
-)]
 use crate::{app::*, ui::viewer::*};
 use gpui_kit::KeyBinding;
 
@@ -75,6 +71,9 @@ impl KeyChord {
             parts.push(label.to_string());
             source = rest;
         }
+        // Platform order: ⌃⌥⇧⌘ on macOS, Ctrl+Alt+Shift elsewhere.
+        const ORDER: [&str; 7] = ["⌃", "⌥", "⇧", "⌘", "Ctrl", "Alt", "Shift"];
+        parts.sort_by_key(|part| ORDER.iter().position(|o| o == part));
         parts.push(match source {
             "enter" => "Return".into(),
             "escape" => "Escape".into(),
@@ -522,8 +521,9 @@ pub const SHORTCUTS: &[Shortcut] = &[
         area: Area::Composer,
         label: "Quote",
         keys: KeyChord {
-            mac: "cmd-shift->",
-            other: "ctrl-shift->",
+            // GPUI matches the typed ">" against an unshifted binding on macOS.
+            mac: "cmd->",
+            other: "ctrl-shift-.",
         },
         action: Some(ShortcutAction::FormatQuote),
         context: Some("Composer"),
@@ -542,8 +542,10 @@ pub const SHORTCUTS: &[Shortcut] = &[
         area: Area::Composer,
         label: "Previous sent message",
         keys: KeyChord {
+            // Kit binds Ctrl+Alt+arrows to extra cursors on Windows, and Linux
+            // desktops reserve them for workspaces.
             mac: "ctrl-alt-up",
-            other: "ctrl-alt-up",
+            other: "alt-up",
         },
         action: Some(ShortcutAction::HistoryPrevious),
         context: Some("Composer"),
@@ -553,7 +555,7 @@ pub const SHORTCUTS: &[Shortcut] = &[
         label: "Next sent message",
         keys: KeyChord {
             mac: "ctrl-alt-down",
-            other: "ctrl-alt-down",
+            other: "alt-down",
         },
         action: Some(ShortcutAction::HistoryNext),
         context: Some("Composer"),
@@ -570,7 +572,7 @@ pub const SHORTCUTS: &[Shortcut] = &[
     },
     Shortcut {
         area: Area::Composer,
-        label: "Send / save edit",
+        label: "Send message",
         keys: KeyChord {
             mac: "enter",
             other: "enter",
@@ -590,7 +592,7 @@ pub const SHORTCUTS: &[Shortcut] = &[
     },
     Shortcut {
         area: Area::Composer,
-        label: "Cancel reply / edit",
+        label: "Cancel edit",
         keys: KeyChord {
             mac: "escape",
             other: "escape",
@@ -600,7 +602,7 @@ pub const SHORTCUTS: &[Shortcut] = &[
     },
     Shortcut {
         area: Area::Composer,
-        label: "Edit previous own message",
+        label: "Edit your previous message",
         keys: KeyChord {
             mac: "up",
             other: "up",
@@ -610,7 +612,7 @@ pub const SHORTCUTS: &[Shortcut] = &[
     },
     Shortcut {
         area: Area::Composer,
-        label: "Edit next own message / restore draft",
+        label: "Edit your next message",
         keys: KeyChord {
             mac: "down",
             other: "down",
@@ -640,7 +642,7 @@ pub const SHORTCUTS: &[Shortcut] = &[
     },
     Shortcut {
         area: Area::Composer,
-        label: "Start of composer",
+        label: "Move to start",
         keys: KeyChord {
             mac: "cmd-up",
             other: "ctrl-home",
@@ -650,7 +652,7 @@ pub const SHORTCUTS: &[Shortcut] = &[
     },
     Shortcut {
         area: Area::Composer,
-        label: "End of composer",
+        label: "Move to end",
         keys: KeyChord {
             mac: "cmd-down",
             other: "ctrl-end",
@@ -726,7 +728,7 @@ mod tests {
             mac: "cmd-shift-n",
             other: "ctrl-shift-n",
         };
-        assert_eq!(chord.parts(Platform::MacOS), ["⌘", "⇧", "N"]);
+        assert_eq!(chord.parts(Platform::MacOS), ["⇧", "⌘", "N"]);
         assert_eq!(chord.parts(Platform::Windows), ["Ctrl", "Shift", "N"]);
         assert!(
             !SHORTCUTS

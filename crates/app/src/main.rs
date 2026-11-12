@@ -85,6 +85,11 @@ fn main() {
                     items: vec![MenuItem::action("Increase Interface Scale", IncreaseScale), MenuItem::action("Decrease Interface Scale", DecreaseScale), MenuItem::action("Actual Interface Size", ResetScale), MenuItem::Separator, MenuItem::action("Room Details", ToggleDetails), MenuItem::action("Close Panel", CloseProfile)],
                     disabled: false,
                 },
+                Menu {
+                    name: "Help".into(),
+                    items: vec![MenuItem::action("Keyboard Shortcuts", shortcuts::ShowKeyboardShortcuts)],
+                    disabled: false,
+                },
             ]);
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {

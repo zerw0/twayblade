@@ -525,8 +525,7 @@ impl MatrixApp {
                             .border_color(cx.theme().input)
                             .bg(crate::theme::palette(cx).field)
                             .child(
-                                div()
-                                    .id("thread-composer-panel")
+                                self.composer_keys(div().id("thread-composer-panel"), true, cx)
                                     // ↑/↓ start or step an edit before the
                                     // text field moves its cursor.
                                     // Escape inside the field cancels an edit; the field would

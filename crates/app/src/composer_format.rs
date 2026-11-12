@@ -1,9 +1,5 @@
 //! Pure Markdown edits. Selections are UTF-8 byte ranges; malformed ranges are
 //! clipped/expanded to whole extended grapheme clusters before any slicing.
-#![allow(
-    dead_code,
-    reason = "Technical formatting contracts; Claude wires both composers"
-)]
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 

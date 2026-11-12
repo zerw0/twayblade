@@ -311,6 +311,7 @@ pub(super) const LOADING_STATUS: &str = "Loading messages…";
 pub(super) fn timeline_status_text(status: TimelineStatus) -> &'static str {
     match status {
         TimelineStatus::Loading => LOADING_STATUS,
+        TimelineStatus::Retrying => "Still loading. Check your connection; trying again…",
         TimelineStatus::Ready => "",
         TimelineStatus::Unavailable => "This conversation is no longer available.",
         TimelineStatus::Failed => "Messages could not be loaded. Select the conversation to retry.",

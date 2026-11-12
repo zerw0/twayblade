@@ -23,23 +23,26 @@ pub(crate) enum Section {
     #[default]
     Appearance,
     Chat,
+    Keyboard,
     Security,
     Account,
 }
 impl Section {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::General,
         Self::Notifications,
         Self::Appearance,
         Self::Chat,
+        Self::Keyboard,
         Self::Security,
         Self::Account,
     ];
     /// Sections with working settings. General remains hidden until it has controls.
-    pub const VISIBLE: [Self; 5] = [
+    pub const VISIBLE: [Self; 6] = [
         Self::Notifications,
         Self::Appearance,
         Self::Chat,
+        Self::Keyboard,
         Self::Security,
         Self::Account,
     ];
@@ -50,6 +53,7 @@ impl Section {
             Self::Notifications => IconName::Bell,
             Self::Appearance => IconName::Palette,
             Self::Chat => IconName::MessagesSquare,
+            Self::Keyboard => IconName::Keyboard,
             Self::Security => IconName::ShieldCheck,
             Self::Account => IconName::UserRound,
         }
@@ -60,6 +64,7 @@ impl Section {
             Self::Notifications => "Notifications",
             Self::Appearance => "Appearance",
             Self::Chat => "Chat",
+            Self::Keyboard => "Keyboard",
             Self::Security => "Security",
             Self::Account => "Account",
         }
@@ -1518,6 +1523,7 @@ impl Render for SettingsWindow {
                 Section::Account => main.account_settings(window, cx),
                 Section::Appearance => main.appearance_settings(cx),
                 Section::Chat => main.chat_settings(cx),
+                Section::Keyboard => keyboard_settings(cx),
                 Section::Notifications => main.notification_settings(cx),
                 Section::General => div().into_any_element(),
             };
@@ -1603,6 +1609,15 @@ impl Render for SettingsWindow {
                     .update(cx, |main, cx| main.reset_scale(window, cx))
             }))
             .on_action(cx.listener(|_, _: &OpenSettings, window, _| window.activate_window()))
+            .on_action(cx.listener(
+                |this, _: &crate::shortcuts::ShowKeyboardShortcuts, window, cx| {
+                    if this.main.read(cx).security_key.is_none() {
+                        this.section = Section::Keyboard;
+                        cx.notify();
+                    }
+                    window.activate_window();
+                },
+            ))
             .child(
                 h_flex().size_full().child(sidebar).child(
                     v_flex()
@@ -1782,4 +1797,129 @@ fn accent_dot(fill: Hsla, selected: bool, system: bool, cx: &App) -> Div {
                         .child(div().size(px(6.)).rounded(px(3.)).bg(gpui_kit::white()))
                 }),
         )
+}
+
+/// Settings › Keyboard: every shortcut, generated from the bindings.
+fn keyboard_settings(cx: &App) -> AnyElement {
+    use crate::shortcuts::{Area, list};
+    // Message box rows in the order people reach for them.
+    const COMPOSER_ORDER: [&str; 20] = [
+        "Send message",
+        "New line",
+        "Bold",
+        "Italic",
+        "Code",
+        "Quote",
+        "Link",
+        "Edit your previous message",
+        "Edit your next message",
+        "Cancel edit",
+        "Previous sent message",
+        "Next sent message",
+        "Undo",
+        "Redo",
+        "Move to start",
+        "Move to end",
+        "Cut",
+        "Copy",
+        "Paste",
+        "Select all",
+    ];
+    let entries = list();
+    let sections = [
+        (Area::Composer, "Message box"),
+        (Area::Navigation, "Navigation"),
+        (Area::Window, "Window"),
+        (Area::Viewer, "Image viewer"),
+    ];
+    let mut body = v_flex().gap(px(6.));
+    for (index, (area, title)) in sections.into_iter().enumerate() {
+        // One row per action; alternative keys share it.
+        let mut rows: Vec<(&'static str, Vec<Vec<String>>)> = Vec::new();
+        for entry in entries.iter().filter(|e| e.area == area) {
+            match rows.iter_mut().find(|(label, _)| *label == entry.label) {
+                Some((_, keys)) => keys.push(entry.keys.clone()),
+                None => rows.push((entry.label, vec![entry.keys.clone()])),
+            }
+        }
+        if area == Area::Composer {
+            rows.sort_by_key(|(label, _)| {
+                COMPOSER_ORDER
+                    .iter()
+                    .position(|l| l == label)
+                    .unwrap_or(usize::MAX)
+            });
+        }
+        body = body
+            .child(
+                div()
+                    .px(px(4.))
+                    .when(index > 0, |d| d.pt(px(12.)))
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(title),
+            )
+            .child(group(
+                rows.into_iter()
+                    .map(|(label, chords)| shortcut_row(label, chords, cx)),
+                cx,
+            ));
+    }
+    body.child(
+        div()
+            .px(px(4.))
+            .pt(px(8.))
+            .text_size(px(11.))
+            .text_color(cx.theme().muted_foreground)
+            .child("Shortcuts can't be changed yet."),
+    )
+    .into_any_element()
+}
+
+fn shortcut_row(label: &'static str, chords: Vec<Vec<String>>, cx: &App) -> Div {
+    let muted = cx.theme().muted_foreground;
+    let mut keys = h_flex().flex_none().gap(px(6.)).items_center();
+    for (index, chord) in chords.into_iter().enumerate() {
+        if index > 0 {
+            keys = keys.child(div().text_size(px(11.)).text_color(muted).child("or"));
+        }
+        keys = keys.child(
+            h_flex()
+                .gap(px(3.))
+                .children(chord.into_iter().map(|key| key_cap(key, cx))),
+        );
+    }
+    h_flex()
+        .min_h(px(34.))
+        .px(px(12.))
+        .py(px(5.))
+        .gap(px(12.))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_size(px(13.))
+                .text_color(cx.theme().foreground)
+                .child(label),
+        )
+        .child(keys)
+}
+
+/// One key, drawn as a key cap.
+fn key_cap(key: String, cx: &App) -> Div {
+    h_flex()
+        .flex_none()
+        .justify_center()
+        .min_w(px(22.))
+        .h(px(20.))
+        .px(px(5.))
+        .rounded(px(4.))
+        .border_1()
+        .border_b_2()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().background)
+        .text_size(px(11.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(cx.theme().foreground)
+        .child(key)
 }

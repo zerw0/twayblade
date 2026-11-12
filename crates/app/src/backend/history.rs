@@ -100,7 +100,6 @@ impl Backend {
     /// Claude calls these from the focused main/thread composer's history action.
     /// Both surfaces share the room's sent-text history; pass the current account
     /// ticket so stale handlers cannot read a different account's history.
-    #[allow(dead_code, reason = "Claude wires composer history actions")]
     pub fn history_previous(
         &self,
         account: u128,
@@ -118,7 +117,6 @@ impl Backend {
         }
         Ok(state.history.previous(room, current_draft))
     }
-    #[allow(dead_code, reason = "Claude wires composer history actions")]
     pub fn history_next(&self, account: u128, room: &str) -> Result<Option<String>, ServiceError> {
         let mut state = self
             .state

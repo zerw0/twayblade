@@ -94,9 +94,19 @@ pub struct Attachment {
     pub size: Option<u64>,
 }
 
+/// Time allowed for one attempt at opening a room's timeline.
+const OPEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Pause before reopening: 1 s, doubling, at most 30 s.
+fn open_retry_delay(attempt: u32) -> std::time::Duration {
+    std::time::Duration::from_secs((1u64 << attempt.min(5)).min(30))
+}
+
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub enum TimelineStatus {
     Loading,
+    /// Opening the room timed out; another attempt is under way.
+    Retrying,
     #[default]
     Ready,
     Unavailable,
@@ -576,11 +586,27 @@ impl Account {
                 },
                 None => TimelineFocus::Live { hide_threaded_events: true },
             }};
-            let timeline = match room.timeline_builder().with_focus(focus).track_read_marker_and_receipts(TimelineReadReceiptTracking::MessageLikeEvents).build().await {
-                Ok(timeline) => Arc::new(timeline),
-                Err(_) => {
-                    snapshot.status = TimelineStatus::Failed;
-                    yield snapshot; return;
+            // Opening can wait on the network or the stores indefinitely. Bound
+            // each attempt so a stuck one is replaced instead of loading forever.
+            let mut attempt = 0u32;
+            let (timeline, mut items, updates) = loop {
+                let opened = tokio::time::timeout(OPEN_TIMEOUT, async {
+                    let timeline = room.timeline_builder().with_focus(focus.clone()).track_read_marker_and_receipts(TimelineReadReceiptTracking::MessageLikeEvents).build().await?;
+                    let (items, updates) = timeline.subscribe().await;
+                    Ok::<_, matrix_sdk_ui::timeline::Error>((Arc::new(timeline), items, updates))
+                }).await;
+                match opened {
+                    Ok(Ok(opened)) => break opened,
+                    Ok(Err(_)) => {
+                        snapshot.status = TimelineStatus::Failed;
+                        yield snapshot; return;
+                    }
+                    Err(_) => {
+                        snapshot.status = TimelineStatus::Retrying;
+                        yield snapshot.clone();
+                        tokio::time::sleep(open_retry_delay(attempt)).await;
+                        attempt = attempt.saturating_add(1);
+                    }
                 }
             };
             let conversation = Conversation {
@@ -615,7 +641,6 @@ impl Account {
             let _receipt_guard = account.client.event_handler_drop_guard(handler);
             let mut unread_cache = unread::UnreadCache::default();
             let mut unread_tasks = tokio::task::JoinSet::new();
-            let (mut items, updates) = timeline.subscribe().await;
             snapshot.conversation = Some(conversation.clone());
             snapshot.messages = rows(items.iter(), account.client.user_id().expect("authenticated account"));
             unread_cache.project(&mut snapshot.messages, root.as_deref());
@@ -709,6 +734,17 @@ impl Account {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod open_retry_tests {
+    #[test]
+    fn retry_delay_doubles_and_caps() {
+        let secs: Vec<_> = (0..8)
+            .map(|a| super::open_retry_delay(a).as_secs())
+            .collect();
+        assert_eq!(secs, [1, 2, 4, 8, 16, 30, 30, 30]);
     }
 }
 

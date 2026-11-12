@@ -262,8 +262,7 @@ impl MatrixApp {
                     .when(stacked, |view| view.child(self.attachment_tray(cx)))
                     .children(self.edit_bar(false, cx))
                     .child(
-                        div()
-                            .id("composer-panel")
+                        self.composer_keys(div().id("composer-panel"), false, cx)
                             // The text field binds ↑/↓ itself; take them first only when they
                             // start or step an edit.
                             // Escape inside the field cancels an edit; the field would
