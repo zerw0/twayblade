@@ -416,6 +416,34 @@ impl Render for MatrixApp {
                 }
             }))
             .on_action(cx.listener(|this, _: &ToggleDetails, _, cx| this.toggle_details(cx)))
+            .on_action(
+                cx.listener(|this, _: &crate::shortcuts::ToggleMute, _, cx| {
+                    this.call_shortcut(calls::CallShortcut::Mute, None, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::shortcuts::ToggleCamera, _, cx| {
+                    this.call_shortcut(calls::CallShortcut::Camera, None, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::shortcuts::ToggleScreenShare, _, cx| {
+                    this.call_shortcut(calls::CallShortcut::Screen, None, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &crate::shortcuts::LeaveCall, _, cx| {
+                this.call_shortcut(calls::CallShortcut::Leave, None, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &crate::shortcuts::AnswerCall, window, cx| {
+                    this.call_shortcut(calls::CallShortcut::Answer, Some(window), cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::shortcuts::DeclineCall, _, cx| {
+                    this.call_shortcut(calls::CallShortcut::Decline, None, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &NewRoom, window, cx| {
                 if !this.snapshot.user_id.is_empty() {
                     this.open_management(crate::ui::spaces::ManageKind::Create, window, cx);
