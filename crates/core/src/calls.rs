@@ -3,12 +3,16 @@ mod keys;
 pub mod native;
 #[cfg(test)]
 mod native_integration;
+pub mod ringing;
 mod session;
 use crate::auth::Account;
 use matrix_sdk::RoomState;
+pub use ringing::{CallActivity, IncomingAction, IncomingCall};
 pub use session::{CallHandle, NativeCall, NativeControl};
 use std::collections::HashMap;
-pub use twayblade_media::{Device as CallDevice, Devices as CallDevices, LatestFrame, VideoTracks};
+pub use twayblade_media::{
+    Device as CallDevice, Devices as CallDevices, LatestFrame, VideoFrame, VideoTracks,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum CallError {
@@ -24,6 +28,9 @@ pub enum CallError {
     MembershipForbidden,
     #[error("call_device_unavailable")]
     DeviceUnavailable,
+    /// Screen capture couldn't start on this system.
+    #[error("call_screen_unavailable")]
+    ScreenUnavailable,
     #[error("call_unsupported_server")]
     UnsupportedServer,
     #[error("call_session_closed")]
@@ -42,6 +49,8 @@ pub enum CallError {
     StaleRequest,
     #[error("call_control_unavailable")]
     ControlUnavailable,
+    #[error("call_reconnect_timeout")]
+    ReconnectTimeout,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CallKind {
@@ -51,6 +60,8 @@ pub enum CallKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EndReason {
     Left,
+    Declined,
+    RingExpired,
     Logout,
     RoomLeft,
     Failed,
@@ -60,6 +71,12 @@ pub enum CallPhase {
     Starting,
     Joining,
     Connected,
+    /// Unix milliseconds; the transport may already be connected while awaiting pickup.
+    Ringing {
+        since: u64,
+        expires: u64,
+    },
+    Reconnecting,
     Ended(EndReason),
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -75,6 +92,8 @@ pub struct Participant {
     /// This member published media without end-to-end encryption; it is not
     /// received. The call continues for everyone else.
     pub media_blocked: bool,
+    /// Publishing a screen share.
+    pub screen: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConnectionQuality {
@@ -90,6 +109,21 @@ pub struct LocalCallState {
     pub input_device: Option<String>,
     pub output_device: Option<String>,
     pub camera: Option<String>,
+    pub screen: ScreenShare,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ScreenShare {
+    #[default]
+    Off,
+    /// Capture started; the system picker may be open. Nothing is sent yet.
+    Choosing,
+    /// The chosen screen or window is published.
+    Live,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VideoSource {
+    Camera,
+    Screen,
 }
 #[derive(Clone, Debug)]
 pub struct CallVideoTrack {
@@ -97,9 +131,30 @@ pub struct CallVideoTrack {
     pub user_id: String,
     pub device_id: String,
     pub local: bool,
+    pub source: VideoSource,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceKind {
+    Input,
+    Output,
+    Camera,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CallEvent {
+    DeviceFallback {
+        kind: DeviceKind,
+        from: String,
+        to: Option<String>,
+    },
+    PermissionRevoked {
+        kind: DeviceKind,
+        error: CallError,
+    },
 }
 #[derive(Clone, Debug)]
 pub struct CallState {
+    /// Bounded recent events with per-call serials for toast deduplication.
+    pub events: Vec<(u64, CallEvent)>,
     pub local: LocalCallState,
     pub devices: CallDevices,
     pub video_tracks: Vec<CallVideoTrack>,
@@ -110,7 +165,7 @@ pub struct CallState {
     /// Confirmed native media state; local.* is the expanded contract.
     pub muted: Option<bool>,
     pub video: Option<bool>,
-    /// Screen sharing is not implemented in this phase.
+    /// Confirmed local screen share; `local.screen` also reports choosing.
     pub screen_sharing: Option<bool>,
     pub error: Option<CallError>,
 }
@@ -119,6 +174,8 @@ pub struct ActiveCall {
     pub participants: Vec<Participant>,
     /// Earliest nonexpired membership creation time; None if unavailable.
     pub started_ms: Option<u64>,
+    /// Next SDK membership expiry, used to schedule a local projection update.
+    pub expires_ms: Option<u64>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CallTicket {
@@ -142,6 +199,7 @@ impl Account {
             if members.is_empty() {
                 continue;
             }
+            let expires_ms = members.iter().filter_map(|m| m.expires_ms).min();
             let started_ms = members.iter().map(|m| m.created_ms).min();
             let mut participants = Vec::new();
             for member in members {
@@ -160,6 +218,7 @@ impl Account {
                     muted: None,
                     video: None,
                     media_blocked: false,
+                    screen: false,
                 });
             }
             calls.insert(
@@ -167,6 +226,7 @@ impl Account {
                 ActiveCall {
                     participants,
                     started_ms,
+                    expires_ms,
                 },
             );
         }

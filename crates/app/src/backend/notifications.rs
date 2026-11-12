@@ -201,7 +201,7 @@ pub(super) async fn run(
                         let abort = responses.spawn(async move {
                             let response = tokio::time::timeout(std::time::Duration::from_secs(24 * 60 * 60), pending.response).await;
                             if response.is_err() { os::dismiss(&expired).await; }
-                            response.ok().flatten()
+                            response.ok().flatten().map(|response|response.target)
                         });
                         response_order.push_back((id, abort));
                         if let Ok(mut ids) = cleanup.ids.lock() { *ids = response_order.iter().map(|(id, _)| id.clone()).collect(); }
@@ -213,7 +213,7 @@ pub(super) async fn run(
     }
 }
 
-fn publish_click(updates: &watch::Sender<Snapshot>, target: os::Activation) {
+pub(super) fn publish_click(updates: &watch::Sender<Snapshot>, target: os::Activation) {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     publish(updates, |view| {

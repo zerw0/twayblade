@@ -13,6 +13,7 @@ mod timeline;
 // Secondary windows, overlays and shared pieces.
 pub(crate) mod attachments;
 pub(crate) mod avatars;
+pub(crate) mod calls;
 pub(crate) mod editing;
 pub(crate) mod emoji;
 pub(crate) mod keyboard;
@@ -226,6 +227,8 @@ impl Render for MatrixApp {
         if let Some(viewer) = &mut self.viewer {
             viewer.clamp_pan(window);
         }
+        self.sync_call_views(cx);
+        self.sync_ringtone();
         self.sync_room_loading(cx);
         if self.security_open {
             self.security_open = false;
@@ -303,6 +306,7 @@ impl Render for MatrixApp {
                             )
                         })
                         .children(panel)
+                        .children(self.incoming_call_card(cx))
                         // Create Room / New DM / Join Space: a small sheet over a dimmed window.
                         .when(dialog, |row| {
                             row.child(
@@ -413,6 +417,34 @@ impl Render for MatrixApp {
                 }
             }))
             .on_action(cx.listener(|this, _: &ToggleDetails, _, cx| this.toggle_details(cx)))
+            .on_action(
+                cx.listener(|this, _: &crate::shortcuts::ToggleMute, _, cx| {
+                    this.call_shortcut(calls::CallShortcut::Mute, None, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::shortcuts::ToggleCamera, _, cx| {
+                    this.call_shortcut(calls::CallShortcut::Camera, None, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::shortcuts::ToggleScreenShare, _, cx| {
+                    this.call_shortcut(calls::CallShortcut::Screen, None, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &crate::shortcuts::LeaveCall, _, cx| {
+                this.call_shortcut(calls::CallShortcut::Leave, None, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &crate::shortcuts::AnswerCall, window, cx| {
+                    this.call_shortcut(calls::CallShortcut::Answer, Some(window), cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::shortcuts::DeclineCall, _, cx| {
+                    this.call_shortcut(calls::CallShortcut::Decline, None, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &NewRoom, window, cx| {
                 if !this.snapshot.user_id.is_empty() {
                     this.open_management(crate::ui::spaces::ManageKind::Create, window, cx);

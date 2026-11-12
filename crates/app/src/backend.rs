@@ -41,6 +41,7 @@ pub(super) struct Snapshot {
     pub(super) edit_error: Option<String>,
     pub(super) edit_saving: bool,
     pub(super) call: Option<twayblade_core::calls::CallState>,
+    pub(super) incoming_calls: Vec<twayblade_core::calls::IncomingCall>,
     pub(super) room_calls: std::collections::HashMap<String, twayblade_core::calls::ActiveCall>,
     pub(super) preview_size: previews::PreviewSize,
     pub(super) revision: u64,
@@ -128,6 +129,7 @@ struct State {
     call_request: u64,
     call_video: twayblade_core::calls::VideoTracks,
     call_task: Option<JoinHandle<()>>,
+    incoming_control: Option<tokio::sync::mpsc::Sender<twayblade_core::calls::IncomingAction>>,
     call_control: Option<tokio::sync::mpsc::Sender<calls::Control>>,
     account: Option<Account>,
     security: Option<twayblade_core::security::Security>,
@@ -166,6 +168,7 @@ impl State {
         self.clear_previews();
         self.cancel_edit();
         self.cancel_call();
+        self.incoming_control = None;
         self.cancel_discovery();
         self.cancel_media();
         self.cancel_search();
@@ -1469,6 +1472,8 @@ impl Backend {
                 .map_err(|_| failure("Session is unavailable."))?;
             state.cancel_call();
             publish(&self.updates, |v| {
+                v.incoming_calls.clear();
+                v.room_calls.clear();
                 if let Some(call) = &mut v.call {
                     call.phase = twayblade_core::calls::CallPhase::Ended(
                         twayblade_core::calls::EndReason::Logout,
@@ -1538,7 +1543,6 @@ impl Backend {
             .map_err(|_| failure("Session is unavailable."))?;
         state.stop();
         state.account = Some(account.clone());
-        calls::observe(self, &mut state, account.clone());
         state.security = Some(security);
         let epoch = state.epoch;
         publish(&self.updates, |snapshot| {
@@ -1552,6 +1556,7 @@ impl Backend {
                 ..Default::default()
             };
         });
+        calls::observe(self, &mut state, account.clone());
         state.tasks.push(self.runtime.spawn(notifications::run(
             account.clone(),
             epoch,

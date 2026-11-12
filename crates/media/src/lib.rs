@@ -3,6 +3,7 @@
 //! BGRA, replacing a single Arc slot; UI readers never receive queued frames.
 pub use livekit;
 pub mod camera;
+pub mod screen;
 mod transport;
 use futures_util::StreamExt;
 use livekit::options::{TrackPublishOptions, VideoCodec};
@@ -28,6 +29,9 @@ use std::{
 };
 use tokio::{sync::mpsc, task::JoinHandle};
 
+/// Video handle IDs: the local camera is `local:<sid>`, the local screen
+/// share `local:screen:<sid>`, remote tracks their bare track SID.
+pub const LOCAL_SCREEN: &str = "local:screen:";
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum MediaError {
     #[error("media_connection_failed")]
@@ -95,6 +99,12 @@ struct FrameSlot {
 #[derive(Clone, Default)]
 pub struct LatestFrame(Arc<Mutex<FrameSlot>>);
 impl LatestFrame {
+    /// A handle holding one fixed frame, for previews and fixtures.
+    pub fn fixed(frame: VideoFrame) -> Self {
+        let handle = Self::default();
+        handle.replace(frame);
+        handle
+    }
     pub fn latest(&self) -> Option<Arc<VideoFrame>> {
         self.0.lock().ok()?.frame.clone()
     }
@@ -184,6 +194,8 @@ pub struct NativeMedia {
     microphone: Option<LocalAudioTrack>,
     camera: Option<LocalVideoTrack>,
     capture: Option<camera::Camera>,
+    screen: Option<LocalVideoTrack>,
+    screen_capture: Option<screen::ScreenCapture>,
     consumers: HashMap<String, JoinHandle<()>>,
     event_pump: JoinHandle<()>,
     sender_index: AtomicU8,
@@ -257,6 +269,8 @@ impl NativeMedia {
             microphone: None,
             camera: None,
             capture: None,
+            screen: None,
+            screen_capture: None,
             consumers: HashMap::new(),
             allowed: HashSet::new(),
             blocked: HashSet::new(),
@@ -401,6 +415,62 @@ impl NativeMedia {
         }
         self.capture = None;
     }
+    /// Starts screen capture (and the system picker where there is one).
+    /// Publish with `publish_screen` once `ScreenStatus::Live` arrives.
+    pub async fn begin_screen_share(
+        &mut self,
+    ) -> Result<mpsc::Receiver<screen::ScreenStatus>, MediaError> {
+        self.stop_screen_share().await;
+        let (send, receive) = mpsc::channel(4);
+        self.screen_capture = Some(screen::ScreenCapture::start(send)?);
+        Ok(receive)
+    }
+    pub async fn publish_screen(&mut self) -> Result<(), MediaError> {
+        let source = self
+            .screen_capture
+            .as_ref()
+            .ok_or(MediaError::DeviceUnavailable)?
+            .source();
+        self.publish_screen_source(source).await
+    }
+    /// Publishes `source` as the screen share. Fixtures use it for a
+    /// generated screen; the application goes through `publish_screen`.
+    pub async fn publish_screen_source(
+        &mut self,
+        source: livekit::webrtc::video_source::RtcVideoSource,
+    ) -> Result<(), MediaError> {
+        let track = LocalVideoTrack::create_video_track("screen", source);
+        track.disable();
+        self.room
+            .local_participant()
+            .publish_track(
+                LocalTrack::Video(track.clone()),
+                TrackPublishOptions {
+                    source: TrackSource::Screenshare,
+                    video_codec: VideoCodec::VP8,
+                    simulcast: false,
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(|_| MediaError::Connection)?;
+        self.activate_sender(&track.sid()).await?;
+        track.enable();
+        self.consume_video(format!("{LOCAL_SCREEN}{}", track.sid()), track.rtc_track());
+        self.screen = Some(track);
+        Ok(())
+    }
+    pub async fn stop_screen_share(&mut self) {
+        self.screen_capture = None;
+        if let Some(track) = self.screen.take() {
+            let _ = self
+                .room
+                .local_participant()
+                .unpublish_track(&track.sid())
+                .await;
+            self.stop_track(&format!("{LOCAL_SCREEN}{}", track.sid()));
+        }
+    }
     pub fn set_video(&self, video: bool) -> Result<(), MediaError> {
         let track = self.camera.as_ref().ok_or(MediaError::DeviceUnavailable)?;
         if video {
@@ -409,6 +479,9 @@ impl NativeMedia {
             track.mute()
         }
         Ok(())
+    }
+    pub fn uses_microphone(&self) -> bool {
+        self.audio.is_some()
     }
     pub fn devices(&self) -> Devices {
         let Some(audio) = &self.audio else {
@@ -506,6 +579,11 @@ impl NativeMedia {
     }
     pub fn handle_event(&mut self, event: &RoomEvent) {
         match event {
+            RoomEvent::Reconnected => {
+                // Republished cryptors must resume the last active Matrix key
+                // index, including the old index during a delayed rotation.
+                self.set_sender_index(self.sender_index.load(Ordering::Relaxed));
+            }
             RoomEvent::TrackPublished {
                 publication,
                 participant,
@@ -633,8 +711,7 @@ impl Drop for NativeMedia {
     }
 }
 
-/// Camera/screen capture adapters feed an SDK source, independently of the UI.
-/// Screen capture is deliberately left for the later screen-sharing phase.
+/// Camera capture adapters feed an SDK source, independently of the UI.
 pub trait CaptureSource: Send {
     fn source(&self) -> livekit::webrtc::video_source::RtcVideoSource;
     fn stop(&mut self);

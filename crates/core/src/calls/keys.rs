@@ -305,6 +305,7 @@ mod tests {
     use super::*;
     fn member(device: &str) -> Member {
         Member {
+            expires_ms: None,
             user_id: matrix_sdk::ruma::user_id!("@a:example.org").to_owned(),
             device_id: device.into(),
             member_id: format!("@a:example.org:{device}"),

@@ -31,6 +31,7 @@ pub async fn request_permission() -> Permission {
 pub async fn notify(
     _id: String,
     notification: Notification,
+    call: bool,
 ) -> Result<PendingNotification, NotificationError> {
     let proxy = proxy().await?;
     // Subscribe before sending so an immediate click cannot be lost.
@@ -58,7 +59,18 @@ pub async fn notify(
                 "",
                 notification.title,
                 body,
-                vec!["default", notification.action_label],
+                if call {
+                    vec![
+                        "default",
+                        notification.action_label,
+                        "accept",
+                        "Accept",
+                        "decline",
+                        "Decline",
+                    ]
+                } else {
+                    vec!["default", notification.action_label]
+                },
                 hints,
                 -1i32,
             ),
@@ -72,7 +84,7 @@ pub async fn notify(
                 tokio::select! {
                     action = actions.next() => {
                         let message = action?;
-                        if let Ok((clicked, action)) = message.body().deserialize::<(u32, String)>() && clicked == id && action == "default" { return Some(notification.target); }
+                        if let Ok((clicked, action)) = message.body().deserialize::<(u32, String)>() && clicked == id { let action = match action.as_str() {"default"=>NotificationAction::Open,"accept" if call=>NotificationAction::Accept,"decline" if call=>NotificationAction::Decline,_=>continue}; return Some(NotificationResponse{target:notification.target,action}); }
                     }
                     event = closed.next() => {
                         let message = event?;

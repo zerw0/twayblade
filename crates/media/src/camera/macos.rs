@@ -13,6 +13,12 @@ use objc2_core_video::*;
 use objc2_foundation::{NSDictionary, NSNumber, NSObject, NSObjectProtocol, NSString};
 use std::{sync::mpsc, time::Instant};
 
+pub fn default_device() -> Option<String> {
+    unsafe {
+        AVCaptureDevice::defaultDeviceWithMediaType(AVMediaTypeVideo?)
+            .map(|d| d.uniqueID().to_string())
+    }
+}
 pub fn devices() -> Vec<Device> {
     // SAFETY: only immutable device descriptions leave the current thread.
     unsafe {

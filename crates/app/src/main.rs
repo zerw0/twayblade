@@ -89,6 +89,20 @@ fn main() {
                     disabled: false,
                 },
                 Menu {
+                    name: "Call".into(),
+                    items: vec![
+                        MenuItem::action("Mute or Unmute", shortcuts::ToggleMute),
+                        MenuItem::action("Turn Camera On or Off", shortcuts::ToggleCamera),
+                        MenuItem::action("Share Screen or Stop Sharing", shortcuts::ToggleScreenShare),
+                        MenuItem::Separator,
+                        MenuItem::action("Answer", shortcuts::AnswerCall),
+                        MenuItem::action("Decline", shortcuts::DeclineCall),
+                        MenuItem::Separator,
+                        MenuItem::action("Leave Call", shortcuts::LeaveCall),
+                    ],
+                    disabled: false,
+                },
+                Menu {
                     name: "Help".into(),
                     items: vec![MenuItem::action("Keyboard Shortcuts", shortcuts::ShowKeyboardShortcuts)],
                     disabled: false,
@@ -194,6 +208,7 @@ fn main() {
                     if args.iter().any(|arg| arg == "--preview-invites") { view.status = "Sample data · Invitations preview".into(); view.snapshot.invites = vec![twayblade_core::space_actions::Invite { id: "sample-room".into(), name: "Planning".into(), ..Default::default() },twayblade_core::space_actions::Invite { id: "sample-dm".into(), name: "Sam".into(), direct: true, ..Default::default() },twayblade_core::space_actions::Invite { id: "sample-space".into(), name: "Product team".into(), space: true, ..Default::default() }]; }
                     if args.iter().any(|arg| arg == "--preview-notification") { view.notification_sample = true;
                         if args.iter().any(|arg| arg == "--preview-no-message-preview") { view.preferences.notifications.preview = false; } }
+                    if let Some(flag) = args.iter().find(|arg| arg.starts_with("--preview-call") || *arg == "--preview-incoming") { view.preview_call(flag); }
                     if args.iter().any(|arg| arg == "--preview-thread") { view.open_thread("sample-0".into(), window, cx); }
                     if args.iter().any(|arg| arg == "--preview-details") {
                         view.details_open = true;

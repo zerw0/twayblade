@@ -200,6 +200,7 @@ impl MatrixApp {
                     .text_color(muted)
                     .children(room.topic.clone()),
             )
+            .children(self.call_buttons(&room.id, room.encrypted, cx))
             .when(room.encrypted, |header| {
                 header.child(
                     div()
@@ -222,6 +223,7 @@ impl MatrixApp {
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_details(cx))),
             );
 
+        let call_banner = self.call_banner(&room.id, cx);
         let body = if self.groups.is_empty() && load == RoomLoad::Loading {
             div().flex_1().min_h_0().into_any_element()
         } else if self.groups.is_empty() && load != RoomLoad::Ready {
@@ -461,6 +463,7 @@ impl MatrixApp {
             .h_full()
             .bg(cx.theme().background)
             .child(header)
+            .children(call_banner)
             .when(self.show_security_notice(), |view| {
                 view.child(self.security_notice(cx))
             })

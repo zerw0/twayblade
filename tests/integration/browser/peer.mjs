@@ -9,7 +9,7 @@ import {resolve} from 'node:path';
 
 const lines=createInterface({input:process.stdin});
 const config=await new Promise(r=>lines.once('line',line=>r(JSON.parse(line))));
-let browser;
+let browser,stage='trust';
 try{
   const trust=JSON.parse(spawnSync('python3',['tests/integration/call-fixture-trust.py'],{encoding:'utf8'}).stdout);
   const root=resolve('test-data/local/integration');
@@ -22,10 +22,12 @@ try{
     const frame=Buffer.alloc(640*360*3/2,128);for(let y=0;y<360;y++)for(let x=0;x<640;x++)frame[y*640+x]=[30,128,220][Math.min(2,Math.floor(x*3/640))];return Buffer.concat([Buffer.from('FRAME\n'),frame]);
   })]);
   writeFileSync(root+'/pattern.y4m',pattern);
+  stage='chromium';
   browser=await chromium.launch({headless:true,args:[`--ignore-certificate-errors-spki-list=${trust.spki}`,'--use-fake-ui-for-media-stream','--use-fake-device-for-media-stream',`--use-file-for-fake-video-capture=${root}/pattern.y4m`,`--use-file-for-fake-audio-capture=${root}/tone.wav`,'--autoplay-policy=no-user-gesture-required']});
   const context=await browser.newContext({permissions:['microphone','camera']});
   // Restrict the headless peer to fixture loopback services and bundled assets.
   await context.route('**/*',route=>{const url=new URL(route.request().url());return ['https:','http:'].includes(url.protocol)&&url.hostname!=='127.0.0.1'?route.abort():route.continue();});
+  stage='page';
   const page=await context.newPage();
   const errors={},httpFailures={};
   page.on('console',message=>{if(['error','warning'].includes(message.type())){const text=message.text();for(const tag of ['OpenID','SFU','JWT','WebSocket','MatrixRTC','LiveKit','permission','E2EE','encryption','Unsupported','Error','failed','focus','Connection','codec','worker'])if(text.toLowerCase().includes(tag.toLowerCase()))errors[tag]=(errors[tag]??0)+1;}});
@@ -33,7 +35,9 @@ try{
   page.on('pageerror',error=>{errors.pageError=(errors.pageError??0)+1;const stack=error.stack??'';const position=stack.match(/assets\/([A-Za-z0-9_.-]+\.js):(\d+):(\d+)/);if(position)errors.pageErrorPosition={file:position[1],line:Number(position[2]),column:Number(position[3])};const message=error.message;for(const tag of ['is not a function','Cannot read properties','Worker','WebSocket','permission','certificate','undefined','not supported','denied','SharedArrayBuffer'])if(message.includes(tag))errors['page:'+tag]=true;});
   page.on('response',response=>{if(response.status()>=400){const path=new URL(response.url()).pathname;for(const tag of ['/sfu/get','/get_token','/config.json','/rtc','/openid','/keys'])if(path.includes(tag)){const key=(path.startsWith('/_matrix')?'matrix:':'sfu:')+tag+':'+response.status();httpFailures[key]=(httpFailures[key]??0)+1;}}});
 
+  stage='homepage';
   await page.goto('https://127.0.0.1:22449/');
+  stage='login';
   const session=await page.evaluate(async data=>{
     const response=await fetch('https://127.0.0.1:18448/_matrix/client/v3/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'m.login.password',identifier:{type:'m.id.user',user:data.username},password:data.password,initial_device_display_name:'Isolated Element Call peer'})});
     if(!response.ok)throw new Error('login');
@@ -57,11 +61,67 @@ try{
     });return pc;}});
   });
   for(const key of Object.keys(errors))delete errors[key];for(const key of Object.keys(httpFailures))delete httpFailures[key];
-  await page.goto('https://127.0.0.1:22449/room/#?'+new URLSearchParams({roomId:config.room_id,perParticipantE2EE:'true'}));
+  stage='room';
+  await page.goto('https://127.0.0.1:22449/room/#?'+new URLSearchParams({roomId:config.room_id,perParticipantE2EE:'true',...(config.ringing?{sendNotificationType:'ring',waitForCallPickup:'true'}:{})}));
   await page.waitForFunction(()=>window.matrixclient?.getRooms().length>0,{},{timeout:30000});
   await page.evaluate(async room=>{await window.matrixclient.joinRoom(room);},config.room_id);
+  stage='lobby';
   const join=page.getByTestId('lobby_joinCall');await join.waitFor({timeout:30000});
+  if(config.ringing){
+    await page.evaluate(hostForward=>{
+      window.ringEvidence={received:0,sent:0,declines:0,shape:false};
+      const inspect=(event)=>{
+        const c=event.getContent();
+        if(event.getType()==='org.matrix.msc4075.rtc.notification'){
+          if(event.getSender()===window.matrixclient.getUserId()){window.ringEvidence.sent++;}
+          else {
+            window.lastIncomingRing=event.getId();window.ringEvidence.received++;
+            window.ringEvidence.shape=c.notification_type==='ring'&&typeof c.sender_ts==='number'&&c.lifetime>0&&c['m.relates_to']?.rel_type==='m.reference';
+          }
+        }
+        if(event.getType()==='org.matrix.msc4310.rtc.decline'){window.ringEvidence.declines++;}
+      };
+      window.matrixclient.on('Room.timeline',(event)=>{
+        inspect(event);
+        if(event.isEncrypted())event.once('Event.decrypted',()=>{
+          inspect(event);
+          // Element's embedding host delivers decrypted room events to the
+          // widget. Model that boundary explicitly: this standalone SPA's
+          // ringing lifecycle otherwise observes only the pre-decryption event.
+          // Do not change contents, IDs, membership or the call view model.
+          if(hostForward&&event.getType()==='org.matrix.msc4310.rtc.decline'&&event.getSender()!==window.matrixclient.getUserId()){
+            window.ringEvidence.hostForwarded=(window.ringEvidence.hostForwarded??0)+1;
+            const room=window.matrixclient.getRoom(event.getRoomId());
+            room.emit('Room.timeline',event,room,false,false,{liveEvent:true});
+          }
+        });
+      });
+    },config.host_forward_decrypted!==false);
+    process.stdout.write(JSON.stringify({ready:true,...session})+'\n');
+    const output=setInterval(async()=>{
+      try {const state=await page.evaluate(()=>({...window.ringEvidence,joined:window.rtcSession?.isJoined()??false,incall:!!document.querySelector('[data-testid=incall_mute]')}));process.stdout.write(JSON.stringify(state)+'\n');} catch {}
+    },300);
+    for await(const line of lines){
+      const command=JSON.parse(line);
+      if(command.stop)break;
+      if(command.join){
+        const stopVideo=page.getByRole('button',{name:'Stop video',exact:true});if(await stopVideo.isVisible())await stopVideo.click();
+        await page.getByTestId('lobby_joinCall').click();
+        await page.waitForFunction(()=>window.rtcSession?.isJoined(),{},{timeout:30000});
+      }
+      if(command.decline){
+        // The standalone SPA receives declines; its host normally sends them.
+        // Exercise that host path through this exact bundled Matrix SDK client.
+        await page.evaluate(async room=>{
+          if(!window.lastIncomingRing)throw new Error('no incoming ring');
+          await window.matrixclient.sendRtcDecline(room,window.lastIncomingRing);
+        },config.room_id);
+      }
+    }
+    clearInterval(output);await browser.close();
+  }else{
   const stopVideo=page.getByRole('button',{name:'Stop video',exact:true});if(await stopVideo.isVisible())await stopVideo.click();
+  stage='join';
   await join.click();
   await page.getByTestId('incall_mute').waitFor({timeout:30000});
   const mic=page.getByTestId('incall_mute');if((await mic.getAttribute('aria-label')??'').toLowerCase().includes('unmute'))await mic.click();
@@ -77,7 +137,8 @@ try{
     process.stdout.write(JSON.stringify({...evidence,errors,httpFailures})+'\n');await new Promise(r=>setTimeout(r,500));
   }
   await browser.close();
+  }
 }catch{
-  process.stdout.write(JSON.stringify({failed:true})+'\n');if(browser)await browser.close();process.exitCode=1;
+  process.stdout.write(JSON.stringify({failed:true,stage})+'\n');if(browser)await browser.close();process.exitCode=1;
 }
 lines.close();
