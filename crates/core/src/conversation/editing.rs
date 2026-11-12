@@ -12,12 +12,18 @@ pub enum EditError {
     Unchanged,
     #[error("too_long")]
     TooLong,
+    /// An edit cannot remove all text; deleting is a separate action.
+    #[error("empty")]
+    Empty,
     #[error("edit_failed")]
     Failed,
 }
 
+/// Our own sent text, notice or emote. `Timeline::edit` only requires our own
+/// event; the SDK's `is_editable` omits notices, so ownership is checked here
+/// instead of patching the SDK.
 pub(super) fn editable(event: &EventTimelineItem) -> bool {
-    event.is_editable()
+    event.is_own()
         && event.event_id().is_some()
         && matches!(event.send_state(), None | Some(EventSendState::Sent { .. }))
         && event.content().as_message().is_some_and(|m| {
@@ -36,7 +42,7 @@ fn replacement(original: &MessageType, body: String) -> Result<MessageType, Edit
     }
     let composed = crate::rich_text::compose(body).map_err(|e| match e {
         crate::rich_text::FormattingError::Limit => EditError::TooLong,
-        crate::rich_text::FormattingError::Empty => EditError::Failed,
+        crate::rich_text::FormattingError::Empty => EditError::Empty,
     })?;
     let MessageType::Text(text) = composed.msgtype else {
         return Err(EditError::Failed);
@@ -169,6 +175,10 @@ mod tests {
         assert!(matches!(
             replacement(&html, "x".repeat(65537)),
             Err(EditError::TooLong)
+        ));
+        assert!(matches!(
+            replacement(&html, "  ".into()),
+            Err(EditError::Empty)
         ));
         assert!(matches!(
             replacement(&Content::notice_plain("notice").msgtype, "**new**".into()).unwrap(),

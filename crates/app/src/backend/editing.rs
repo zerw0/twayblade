@@ -65,6 +65,7 @@ fn wording(error: EditError) -> &'static str {
         EditError::NotEditable => "This message can no longer be edited.",
         EditError::Unchanged => "The message has not changed.",
         EditError::TooLong => "This message is too long. Shorten it and try again.",
+        EditError::Empty => "A message can't be empty.",
         EditError::Failed => "The edit could not be saved. Try again.",
     }
 }
