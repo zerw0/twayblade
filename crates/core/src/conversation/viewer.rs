@@ -270,6 +270,50 @@ fn thumbnail_png(bytes: Vec<u8>) -> Result<Vec<u8>, ImageError> {
     Ok(out.into_inner())
 }
 
+/// Timeline and gallery share the process-wide one-decoder semaphore. Encoded
+/// input <=64 MiB, dimensions <=8192, decoded allocation <=64 MiB, first frame only.
+pub(super) async fn decode_timeline_preview(
+    bytes: Vec<u8>,
+    size: super::PreviewSize,
+    mut cancel: tokio::sync::watch::Receiver<bool>,
+) -> Result<super::TimelinePreview, ImageError> {
+    if *cancel.borrow() {
+        return Err(ImageError::Cancelled);
+    }
+    let permit = tokio::select! {
+        _ = cancel.changed() => return Err(ImageError::Cancelled),
+        permit = DECODER.clone().acquire_owned() => permit.map_err(|_| ImageError::Cancelled)?,
+    };
+    let decode = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        if bytes.len() > MAX_BYTES {
+            return Err(ImageError::Limit);
+        }
+        let mut reader = image::ImageReader::new(Cursor::new(bytes))
+            .with_guessed_format()
+            .map_err(|_| ImageError::Corrupt)?;
+        reader.limits(limits_with(64 * 1024 * 1024));
+        let image = reader
+            .decode()
+            .map_err(image_error)?
+            .thumbnail(size.pixels(), size.pixels());
+        let (width, height) = (image.width(), image.height());
+        let mut out = Cursor::new(Vec::new());
+        image
+            .write_to(&mut out, image::ImageFormat::Png)
+            .map_err(image_error)?;
+        Ok(super::TimelinePreview {
+            png: Arc::new(out.into_inner()),
+            width,
+            height,
+        })
+    });
+    tokio::select! {
+        _ = cancel.changed() => Err(ImageError::Cancelled),
+        result = decode => result.map_err(|_| ImageError::Corrupt)?,
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn animated_webp_fixture() -> Vec<u8> {
     fn chunk(out: &mut Vec<u8>, tag: &[u8; 4], data: &[u8]) {

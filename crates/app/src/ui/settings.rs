@@ -1272,6 +1272,26 @@ impl MatrixApp {
                 this.chat_changed(window, cx);
             },
         );
+        use twayblade_core::conversation::PreviewSize;
+        let image_size = segmented(
+            [
+                (
+                    "image-size-Default",
+                    "Default",
+                    chat.preview_size == PreviewSize::Default,
+                ),
+                (
+                    "image-size-Large",
+                    "Large",
+                    chat.preview_size == PreviewSize::Large,
+                ),
+            ],
+            cx,
+            |this, index, window, cx| {
+                this.set_timeline_preview_size([PreviewSize::Default, PreviewSize::Large][index]);
+                this.chat_changed(window, cx);
+            },
+        );
         let avatars = switch::Switch::new("avatars")
             .checked(chat.avatars)
             .accessibility_label("Show avatars")
@@ -1286,6 +1306,7 @@ impl MatrixApp {
                     form_row("Message style", style, cx),
                     form_row("Message density", density, cx),
                     form_row("Timestamps", timestamps, cx),
+                    form_row("Images in conversations", image_size, cx),
                     form_row("Show avatars", avatars, cx),
                 ],
                 cx,

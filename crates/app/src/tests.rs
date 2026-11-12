@@ -2037,3 +2037,76 @@ fn emoji_button_toggles_the_picker_and_escape_closes_it(cx: &mut TestAppContext)
     .expect("escape closes picker");
     cx.update(|cx| assert!(app.read(cx).emoji_picker.is_none()));
 }
+
+#[gpui_kit::test]
+fn editing_loads_your_message_and_always_restores_the_draft(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestEventExt;
+    let (window, app) = preview_window(cx);
+    let ids = cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            let user = app.snapshot.user_id.clone();
+            let count = app.snapshot.messages.len();
+            let mut ids = Vec::new();
+            for (offset, body) in [(2, "first"), (1, "second")] {
+                let message = &mut app.snapshot.messages[count - offset];
+                message.sender = user.clone();
+                message.kind = crate::backend::MessageKind::Text;
+                message.attachment = None;
+                message.body = body.into();
+                message.editable = true;
+                message.event_id = Some(format!("$edit-{body}"));
+                ids.push(message.id.clone());
+            }
+            cx.notify();
+            ids
+        })
+    });
+    let composer_value = |window: &mut gpui_kit::Window| {
+        window
+            .within("composer-panel")
+            .find_by_label("Message")
+            .value()
+            .map(|v| v.to_string())
+    };
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.within("composer-panel").click("input-state", cx);
+        window.key_down("up", false, cx);
+        window.render_frame(cx);
+        assert_eq!(composer_value(window).as_deref(), Some("second"));
+        assert!(window.find("edit-bar").visible());
+        // Down past your newest message returns to the (empty) draft.
+        window.key_down("end", false, cx);
+        window.key_down("down", false, cx);
+        window.render_frame(cx);
+        assert_eq!(composer_value(window).as_deref(), Some(""));
+        assert!(window.find_all("edit-bar").is_empty());
+        // Edit from the message actions keeps what you were typing.
+        window.input("half-written reply", cx);
+        window.click(gpui_kit::SharedString::from(format!("edit-{}", ids[0])), cx);
+        window.render_frame(cx);
+        assert_eq!(composer_value(window).as_deref(), Some("first"));
+        window.key_down("escape", false, cx);
+        window.render_frame(cx);
+        assert_eq!(
+            composer_value(window).as_deref(),
+            Some("half-written reply")
+        );
+    })
+    .expect("editing flow");
+    cx.update(|cx| assert!(app.read(cx).edit_session.is_none()));
+}
+
+#[gpui_kit::test]
+fn image_size_setting_updates_preferences(cx: &mut TestAppContext) {
+    use twayblade_core::conversation::PreviewSize;
+    let (_, app) = preview_window(cx);
+    cx.update(|cx| {
+        app.update(cx, |app, _| {
+            app.set_timeline_preview_size(PreviewSize::Large);
+            assert_eq!(app.preferences.chat.preview_size, PreviewSize::Large);
+            app.set_timeline_preview_size(PreviewSize::Default);
+            assert_eq!(app.preferences.chat.preview_size, PreviewSize::Default);
+        })
+    });
+}
