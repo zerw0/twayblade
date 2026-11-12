@@ -128,6 +128,38 @@ async fn native_matrixrtc_audio_and_video() {
         }
     }).await,"decrypted video test pattern in both native clients");
     println!("native-native video: decrypted test pattern frames=both");
+    publish_generated(&mut call_a, &mut tasks, true).await;
+    let alice = accounts[0].user_id().to_string();
+    let shown = |call: &CallHandle, local: bool| {
+        call.updates
+            .borrow()
+            .video_tracks
+            .iter()
+            .find(|t| {
+                t.source == super::VideoSource::Screen && t.local == local && t.user_id == alice
+            })
+            .map(|t| t.id.clone())
+    };
+    checked(timeout(Duration::from_secs(45),async{
+        loop{
+            tokio::select!{r=call_a.updates.changed()=>checked(r,"Alice screen update"),r=call_b.updates.changed()=>checked(r,"Bob screen update")}
+            let received = shown(&call_b,false).and_then(|id|call_b.video_tracks().get(&id)).is_some_and(|frame|frame.latest().is_some());
+            let marked = call_b.updates.borrow().participants.iter().any(|p|p.user_id==alice&&p.screen);
+            let own = call_a.updates.borrow().local.screen == super::ScreenShare::Live && shown(&call_a,true).is_some();
+            if received && marked && own {break;}
+        }
+    }).await,"encrypted screen share received as a screen, not a camera");
+    checked(
+        call_a.control(NativeControl::Screen(false)),
+        "stop screen share",
+    );
+    checked(timeout(Duration::from_secs(30),async{
+        loop{
+            tokio::select!{r=call_a.updates.changed()=>checked(r,"Alice unshare update"),r=call_b.updates.changed()=>checked(r,"Bob unshare update")}
+            if shown(&call_b,false).is_none() && shown(&call_a,true).is_none() && call_a.updates.borrow().local.screen == super::ScreenShare::Off {break;}
+        }
+    }).await,"stopping the share removes it on both sides");
+    println!("native-native screen share: received as screen, decrypted frames, stop removes it");
     assert!(
         matches!(
             NativeCall::start(&accounts[0], room.room_id().as_str(), false).await,
@@ -413,6 +445,10 @@ async fn fixture_pair() -> (Vec<Account>, Tasks, matrix_sdk::Room, serde_json::V
 }
 
 async fn publish_pattern(call: &mut CallHandle, tasks: &mut Tasks) {
+    publish_generated(call, tasks, false).await
+}
+/// Three vertical bands at 640×360, as a camera or as a screen share.
+async fn publish_generated(call: &mut CallHandle, tasks: &mut Tasks, screen: bool) {
     use twayblade_media::livekit::webrtc::{
         video_frame::{I420Buffer, VideoFrame, VideoRotation},
         video_source::{RtcVideoSource, VideoResolution, native::NativeVideoSource},
@@ -422,10 +458,10 @@ async fn publish_pattern(call: &mut CallHandle, tasks: &mut Tasks) {
             width: 640,
             height: 360,
         },
-        false,
+        screen,
     );
     checked(
-        call.publish_video(RtcVideoSource::Native(source.clone()))
+        call.publish_video(RtcVideoSource::Native(source.clone()), screen)
             .await,
         "publish encrypted test pattern",
     );

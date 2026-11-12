@@ -16,6 +16,7 @@ pub(crate) enum Control {
     Input(String),
     Output(String),
     Camera(String),
+    Screen(bool),
     Leave,
 }
 impl State {
@@ -331,6 +332,7 @@ async fn run(
                     Some(Control::Input(id))=>NativeControl::Input(id),
                     Some(Control::Output(id))=>NativeControl::Output(id),
                     Some(Control::Camera(id))=>NativeControl::Camera(id),
+                    Some(Control::Screen(v))=>NativeControl::Screen(v),
                     _=>{call.leave().await?;return Ok(EndReason::Left);}
                 };
                 call.control(control)?;

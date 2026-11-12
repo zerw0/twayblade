@@ -5,28 +5,39 @@
 use super::*;
 use std::sync::Arc;
 use twayblade_core::calls::{
-    CallError, CallEvent, CallKind, CallPhase, CallState, DeviceKind, EndReason, IncomingCall,
-    LatestFrame, Participant,
+    CallError, CallEvent, CallKind, CallPhase, CallState, CallVideoTrack, DeviceKind, EndReason,
+    IncomingCall, LatestFrame, Participant, ScreenShare, VideoSource,
     ringing::{CallIntent, NotifyType},
 };
 
 /// More than this many people share one "+N" tile.
 const MAX_TILES: usize = 8;
+/// Height of a shared screen shown large above the tiles.
+const SCREEN_HEIGHT: f32 = 300.;
+/// Tiles in the column beside a shared screen, the last one "+N" past that.
+const SIDE_TILES: usize = 3;
 
 /// One video track's latest frame.
+/// Cameras fill their tile; shared screens fit inside it uncropped.
 pub(crate) struct VideoTile {
     frame: LatestFrame,
     image: Option<(i64, Arc<RenderImage>)>,
+    /// Fit inside the tile (screens) instead of filling it (cameras).
+    contain: bool,
 }
 impl VideoTile {
-    pub(crate) fn new(frame: LatestFrame, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(frame: LatestFrame, contain: bool, cx: &mut Context<Self>) -> Self {
         cx.on_release(|this: &mut Self, cx| {
             if let Some((_, image)) = this.image.take() {
                 cx.drop_image(image, None);
             }
         })
         .detach();
-        Self { frame, image: None }
+        Self {
+            frame,
+            image: None,
+            contain,
+        }
     }
 }
 impl Render for VideoTile {
@@ -47,11 +58,15 @@ impl Render for VideoTile {
         }
         // Look for the next frame on every display refresh while shown.
         window.request_animation_frame();
-        div().size_full().children(
-            self.image
-                .as_ref()
-                .map(|(_, image)| img(image.clone()).size_full().object_fit(ObjectFit::Cover)),
-        )
+        div()
+            .size_full()
+            .children(self.image.as_ref().map(|(_, image)| {
+                img(image.clone()).size_full().object_fit(if self.contain {
+                    ObjectFit::Contain
+                } else {
+                    ObjectFit::Cover
+                })
+            }))
     }
 }
 
@@ -68,6 +83,7 @@ pub(crate) fn call_error_text(error: CallError) -> &'static str {
         CallError::TransportFailed => "The connection was lost.",
         CallError::MembershipForbidden => "You don't have permission to call in this room.",
         CallError::DeviceUnavailable => "Your microphone or camera isn't available.",
+        CallError::ScreenUnavailable => "Screen sharing couldn't start.",
         CallError::PermissionDenied => {
             "Twayblade can't use your microphone or camera. Allow it in System Settings → Privacy & Security."
         }
@@ -155,18 +171,32 @@ impl MatrixApp {
 
     /// Keeps one video view per shown track and a 1 s clock while in a call.
     pub(crate) fn sync_call_views(&mut self, cx: &mut Context<Self>) {
-        let tracks: Vec<String> = self
+        let tracks: Vec<(String, VideoSource)> = self
             .live_call()
-            .map(|call| call.video_tracks.iter().map(|t| t.id.clone()).collect())
+            .map(|call| {
+                call.video_tracks
+                    .iter()
+                    .map(|t| (t.id.clone(), t.source))
+                    .collect()
+            })
             .unwrap_or_default();
-        self.call_tiles.retain(|id, _| tracks.contains(id));
-        for id in tracks {
+        self.call_tiles
+            .retain(|id, _| tracks.iter().any(|(track, _)| track == id));
+        for (id, source) in tracks {
             if !self.call_tiles.contains_key(&id)
                 && let Some(frame) = self.call_video_handle(&id)
             {
-                let tile = cx.new(|cx| VideoTile::new(frame, cx));
+                let contain = source == VideoSource::Screen;
+                let tile = cx.new(|cx| VideoTile::new(frame, contain, cx));
                 self.call_tiles.insert(id, tile);
             }
+        }
+        if self
+            .call_screen_focus
+            .as_ref()
+            .is_some_and(|id| !self.call_tiles.contains_key(id))
+        {
+            self.call_screen_focus = None;
         }
         if self.live_call().is_none() {
             self.call_clock = None;
@@ -416,6 +446,7 @@ impl MatrixApp {
             .iter()
             .find(|track| {
                 track.local == local
+                    && track.source == VideoSource::Camera
                     && track.user_id == participant.user_id
                     && track.device_id == participant.device_id
             })
@@ -444,6 +475,9 @@ impl MatrixApp {
             .text_size(px(11.))
             .when(muted, |label| {
                 label.child(Icon::new(IconName::MicOff).size(px(11.)))
+            })
+            .when(participant.screen, |label| {
+                label.child(Icon::new(IconName::ScreenShare).size(px(11.)))
             })
             .child(div().truncate().child(name.clone()));
         div()
@@ -498,6 +532,130 @@ impl MatrixApp {
             .into_any_element()
     }
 
+    fn track_owner(&self, call: &CallState, track: &CallVideoTrack) -> String {
+        call.participants
+            .iter()
+            .find(|p| p.user_id == track.user_id && p.device_id == track.device_id)
+            .and_then(|p| p.display_name.clone())
+            .unwrap_or_else(|| track.user_id.clone())
+    }
+
+    /// Someone else's shared screen, large above the tiles. With several,
+    /// the chosen one (or the first) is shown and the others can be picked.
+    fn screen_presentation(&self, call: &CallState, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let screens: Vec<&CallVideoTrack> = call
+            .video_tracks
+            .iter()
+            .filter(|t| {
+                t.source == VideoSource::Screen && !t.local && self.call_tiles.contains_key(&t.id)
+            })
+            .collect();
+        let shown = screens
+            .iter()
+            .find(|t| self.call_screen_focus.as_ref() == Some(&t.id))
+            .or(screens.first())?;
+        let view = self.call_tiles.get(&shown.id)?.clone();
+        let owner = self.track_owner(call, shown);
+        let switcher = (screens.len() > 1).then(|| {
+            h_flex()
+                .absolute()
+                .top(px(8.))
+                .right(px(8.))
+                .gap(px(4.))
+                .children(screens.iter().map(|track| {
+                    let id = track.id.clone();
+                    Button::new(SharedString::from(format!("call-screen-{}", track.id)))
+                        .outline()
+                        .h(px(22.))
+                        .px(px(8.))
+                        .text_size(px(11.))
+                        .label(self.track_owner(call, track))
+                        .selected(track.id == shown.id)
+                        .accessibility_label(format!(
+                            "Show {}'s screen",
+                            self.track_owner(call, track)
+                        ))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.call_screen_focus = Some(id.clone());
+                            cx.notify();
+                        }))
+                }))
+        });
+        Some(
+            div()
+                .id("call-screen")
+                .relative()
+                .flex_1()
+                .min_w_0()
+                .h(px(SCREEN_HEIGHT))
+                .rounded(px(10.))
+                .overflow_hidden()
+                .bg(gpui_kit::black())
+                .child(view)
+                .child(
+                    h_flex()
+                        .absolute()
+                        .bottom(px(8.))
+                        .left(px(8.))
+                        .gap(px(5.))
+                        .px(px(7.))
+                        .py(px(3.))
+                        .rounded(px(5.))
+                        .bg(gpui_kit::black().opacity(0.55))
+                        .text_color(gpui_kit::white())
+                        .text_size(px(11.))
+                        .child(Icon::new(IconName::ScreenShare).size(px(12.)))
+                        .child(div().truncate().child(format!("{owner}'s screen"))),
+                )
+                .children(switcher)
+                .into_any_element(),
+        )
+    }
+
+    /// Your own shared screen as a tile, so you can see what others see.
+    fn own_screen_tile(
+        &self,
+        call: &CallState,
+        (width, height): (f32, f32),
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let track = call
+            .video_tracks
+            .iter()
+            .find(|t| t.local && t.source == VideoSource::Screen)?;
+        let view = self.call_tiles.get(&track.id)?.clone();
+        Some(
+            div()
+                .id("call-tile-own-screen")
+                .relative()
+                .flex_none()
+                .w(px(width))
+                .h(px(height))
+                .rounded(px(10.))
+                .overflow_hidden()
+                .bg(gpui_kit::black())
+                .border_2()
+                .border_color(cx.theme().border)
+                .child(view)
+                .child(
+                    h_flex()
+                        .absolute()
+                        .bottom(px(6.))
+                        .left(px(6.))
+                        .gap(px(4.))
+                        .px(px(6.))
+                        .py(px(2.))
+                        .rounded(px(5.))
+                        .bg(gpui_kit::black().opacity(0.55))
+                        .text_color(gpui_kit::white())
+                        .text_size(px(11.))
+                        .child(Icon::new(IconName::ScreenShare).size(px(11.)))
+                        .child("Your screen"),
+                )
+                .into_any_element(),
+        )
+    }
+
     /// The person being rung in a direct call, before they answer.
     fn callee_tile(
         &self,
@@ -546,61 +704,97 @@ impl MatrixApp {
     fn call_stage(&self, call: &CallState, cx: &mut Context<Self>) -> AnyElement {
         let palette = theme::palette(cx);
         let muted_fg = cx.theme().muted_foreground;
-        let (title, detail) = self.call_status(call);
+        let (title, mut detail) = self.call_status(call);
         let ended = !live(call);
+        if !ended {
+            match call.local.screen {
+                ScreenShare::Choosing => {
+                    detail = Some("Choose a window or screen to share".into());
+                }
+                ScreenShare::Live => {
+                    detail = Some(match detail {
+                        Some(people) => format!("Sharing your screen · {people}"),
+                        None => "Sharing your screen".into(),
+                    });
+                }
+                ScreenShare::Off => {}
+            }
+        }
+        let presentation = if ended {
+            None
+        } else {
+            self.screen_presentation(call, cx)
+        };
         // You first, then everyone else in membership order.
         let mut people: Vec<&Participant> = call.participants.iter().collect();
         people.sort_by_key(|p| !self.is_local(p));
-        let has_video = !self.call_tiles.is_empty();
+        let has_video = call
+            .video_tracks
+            .iter()
+            .any(|t| t.source == VideoSource::Camera && self.call_tiles.contains_key(&t.id));
+        // A shared screen takes the width; people sit in a column beside it.
+        let side = presentation.is_some();
         let size = match (people.len(), has_video) {
+            _ if side => (132., (SCREEN_HEIGHT - 2. * 8.) / SIDE_TILES as f32),
             (_, false) => (132., 96.),
             (0..=2, true) => (260., 162.),
             (3..=4, true) => (200., 125.),
             _ => (156., 98.),
         };
-        let overflow = people.len().saturating_sub(MAX_TILES);
+        let limit = if side { SIDE_TILES } else { MAX_TILES };
+        let overflow = people.len().saturating_sub(limit);
         let shown = if overflow > 0 {
-            MAX_TILES - 1
+            limit - 1
         } else {
             people.len()
         };
         let ringing_direct =
             matches!(call.phase, CallPhase::Ringing { .. }) && call.kind == CallKind::Direct;
         let tiles = (!ended && !people.is_empty()).then(|| {
-            h_flex()
-                .flex_wrap()
-                .justify_center()
-                .gap(px(8.))
-                .px(px(16.))
-                .pt(px(12.))
-                .when(call.phase == CallPhase::Reconnecting, |row| {
-                    row.opacity(0.5)
-                })
-                .children(
-                    people
-                        .iter()
-                        .take(shown)
-                        .map(|p| self.call_tile(p, call, size, cx)),
+            if side {
+                v_flex().flex_none().gap(px(8.))
+            } else {
+                h_flex()
+                    .flex_wrap()
+                    .justify_center()
+                    .gap(px(8.))
+                    .px(px(16.))
+                    .pt(px(12.))
+            }
+            .when(call.phase == CallPhase::Reconnecting, |row| {
+                row.opacity(0.5)
+            })
+            .children(
+                people
+                    .iter()
+                    .take(shown)
+                    .map(|p| self.call_tile(p, call, size, cx)),
+            )
+            // Beside someone else's screen, the status line says you share.
+            .children(
+                (!side)
+                    .then(|| self.own_screen_tile(call, size, cx))
+                    .flatten(),
+            )
+            .when(ringing_direct, |row| {
+                row.child(self.callee_tile(call, size, cx))
+            })
+            .when(overflow > 0, |row| {
+                row.child(
+                    v_flex()
+                        .flex_none()
+                        .w(px(size.0))
+                        .h(px(size.1))
+                        .rounded(px(10.))
+                        .bg(cx.theme().secondary)
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(15.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(muted_fg)
+                        .child(format!("+{}", overflow + 1)),
                 )
-                .when(ringing_direct, |row| {
-                    row.child(self.callee_tile(call, size, cx))
-                })
-                .when(overflow > 0, |row| {
-                    row.child(
-                        v_flex()
-                            .flex_none()
-                            .w(px(size.0))
-                            .h(px(size.1))
-                            .rounded(px(10.))
-                            .bg(cx.theme().secondary)
-                            .items_center()
-                            .justify_center()
-                            .text_size(px(15.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(muted_fg)
-                            .child(format!("+{}", overflow + 1)),
-                    )
-                })
+            })
         });
         let notice = (!ended)
             .then(|| {
@@ -762,6 +956,7 @@ impl MatrixApp {
         } else {
             let muted = call.local.muted;
             let camera = call.local.video;
+            let screen = call.local.screen;
             let connecting = matches!(call.phase, CallPhase::Starting);
             h_flex()
                 .gap(px(6.))
@@ -817,6 +1012,36 @@ impl MatrixApp {
                             this.call_result(result, cx)
                         })),
                 )
+                .child(
+                    Button::new("call-screen-share")
+                        .outline()
+                        .size(px(32.))
+                        .rounded(px(16.))
+                        .icon(
+                            Icon::new(if screen == ScreenShare::Off {
+                                IconName::ScreenShare
+                            } else {
+                                IconName::ScreenShareOff
+                            })
+                            .size(px(15.)),
+                        )
+                        .selected(screen != ScreenShare::Off)
+                        .disabled(connecting)
+                        .accessibility_label(match screen {
+                            ScreenShare::Off => "Share screen",
+                            ScreenShare::Choosing => "Cancel screen sharing",
+                            ScreenShare::Live => "Stop sharing screen",
+                        })
+                        .tooltip(match screen {
+                            ScreenShare::Off => "Share Screen",
+                            ScreenShare::Choosing => "Cancel Sharing",
+                            ScreenShare::Live => "Stop Sharing",
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let result = this.set_screen_share(screen == ScreenShare::Off);
+                            this.call_result(result, cx)
+                        })),
+                )
                 .child(self.call_devices_menu(call, cx))
                 .child(
                     Button::new("call-leave")
@@ -847,7 +1072,17 @@ impl MatrixApp {
                 .flex_none()
                 .border_b_1()
                 .border_color(cx.theme().border)
-                .children(tiles)
+                .map(|stage| match presentation {
+                    Some(screen) => stage.child(
+                        h_flex()
+                            .px(px(16.))
+                            .pt(px(12.))
+                            .gap(px(8.))
+                            .child(screen)
+                            .children(tiles),
+                    ),
+                    None => stage.children(tiles),
+                })
                 .children(notice)
                 .child(
                     h_flex()
@@ -1134,8 +1369,9 @@ impl MatrixApp {
 }
 
 impl MatrixApp {
-    /// Sample call states for `--preview-call[-group|-ringing|-ended|-reconnecting]`
-    /// and `--preview-incoming`. Never shown with a live account.
+    /// Sample call states for
+    /// `--preview-call[-group|-ringing|-ended|-reconnecting|-screen|-sharing]` and
+    /// `--preview-incoming`. Never shown with a live account.
     pub(crate) fn preview_call(&mut self, flag: &str) {
         use twayblade_core::calls::{ActiveCall, CallDevice, CallDevices, LocalCallState};
         let now = std::time::SystemTime::now()
@@ -1152,6 +1388,7 @@ impl MatrixApp {
                 video: Some(false),
                 connection_quality: None,
                 media_blocked: false,
+                screen: false,
             };
         if flag == "--preview-incoming" {
             let call = |room: &str, room_name: &str, user: &str, name: &str, video, ring, at| {
@@ -1202,15 +1439,14 @@ impl MatrixApp {
         }
         let direct = flag == "--preview-call-ringing";
         let room = if direct { "alex" } else { "general" };
-        let you = person(&self.snapshot.user_id.clone(), Some("You"), None, false);
+        let sharing = flag == "--preview-call-sharing";
+        let mut you = person(&self.snapshot.user_id.clone(), Some("You"), None, false);
+        you.screen = sharing;
         let mut participants = vec![you];
         if !direct {
-            participants.push(person(
-                "@alex:preview.invalid",
-                Some("Alex"),
-                Some(true),
-                false,
-            ));
+            let mut alex = person("@alex:preview.invalid", Some("Alex"), Some(true), false);
+            alex.screen = flag == "--preview-call-screen";
+            participants.push(alex);
             participants.push(person(
                 "@sam:preview.invalid",
                 Some("Sam"),
@@ -1251,6 +1487,29 @@ impl MatrixApp {
         } else {
             Vec::new()
         };
+        let mut video_tracks = Vec::new();
+        let shared = match flag {
+            "--preview-call-screen" => {
+                Some(("preview-screen-alex", "@alex:preview.invalid", false))
+            }
+            "--preview-call-sharing" => {
+                Some(("local:screen:preview", self.snapshot.user_id.as_str(), true))
+            }
+            _ => None,
+        };
+        if let Some((id, user, local)) = shared {
+            video_tracks.push(CallVideoTrack {
+                id: id.into(),
+                user_id: user.into(),
+                device_id: "PREVIEW".into(),
+                local,
+                source: VideoSource::Screen,
+            });
+            if let Some(frame) = preview_screen(1600, 1000) {
+                self.preview_frames
+                    .insert(id.into(), LatestFrame::fixed(frame));
+            }
+        }
         self.snapshot.call = Some(CallState {
             events,
             local: LocalCallState {
@@ -1259,13 +1518,18 @@ impl MatrixApp {
                 input_device: Some("builtin".into()),
                 output_device: Some("speakers".into()),
                 camera: None,
+                screen: if sharing {
+                    ScreenShare::Live
+                } else {
+                    ScreenShare::Off
+                },
             },
             devices: CallDevices {
                 inputs: vec![device("builtin", "MacBook Pro Microphone")],
                 outputs: vec![device("speakers", "MacBook Pro Speakers")],
                 cameras: vec![device("facetime", "FaceTime HD Camera")],
             },
-            video_tracks: Vec::new(),
+            video_tracks: video_tracks.clone(),
             room_id: room.into(),
             kind: if direct {
                 CallKind::Direct
@@ -1276,7 +1540,7 @@ impl MatrixApp {
             participants: participants.clone(),
             muted: Some(false),
             video: Some(false),
-            screen_sharing: Some(false),
+            screen_sharing: Some(sharing),
             error: (flag == "--preview-call-ended").then_some(CallError::ReconnectTimeout),
         });
         self.snapshot.room_calls.insert(
@@ -1301,4 +1565,37 @@ impl MatrixApp {
         self.navigation.selected_room = Some(room.into());
         self.snapshot.selected_room = room.into();
     }
+}
+
+/// A generated stand-in for a shared window: title bar, sidebar, text lines
+/// and one accent block. Preview captures only.
+fn preview_screen(width: u32, height: u32) -> Option<twayblade_core::calls::VideoFrame> {
+    let mut bgra = vec![0u8; width as usize * height as usize * 4];
+    let lines = |y: u32| y % 34 < 12;
+    for y in 0..height {
+        for x in 0..width {
+            let (r, g, b) = if y < 52 {
+                (222, 222, 226)
+            } else if x < 340 {
+                if (90..440).contains(&y) && lines(y - 90) && (32..280).contains(&x) {
+                    (172, 172, 180)
+                } else {
+                    (236, 236, 240)
+                }
+            } else if (120..420).contains(&y) && (420..1100).contains(&x) {
+                (64, 120, 230)
+            } else if (480..940).contains(&y)
+                && lines(y - 480)
+                && x >= 420
+                && x < width - 180 - (y % 7) * 60
+            {
+                (190, 190, 196)
+            } else {
+                (250, 250, 252)
+            };
+            let at = (y as usize * width as usize + x as usize) * 4;
+            bgra[at..at + 4].copy_from_slice(&[b, g, r, 255]);
+        }
+    }
+    twayblade_core::calls::VideoFrame::new(width, height, 0, 0, bgra).ok()
 }

@@ -39,7 +39,7 @@ jobs:
           pkg-config cmake libdbus-1-dev libwayland-dev libxkbcommon-dev
           libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl1-mesa-dev
           libfontconfig1-dev libfreetype6-dev libssl-dev libxcb1-dev libxkbfile-dev
-          libxkbcommon-x11-dev libvulkan-dev
+          libxkbcommon-x11-dev libvulkan-dev libglib2.0-dev
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
