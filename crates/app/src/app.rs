@@ -36,6 +36,9 @@ gpui_kit::actions!(
     ]
 );
 
+/// A reported preview viewport: room, thread root (None = main timeline), IDs.
+type ImageViewport = (String, Option<String>, Vec<String>);
+
 pub(super) struct ProfilePage {
     pub id: String,
     pub name: String,
@@ -243,6 +246,16 @@ pub(super) struct MatrixApp {
     started: bool,
     _subscriptions: Vec<Subscription>,
     selection_task: Option<Task<()>>,
+    /// The message being edited in a composer, if any.
+    pub edit_session: Option<crate::ui::editing::EditSession>,
+    /// A draft to put back into a composer once a window is available.
+    pub edit_restore: Option<(Entity<gpui_kit::component::input::TextareaState>, String)>,
+    /// Image message IDs rendered this frame: [main timeline, open thread].
+    pub visible_images: std::cell::RefCell<[Vec<String>; 2]>,
+    visible_flush: std::cell::Cell<bool>,
+    /// Last viewport sent per surface, keyed by (room, thread root).
+    reported_images: [Option<ImageViewport>; 2],
+    preview_report: Option<Task<()>>,
     /// Selections queued but not yet applied by the backend.
     selection_pending: u32,
     /// Last automatic re-selection, to rate-limit recovery.
@@ -543,6 +556,12 @@ impl MatrixApp {
             started: preview,
             _subscriptions: subscriptions,
             selection_task: None,
+            edit_session: None,
+            edit_restore: None,
+            visible_images: Default::default(),
+            visible_flush: Default::default(),
+            reported_images: Default::default(),
+            preview_report: None,
             selection_pending: 0,
             selection_retry: None,
         };
@@ -792,6 +811,7 @@ impl MatrixApp {
         self.update_thread(snapshot.thread.as_ref(), cx);
         self.groups = groups;
         self.snapshot = snapshot;
+        self.sync_edit(window, cx);
         self.notification_config();
         if let Some((serial, target)) = self.snapshot.notification_click.clone()
             && serial != self.last_notification_click
@@ -1080,6 +1100,7 @@ impl MatrixApp {
             return;
         }
         self.emoji_picker = None;
+        self.end_edit(window, cx);
         self.clear_attachment();
         self.reset_pagination();
         if !std::mem::take(&mut self.navigating_history) {
@@ -1224,6 +1245,9 @@ impl MatrixApp {
     }
 
     pub fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.save_edit_from_composer(false, window, cx) {
+            return;
+        }
         if self.preview || self.busy || !self.snapshot.timeline_ready {
             return;
         }
@@ -2144,6 +2168,84 @@ impl MatrixApp {
                 }
             },
         );
+    }
+}
+
+impl MatrixApp {
+    /// Settings: apply the size now; the caller saves preferences through the
+    /// app's own writer, so this never races other settings changes on disk.
+    pub fn set_timeline_preview_size(&mut self, size: twayblade_core::conversation::PreviewSize) {
+        self.preferences.chat.preview_size = size;
+        if let Some(backend) = &self.backend {
+            let _ = backend.apply_preview_size(size);
+        }
+    }
+    /// Called while rendering a message group: remember its image messages so
+    /// the backend fetches previews only for what is on screen.
+    pub(crate) fn note_visible_images(
+        &self,
+        messages: &[crate::backend::Message],
+        in_thread: bool,
+        cx: &mut Context<Self>,
+    ) {
+        {
+            let mut visible = self.visible_images.borrow_mut();
+            let slot = &mut visible[usize::from(in_thread)];
+            for message in messages {
+                if message.kind == crate::backend::MessageKind::Image
+                    && slot.len() < 128
+                    && !slot.contains(&message.id)
+                {
+                    slot.push(message.id.clone());
+                }
+            }
+        }
+        if !self.visible_flush.replace(true) {
+            let weak = cx.weak_entity();
+            cx.defer(move |cx| {
+                let _ = weak.update(cx, |this, cx| this.flush_visible_images(cx));
+            });
+        }
+    }
+    /// After a frame: report each surface once its visible set has been
+    /// stable for 150 ms, so scrolling doesn't keep cancelling fetches.
+    fn flush_visible_images(&mut self, cx: &mut Context<Self>) {
+        self.visible_flush.set(false);
+        let frame = std::mem::take(&mut *self.visible_images.borrow_mut());
+        if self.preview || self.backend.is_none() {
+            return;
+        }
+        let room = self.snapshot.selected_room.clone();
+        let root = self.snapshot.thread.as_ref().map(|t| t.root.clone());
+        let wanted = [
+            Some((room.clone(), None, frame[0].clone())),
+            root.map(|root| (room, Some(root), frame[1].clone())),
+        ];
+        if wanted == self.reported_images {
+            self.preview_report = None;
+            return;
+        }
+        self.preview_report = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(150))
+                .await;
+            let _ = this.update(cx, |this, _| {
+                for (slot, surface) in wanted.into_iter().enumerate() {
+                    if this.reported_images[slot] == surface {
+                        continue;
+                    }
+                    if let (Some((_, root, ids)), Some(backend)) = (&surface, &this.backend) {
+                        let _ = backend.timeline_preview_viewport(
+                            this.snapshot.selected_room.clone(),
+                            this.snapshot.account_instance,
+                            root.clone(),
+                            ids.clone(),
+                        );
+                    }
+                    this.reported_images[slot] = surface;
+                }
+            });
+        }));
     }
 }
 

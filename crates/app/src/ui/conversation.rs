@@ -40,6 +40,7 @@ impl MatrixApp {
         let ready = self.snapshot.timeline_ready && !self.preview && !self.busy;
         let editable = !self.busy && (self.preview || self.snapshot.timeline_ready);
         let empty = self.composer.read(cx).value().trim().is_empty();
+        let editing = self.edit_session.as_ref().is_some_and(|s| !s.in_thread);
         let stacked = !self.attachment_drafts.is_empty()
             || self.attachment_pending > 0
             || (self.preview && self.attachment_sample);
@@ -259,9 +260,40 @@ impl MatrixApp {
                     .border_color(cx.theme().input)
                     .bg(palette.field)
                     .when(stacked, |view| view.child(self.attachment_tray(cx)))
+                    .children(self.edit_bar(false, cx))
                     .child(
                         div()
                             .id("composer-panel")
+                            // The text field binds ↑/↓ itself; take them first only when they
+                            // start or step an edit.
+                            // Escape inside the field cancels an edit; the field would
+                            // otherwise take the key.
+                            .capture_action(cx.listener(
+                                |this, _: &gpui_kit::component::input::Escape, window, cx| {
+                                    if this
+                                        .edit_session
+                                        .as_ref()
+                                        .is_some_and(|session| !session.in_thread)
+                                    {
+                                        this.end_edit(window, cx);
+                                        cx.stop_propagation();
+                                    }
+                                },
+                            ))
+                            .capture_action(cx.listener(
+                                |this, _: &gpui_kit::component::input::MoveUp, window, cx| {
+                                    if this.edit_navigation_key("up", false, window, cx) {
+                                        cx.stop_propagation();
+                                    }
+                                },
+                            ))
+                            .capture_action(cx.listener(
+                                |this, _: &gpui_kit::component::input::MoveDown, window, cx| {
+                                    if this.edit_navigation_key("down", false, window, cx) {
+                                        cx.stop_propagation();
+                                    }
+                                },
+                            ))
                             .min_w_0()
                             .px(px(12.))
                             .pt(px(8.))
@@ -326,8 +358,12 @@ impl MatrixApp {
                                     .ml(px(4.))
                                     .rounded(px(6.))
                                     .icon(IconName::Send)
-                                    .accessibility_label("Send message")
-                                    .tooltip("Send  ↩")
+                                    .accessibility_label(if editing {
+                                        "Save edit"
+                                    } else {
+                                        "Send message"
+                                    })
+                                    .tooltip(if editing { "Save  ↩" } else { "Send  ↩" })
                                     .disabled(
                                         !ready
                                             || (empty && self.attachment_drafts.is_empty())

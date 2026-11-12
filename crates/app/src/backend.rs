@@ -20,6 +20,7 @@ mod directory;
 mod editing;
 pub(super) use editing::Editing;
 mod media;
+mod previews;
 use directory::{DirectoryState, PreviewState};
 pub(super) use media::MediaState;
 mod search;
@@ -40,6 +41,7 @@ pub(super) struct Snapshot {
     pub(super) edit_saving: bool,
     pub(super) call: Option<twayblade_core::calls::CallState>,
     pub(super) room_calls: std::collections::HashMap<String, twayblade_core::calls::ActiveCall>,
+    pub(super) preview_size: previews::PreviewSize,
     pub(super) revision: u64,
     pub(super) account_instance: u128,
     pub(super) session_state: SessionState,
@@ -116,6 +118,7 @@ fn failure(message: impl ToString) -> ServiceError {
 
 #[derive(Default)]
 struct State {
+    previews: previews::Previews,
     edit_request: u64,
     edit_task: Option<JoinHandle<()>>,
     call_request: u64,
@@ -155,6 +158,7 @@ struct State {
 
 impl State {
     fn stop(&mut self) {
+        self.clear_previews();
         self.cancel_edit();
         self.cancel_call();
         self.cancel_discovery();
@@ -402,7 +406,13 @@ fn conversation_failure(error: ConversationError) -> ServiceError {
 
 impl Backend {
     pub(super) fn new() -> Result<Arc<Self>, ServiceError> {
-        Self::with_lock(Some(auth::lock_instance().map_err(auth_failure)?))
+        let backend = Self::with_lock(Some(auth::lock_instance().map_err(auth_failure)?))?;
+        let size = crate::preferences::Preferences::path()
+            .and_then(|p| crate::preferences::Preferences::load(&p).ok())
+            .map(|p| p.chat.preview_size)
+            .unwrap_or_default();
+        backend.apply_preview_size(size)?;
+        Ok(backend)
     }
 
     pub(super) fn with_lock(
@@ -601,6 +611,7 @@ impl Backend {
         publish(&self.updates, |snapshot| {
             let revision = snapshot.revision;
             *snapshot = Snapshot::default();
+            snapshot.preview_size = state.previews.size;
             snapshot.revision = revision;
         });
         Ok(())
@@ -692,6 +703,7 @@ impl Backend {
         if let Some(task) = state.thread_task.take() {
             task.abort();
         }
+        state.clear_previews();
         state.cancel_media();
         state.cancel_presence();
         state.thread_conversation = None;
@@ -726,60 +738,50 @@ impl Backend {
         });
         let shared = self.state.clone();
         let updates = self.updates.clone();
+        let runtime = self.runtime.handle().clone();
         state.timeline_task = Some(self.runtime.spawn(async move {
-            let stream: std::pin::Pin<Box<dyn futures_util::Stream<Item = twayblade_core::conversation::ConversationSnapshot> + Send>> = match target.clone() {
+            let stream: std::pin::Pin<
+                Box<
+                    dyn futures_util::Stream<
+                            Item = twayblade_core::conversation::ConversationSnapshot,
+                        > + Send,
+                >,
+            > = match target.clone() {
                 Some(event) => Box::pin(account.event_updates(room_id, event, selection)),
                 None => Box::pin(account.conversation_updates(room_id, selection)),
             };
             tokio::pin!(stream);
-            let mut thumbnails = std::collections::HashMap::<String, Arc<Vec<u8>>>::new();
-            let mut attempted = std::collections::HashSet::new();
-            let mut pending = std::collections::VecDeque::<String>::new();
-            let mut work = tokio::task::JoinSet::new();
-            let mut current: Option<Conversation> = None;
-            loop {
-                while work.len() < 4 && let Some(id) = pending.pop_front() && let Some(conversation) = current.clone() {
-                    work.spawn(async move {
-                        let png = tokio::time::timeout(std::time::Duration::from_secs(15), conversation.attachment_thumbnail(&id)).await.ok().and_then(Result::ok);
-                        (id, png)
-                    });
+            while let Some(snapshot) = stream.next().await {
+                let Ok(mut state) = shared.lock() else {
+                    return;
+                };
+                if state.epoch != epoch || state.selection != selection {
+                    return;
                 }
-                tokio::select! {
-                    snapshot = stream.next() => {
-                        let Some(mut snapshot) = snapshot else { break; };
-                        current = snapshot.conversation.clone();
-                        let candidates = snapshot.messages.iter().rev().filter(|message| message.kind == twayblade_core::conversation::MessageKind::Image).take(128).map(|message| message.id.clone()).collect::<std::collections::HashSet<_>>();
-                        attempted.retain(|id| candidates.contains(id));
-                        pending.retain(|id| candidates.contains(id));
-                        for message in snapshot.messages.iter_mut().rev() {
-                            if let Some(attachment) = &mut message.attachment { attachment.preview_png = thumbnails.get(&message.id).cloned(); }
-                            if candidates.contains(&message.id) && attempted.insert(message.id.clone()) { pending.push_back(message.id.clone()); }
-                        }
-                        let Ok(mut state) = shared.lock() else { return; };
-                        if state.epoch != epoch || state.selection != selection { return; }
-                        state.conversation = snapshot.conversation;
-                        publish(&updates, |view| {
-                            view.timeline_ready = state.conversation.is_some();
-                            view.timeline_status = timeline_status_text(snapshot.status).into();
-                            view.focused_event = target.as_ref().filter(|id| snapshot.messages.iter().any(|m| m.event_id.as_ref() == Some(id))).cloned();
-                            view.messages = snapshot.messages;
-                            view.members = snapshot.members;
-                            for member in &mut view.members { member.presence = view.presence.get(&member.user_id).cloned(); }
-                            view.members_state = snapshot.members_state;
-                            view.typing = snapshot.typing;
-                            view.typing_others = snapshot.typing_others;
-                        });
+                state.conversation = snapshot.conversation;
+                publish(&updates, |view| {
+                    view.timeline_ready = state.conversation.is_some();
+                    view.timeline_status = timeline_status_text(snapshot.status).into();
+                    view.focused_event = target
+                        .as_ref()
+                        .filter(|id| {
+                            snapshot
+                                .messages
+                                .iter()
+                                .any(|m| m.event_id.as_ref() == Some(id))
+                        })
+                        .cloned();
+                    view.messages = snapshot.messages;
+                    view.members = snapshot.members;
+                    for member in &mut view.members {
+                        member.presence = view.presence.get(&member.user_id).cloned();
                     }
-                    completed = work.join_next(), if !work.is_empty() => {
-                        if let Some(Ok((id, Some(png)))) = completed {
-                            if thumbnails.len() >= 32 { thumbnails.clear(); }
-                            thumbnails.insert(id.clone(), png.clone());
-                            let Ok(state) = shared.lock() else { return; };
-                            if state.epoch != epoch || state.selection != selection { return; }
-                            publish(&updates, |view| { if let Some(attachment) = view.messages.iter_mut().find(|message| message.id == id).and_then(|message| message.attachment.as_mut()) { attachment.preview_png = Some(png); } });
-                        }
-                    }
-                }
+                    view.members_state = snapshot.members_state;
+                    view.typing = snapshot.typing;
+                    view.typing_others = snapshot.typing_others;
+                    state.previews.cache.project(view, state.previews.size);
+                });
+                previews::schedule(&runtime, &shared, &updates, &mut state);
             }
         }));
         drop(state);
@@ -805,6 +807,7 @@ impl Backend {
         if self.updates.borrow().selected_room != room || request < state.thread_request {
             return Err(failure("Conversation changed."));
         }
+        state.clear_thread_previews();
         state.cancel_edit();
         publish(&self.updates, |view| {
             view.editing = None;
@@ -818,12 +821,14 @@ impl Backend {
         state.thread_conversation = None;
         publish(&self.updates, |view| view.thread = None);
         let Some(root) = root else {
+            self.schedule_previews(&mut state);
             return Ok(());
         };
         let epoch = state.epoch;
         let selection = state.selection;
         let shared = self.state.clone();
         let updates = self.updates.clone();
+        let runtime = self.runtime.handle().clone();
         state.thread_task = Some(self.runtime.spawn(async move {
             let stream = account.thread_updates(room.clone(), root.clone(), request);
             tokio::pin!(stream);
@@ -847,8 +852,10 @@ impl Backend {
                         status: snapshot.status,
                         ready: state.thread_conversation.is_some(),
                         unread: snapshot.unread,
-                    })
+                    });
+                    state.previews.cache.project(view, state.previews.size);
                 });
+                previews::schedule(&runtime, &shared, &updates, &mut state);
             }
         }));
         Ok(())
@@ -1154,6 +1161,7 @@ impl Backend {
         if let Some(task) = state.thread_task.take() {
             task.abort();
         }
+        state.clear_previews();
         state.cancel_media();
         state.cancel_presence();
         state.thread_conversation = None;
@@ -1462,6 +1470,7 @@ impl Backend {
         publish(&self.updates, |snapshot| {
             let revision = snapshot.revision;
             *snapshot = Snapshot::default();
+            snapshot.preview_size = state.previews.size;
             snapshot.revision = revision;
         });
         Ok(())
@@ -1515,6 +1524,7 @@ impl Backend {
             *snapshot = Snapshot {
                 revision,
                 user_id: account.user_id(),
+                preview_size: state.previews.size,
                 account_instance: account.instance_id(),
                 sync_status: "Connecting…".into(),
                 ..Default::default()
