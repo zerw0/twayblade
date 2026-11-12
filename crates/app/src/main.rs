@@ -3,8 +3,10 @@ extern crate gpui_kit as gpui;
 
 mod app;
 mod backend;
+mod composer_format;
 mod model;
 mod preferences;
+mod shortcuts;
 #[cfg(all(test, feature = "capture"))]
 mod tests;
 mod theme;
@@ -52,51 +54,7 @@ fn main() {
             }
             // Base type anchors Kit's rem scale; window constraints below are OS pixels.
             theme::apply(cx);
-            cx.bind_keys([
-                KeyBinding::new(if cfg!(target_os = "macos") { "cmd-," } else { "ctrl-," }, OpenSettings, None),
-                KeyBinding::new(
-                    if cfg!(target_os = "macos") {
-                        "cmd-q"
-                    } else {
-                        "ctrl-q"
-                    },
-                    Quit,
-                    None,
-                ),
-                KeyBinding::new(
-                    if cfg!(target_os = "macos") {
-                        "cmd-f"
-                    } else {
-                        "ctrl-f"
-                    },
-                    FindConversation,
-                    Some("Twayblade"),
-                ),
-                KeyBinding::new("escape", CloseProfile, Some("Twayblade")),
-                KeyBinding::new(if cfg!(target_os = "macos") { "cmd-k" } else { "ctrl-k" }, FindConversation, Some("Twayblade")),
-                KeyBinding::new(if cfg!(target_os = "macos") { "ctrl-cmd-s" } else { "ctrl-alt-s" }, app::ToggleSidebar, Some("Twayblade")),
-                KeyBinding::new(if cfg!(target_os = "macos") { "cmd-[" } else { "alt-left" }, app::NavigateBack, Some("Twayblade")),
-                KeyBinding::new(if cfg!(target_os = "macos") { "cmd-]" } else { "alt-right" }, app::NavigateForward, Some("Twayblade")),
-                KeyBinding::new(if cfg!(target_os = "macos") { "alt-cmd-i" } else { "ctrl-alt-i" }, ToggleDetails, Some("Twayblade")),
-                KeyBinding::new(if cfg!(target_os = "macos") { "cmd-n" } else { "ctrl-n" }, NewDirectMessage, Some("Twayblade")),
-                KeyBinding::new(if cfg!(target_os = "macos") { "cmd-shift-n" } else { "ctrl-shift-n" }, NewRoom, Some("Twayblade")),
-                KeyBinding::new(
-                    if cfg!(target_os = "macos") {
-                        "cmd-i"
-                    } else {
-                        "ctrl-i"
-                    },
-                    ToggleDetails,
-                    Some("Twayblade"),
-                ),
-            ]);
-            cx.bind_keys([
-                KeyBinding::new(if cfg!(target_os = "macos") { "cmd-+" } else { "ctrl-+" }, IncreaseScale, Some("Twayblade")),
-                KeyBinding::new(if cfg!(target_os = "macos") { "cmd-=" } else { "ctrl-=" }, IncreaseScale, Some("Twayblade")),
-                KeyBinding::new(if cfg!(target_os = "macos") { "cmd--" } else { "ctrl--" }, DecreaseScale, Some("Twayblade")),
-                KeyBinding::new(if cfg!(target_os = "macos") { "cmd-0" } else { "ctrl-0" }, ResetScale, Some("Twayblade")),
-            ]);
-            cx.bind_keys(ui::viewer::bindings());
+            cx.bind_keys(shortcuts::bindings());
             cx.on_action(|_: &Quit, cx| cx.quit());
             use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
             cx.set_menus([

@@ -18,6 +18,7 @@ use zeroize::Zeroizing;
 pub(super) mod calls;
 mod directory;
 mod editing;
+pub(super) mod history;
 pub(super) use editing::Editing;
 mod media;
 mod previews;
@@ -118,6 +119,7 @@ fn failure(message: impl ToString) -> ServiceError {
 
 #[derive(Default)]
 struct State {
+    history: history::ComposerHistory,
     previews: previews::Previews,
     edit_request: u64,
     edit_task: Option<JoinHandle<()>>,
@@ -158,6 +160,7 @@ struct State {
 
 impl State {
     fn stop(&mut self) {
+        self.history.clear();
         self.clear_previews();
         self.cancel_edit();
         self.cancel_call();
@@ -720,6 +723,7 @@ impl Backend {
         state.selection = state.selection.wrapping_add(1);
         let selection = state.selection;
         let epoch = state.epoch;
+        state.history.reset_cursors();
         account.select_room(Some(&room_id));
         publish(&self.updates, |snapshot| {
             snapshot.focused_event = None;
@@ -869,8 +873,8 @@ impl Backend {
         request: u64,
         action: ThreadAction,
     ) -> Result<bool, ServiceError> {
-        let conversation = {
-            let state = self
+        let (conversation, epoch) = {
+            let mut state = self
                 .state
                 .lock()
                 .map_err(|_| failure("Session unavailable."))?;
@@ -885,15 +889,23 @@ impl Backend {
             {
                 return Err(failure("Thread changed."));
             }
-            state
+            let conversation = state
                 .thread_conversation
                 .clone()
-                .ok_or_else(|| failure("Thread is loading."))?
+                .ok_or_else(|| failure("Thread is loading."))?;
+            if matches!(&action, ThreadAction::Send(_)) {
+                state.history.reset_cursor(&room);
+            }
+            (conversation, state.epoch)
         };
         self.runtime
             .block_on(async move {
                 match action {
-                    ThreadAction::Send(body) => conversation.send(body).await.map(|_| false),
+                    ThreadAction::Send(body) => {
+                        conversation.send(body.clone()).await?;
+                        self.record_sent(epoch, &room, body);
+                        Ok(false)
+                    }
                     ThreadAction::Older => conversation.older().await,
                     ThreadAction::Timeline(action) => match action {
                         TimelineAction::Read { event_id } => {
@@ -1348,22 +1360,26 @@ impl Backend {
     }
 
     pub(super) fn send_text(&self, room_id: String, body: String) -> Result<(), ServiceError> {
-        let conversation = {
-            let state = self
+        let (conversation, epoch) = {
+            let mut state = self
                 .state
                 .lock()
                 .map_err(|_| failure("Session is unavailable."))?;
             if self.updates.borrow().selected_room != room_id {
                 return Err(failure("Conversation changed. Your draft was kept."));
             }
-            state
+            let conversation = state
                 .conversation
                 .clone()
-                .ok_or_else(|| failure("Conversation is still loading."))?
+                .ok_or_else(|| failure("Conversation is still loading."))?;
+            state.history.reset_cursor(&room_id);
+            (conversation, state.epoch)
         };
         self.runtime
-            .block_on(conversation.send(body))
-            .map_err(conversation_failure)
+            .block_on(conversation.send(body.clone()))
+            .map_err(conversation_failure)?;
+        self.record_sent(epoch, &room_id, body);
+        Ok(())
     }
 
     pub(super) fn load_earlier(

@@ -1266,7 +1266,7 @@ fn room_dm_and_space_invites_have_explicit_accept_and_decline(cx: &mut TestAppCo
 fn viewer_keyboard_navigation_zoom_clipboard_and_focus_restore(cx: &mut TestAppContext) {
     use gpui_kit::test::TestEventExt;
     let (window, app) = preview_window(cx);
-    cx.update(|cx| cx.bind_keys(crate::ui::viewer::bindings()));
+    cx.update(|cx| cx.bind_keys(crate::shortcuts::bindings()));
     cx.update_window(window, |_, window, cx| {
         app.update(cx, |app, cx| {
             app.preview_viewer(window, cx);
@@ -1369,7 +1369,7 @@ fn viewer_keyboard_navigation_zoom_clipboard_and_focus_restore(cx: &mut TestAppC
 fn viewer_save_and_open_shortcuts_require_a_destination(cx: &mut TestAppContext) {
     use gpui_kit::test::TestEventExt;
     let (window, app) = preview_window(cx);
-    cx.update(|cx| cx.bind_keys(crate::ui::viewer::bindings()));
+    cx.update(|cx| cx.bind_keys(crate::shortcuts::bindings()));
     let path = std::env::temp_dir().join(format!(
         "matrix-viewer-ui-{}.png",
         std::time::SystemTime::now()
@@ -2109,4 +2109,46 @@ fn image_size_setting_updates_preferences(cx: &mut TestAppContext) {
             assert_eq!(app.preferences.chat.preview_size, PreviewSize::Default);
         })
     });
+}
+
+/// Technical adapter acceptance: uses Kit's public byte-selection API, including
+/// an emoji selection, then exercises Kit's existing undo binding.
+#[gpui_kit::test]
+fn formatting_adapter_uses_byte_selection_and_preserves_undo(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestEventExt;
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.within("composer-panel").click("input-state", cx);
+        let composer = app.read(cx).composer.clone();
+        composer.update(cx, |state, cx| {
+            state.set_value("a👩🏽‍💻z", window, cx);
+            let end = 1 + "👩🏽‍💻".len();
+            state.set_selected_range(1..end, cx);
+            crate::composer_format::apply(crate::composer_format::Format::Bold, state, window, cx);
+            assert_eq!(state.value().as_str(), "a**👩🏽‍💻**z");
+            assert_eq!(state.selected_range(), 3..end + 2);
+        });
+        window.key_down(
+            if cfg!(target_os = "macos") {
+                "cmd-z"
+            } else {
+                "ctrl-z"
+            },
+            false,
+            cx,
+        );
+        assert_eq!(composer.read(cx).value().as_str(), "a👩🏽‍💻z");
+        window.key_down(
+            if cfg!(target_os = "macos") {
+                "cmd-shift-z"
+            } else {
+                "ctrl-y"
+            },
+            false,
+            cx,
+        );
+        assert_eq!(composer.read(cx).value().as_str(), "a**👩🏽‍💻**z");
+    })
+    .expect("formatting adapter");
 }
