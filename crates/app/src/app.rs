@@ -47,8 +47,7 @@ pub(super) struct ProfilePage {
     pub error: String,
 }
 
-// Technical call action contracts only. Claude owns their view integration.
-#[allow(dead_code, reason = "M5 call actions awaiting UI integration")]
+// Call actions used by `ui::calls`.
 impl MatrixApp {
     pub fn start_call(
         &self,
@@ -296,6 +295,14 @@ pub(super) struct MatrixApp {
     selection_pending: u32,
     /// Last logged (room matched, timeline ready, selections pending).
     selection_trace: Option<(bool, bool, u32)>,
+    /// One video view per shown call track, keyed by track ID.
+    pub(super) call_tiles: HashMap<String, Entity<crate::ui::calls::VideoTile>>,
+    /// Repaints once a second during a call for its duration.
+    pub(super) call_clock: Option<Task<()>>,
+    /// The ended-call summary was closed.
+    pub(super) call_end_dismissed: bool,
+    /// The newest device notice the user dismissed.
+    pub(super) call_event_seen: u64,
     /// Last automatic re-selection, to rate-limit recovery.
     selection_retry: Option<std::time::Instant>,
 }
@@ -602,6 +609,10 @@ impl MatrixApp {
             preview_report: None,
             selection_pending: 0,
             selection_trace: None,
+            call_tiles: HashMap::new(),
+            call_clock: None,
+            call_end_dismissed: false,
+            call_event_seen: 0,
             selection_retry: None,
         };
         crate::theme::set_appearance(this.preferences.appearance.clone(), cx);

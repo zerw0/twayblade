@@ -10152,6 +10152,7 @@ dependencies = [
  "emojis",
  "futures-util",
  "gpui-kit",
+ "image",
  "matrix-sdk",
  "serde",
  "serde_json",
