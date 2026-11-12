@@ -15,7 +15,7 @@ use std::{
 };
 use tokio::sync::oneshot;
 const PAYLOAD_KEY: &str = "twayblade.activation.v1";
-type Pending = (oneshot::Sender<Activation>, Activation);
+type Pending = (oneshot::Sender<NotificationResponse>, Activation);
 fn pending() -> &'static Mutex<HashMap<String, Pending>> {
     static PENDING: OnceLock<Mutex<HashMap<String, Pending>>> = OnceLock::new();
     PENDING.get_or_init(Mutex::default)
@@ -58,8 +58,15 @@ define_class!(
                 .lock()
                 .ok()
                 .and_then(|mut map| map.remove(&request.identifier().to_string()));
-            if is_default {
-                let delivered = live.is_some_and(|(sender, target)| sender.send(target).is_ok());
+            let action = match response.actionIdentifier().to_string().as_str() {
+                "twayblade.call.accept" => NotificationAction::Accept,
+                "twayblade.call.decline" => NotificationAction::Decline,
+                _ => NotificationAction::Open,
+            };
+            if is_default || action != NotificationAction::Open {
+                let delivered = live.is_some_and(|(sender, target)| {
+                    sender.send(NotificationResponse { target, action }).is_ok()
+                });
                 if !delivered {
                     let info = request.content().userInfo();
                     let key = NSString::from_str(PAYLOAD_KEY);
@@ -87,6 +94,25 @@ pub(super) fn initialize() {
     }
     static DELEGATE: OnceLock<Retained<NotificationDelegate>> = OnceLock::new();
     DELEGATE.get_or_init(|| {
+        let accept = UNNotificationAction::actionWithIdentifier_title_options(
+            &NSString::from_str("twayblade.call.accept"),
+            &NSString::from_str("Accept"),
+            UNNotificationActionOptions::Foreground,
+        );
+        let decline = UNNotificationAction::actionWithIdentifier_title_options(
+            &NSString::from_str("twayblade.call.decline"),
+            &NSString::from_str("Decline"),
+            UNNotificationActionOptions::empty(),
+        );
+        let category =
+            UNNotificationCategory::categoryWithIdentifier_actions_intentIdentifiers_options(
+                &NSString::from_str("twayblade.call"),
+                &NSArray::from_slice(&[&*accept, &*decline]),
+                &NSArray::new(),
+                UNNotificationCategoryOptions::empty(),
+            );
+        UNUserNotificationCenter::currentNotificationCenter()
+            .setNotificationCategories(&objc2_foundation::NSSet::from_slice(&[&*category]));
         let delegate = NotificationDelegate::new();
         UNUserNotificationCenter::currentNotificationCenter()
             .setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
@@ -161,8 +187,12 @@ pub async fn request_permission() -> Permission {
 fn begin_notify(
     id: &str,
     notification: &Notification,
+    call: bool,
 ) -> Result<oneshot::Receiver<bool>, NotificationError> {
     let content = UNMutableNotificationContent::new();
+    if call {
+        content.setCategoryIdentifier(&NSString::from_str("twayblade.call"));
+    }
     content.setTitle(&NSString::from_str(&notification.title));
     content.setBody(&NSString::from_str(&notification.body));
     if notification.sound {
@@ -200,6 +230,7 @@ fn begin_notify(
 pub async fn notify(
     id: String,
     notification: Notification,
+    call: bool,
 ) -> Result<PendingNotification, NotificationError> {
     if !bundled() {
         return Err(NotificationError);
@@ -215,7 +246,9 @@ pub async fn notify(
         }
         map.insert(id.clone(), (sender, notification.target.clone()));
     }
-    let result = begin_notify(&id, &notification)?.await.unwrap_or(false);
+    let result = begin_notify(&id, &notification, call)?
+        .await
+        .unwrap_or(false);
     if !result {
         if let Ok(mut map) = pending().lock() {
             map.remove(&id);

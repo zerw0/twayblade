@@ -160,6 +160,92 @@ async fn native_matrixrtc_audio_and_video() {
     .await;
     println!("native-native sustained call: membership refresh and delayed leave remained active");
 
+    // Pause only the isolated fixture SFU. Matrix sync and membership keepalives
+    // remain available, while both signalling WebSockets and media are stalled.
+    let context =
+        std::env::var("MATRIX_TEST_CALL_CONTEXT").expect("run.sh supplies isolated context");
+    let compose = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/integration/compose.yaml");
+    let pause = checked(
+        tokio::process::Command::new("docker")
+            .args(["--context", &context, "compose", "-f"])
+            .arg(&compose)
+            .args(["pause", "livekit"])
+            .output()
+            .await,
+        "pause isolated SFU",
+    );
+    assert!(pause.status.success());
+    struct Resume {
+        context: String,
+        compose: std::path::PathBuf,
+    }
+    impl Drop for Resume {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("docker")
+                .args(["--context", &self.context, "compose", "-f"])
+                .arg(&self.compose)
+                .args(["unpause", "livekit"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+    }
+    let resume = Resume { context, compose };
+    let before_audio = [
+        call_a
+            .evidence()
+            .audio_signal_frames
+            .load(Ordering::Relaxed),
+        call_b
+            .evidence()
+            .audio_signal_frames
+            .load(Ordering::Relaxed),
+    ];
+    let before_video = [
+        call_a
+            .evidence()
+            .video_pattern_frames
+            .load(Ordering::Relaxed),
+        call_b
+            .evidence()
+            .video_pattern_frames
+            .load(Ordering::Relaxed),
+    ];
+    let mut reconnect_seen = false;
+    let resume_at = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        tokio::select! {
+            r=call_a.updates.changed()=>checked(r,"Alice interrupted SFU update"),
+            r=call_b.updates.changed()=>checked(r,"Bob interrupted SFU update"),
+            _=tokio::time::sleep_until(resume_at)=>break,
+        }
+        for call in [&call_a, &call_b] {
+            let snapshot = call.updates.borrow();
+            reconnect_seen |= snapshot.phase == CallPhase::Reconnecting;
+            assert!(
+                !matches!(snapshot.phase, CallPhase::Ended(_)),
+                "SFU interruption must preserve Matrix membership"
+            );
+            assert_eq!(snapshot.participants.len(), 2);
+        }
+    }
+    drop(resume);
+    checked(timeout(Duration::from_secs(45),async {
+        loop {
+            tokio::select! {r=call_a.updates.changed()=>checked(r,"Alice reconnect update"),r=call_b.updates.changed()=>checked(r,"Bob reconnect update")}
+            for call in [&call_a,&call_b] {reconnect_seen |= call.updates.borrow().phase == CallPhase::Reconnecting;assert!(!matches!(call.updates.borrow().phase,CallPhase::Ended(_)),"reconnect must not end the call");}
+            if [&call_a,&call_b].iter().enumerate().all(|(i,c)| c.updates.borrow().phase == CallPhase::Connected && c.updates.borrow().participants.len() == 2 && c.evidence().audio_signal_frames.load(Ordering::Relaxed) > before_audio[i] + 30 && c.evidence().video_pattern_frames.load(Ordering::Relaxed)>before_video[i]+10) {break;}
+        }
+    }).await,"SFU reconnect and bidirectional decrypted media resume");
+    assert!(
+        reconnect_seen,
+        "LiveKit must report reconnecting for this fault injection"
+    );
+    println!(
+        "native-native reconnect: 20-second SFU pause, memberships retained, decrypted audio/video resumed both directions"
+    );
+
     // Bob leaves the MatrixRTC call but keeps his SFU connection and keeps
     // publishing. Alice must stop receiving him: no subscription, no frames.
     let bob = &accounts[1];
@@ -286,7 +372,7 @@ async fn fixture_pair() -> (Vec<Account>, Tasks, matrix_sdk::Room, serde_json::V
     // RTC membership; retain all other default power levels.
     request.power_level_content_override = Some(
         Raw::from_json_string(
-            serde_json::json!({"events":{"org.matrix.msc3401.call.member":0}}).to_string(),
+            serde_json::json!({"events":{"org.matrix.msc3401.call.member":0,"org.matrix.msc4143.rtc.slot":0},"notifications":{"room":0}}).to_string(),
         )
         .unwrap(),
     );
@@ -399,7 +485,11 @@ async fn native_matrixrtc_element_audio_and_video() {
         serde_json::from_str(&checked(ready, "peer readiness").expect("peer exited before ready")),
         "peer counts protocol",
     );
-    assert_eq!(ready["ready"], true, "Element Call failed before joining");
+    assert_eq!(
+        ready["ready"], true,
+        "Element Call failed at fixture stage {}",
+        ready["stage"]
+    );
     let lease = accounts[0].call_slot.clone().try_acquire_owned().unwrap();
     let mut call = checked(
         NativeCall::connect(&accounts[0], room.room_id().as_str(), lease).await,
@@ -545,4 +635,221 @@ async fn verify_livekit_pair(identities: Vec<String>) {
         "LiveKit evidence counts",
     );
     assert_eq!(counts["livekit_participants"], 2);
+}
+
+#[tokio::test]
+#[ignore = "requires isolated TLS Synapse/LiveKit and Element Call; notification host actions use bundled SDK"]
+async fn native_matrixrtc_ringing_element_host() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    for native_starts in [false, true] {
+        for decline in [false, true] {
+            let (accounts, mut tasks, room, fixture) = fixture_pair().await;
+            // A DM selects ringing rather than a group notification.
+            checked(room.set_is_direct(true).await, "mark fixture DM");
+            let (actions, receive) = tokio::sync::mpsc::channel(32);
+            let (send, mut activity) = tokio::sync::watch::channel(CallActivity::default());
+            let account = accounts[0].clone();
+            tasks.0.push(tokio::spawn(async move {
+                let stream = account.call_activity(receive);
+                tokio::pin!(stream);
+                while let Some(snapshot) = stream.next().await {
+                    send.send_replace(snapshot);
+                }
+            }));
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+            let mut peer = checked(
+                tokio::process::Command::new("node")
+                    .arg(root.join("tests/integration/browser/peer.mjs"))
+                    .env("PLAYWRIGHT_BROWSERS_PATH", root.join("target/playwright"))
+                    .current_dir(&root)
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::null())
+                    .kill_on_drop(true)
+                    .spawn(),
+                "ring peer",
+            );
+            let mut input = peer.stdin.take().unwrap();
+            let host_forward = std::env::var_os("MATRIX_TEST_ELEMENT_STANDALONE").is_none();
+            let config = serde_json::json!({"host_forward_decrypted":host_forward,"ringing":true,"room_id":room.room_id(),"username":fixture["scenario_bob_username"],"password":fixture["scenario_bob_password"]});
+            checked(
+                input.write_all(format!("{config}\n").as_bytes()).await,
+                "ring peer private config",
+            );
+            drop(config);
+            let mut lines = BufReader::new(peer.stdout.take().unwrap()).lines();
+            let ready = checked(
+                timeout(Duration::from_secs(90), lines.next_line()).await,
+                "ring peer deadline",
+            );
+            let ready: serde_json::Value = checked(
+                serde_json::from_str(&checked(ready, "ring readiness").expect("peer ended")),
+                "ring readiness JSON",
+            );
+            assert_eq!(
+                ready["ready"], true,
+                "ring peer failed at fixture stage {}",
+                ready["stage"]
+            );
+            let mut call = None;
+            if native_starts {
+                let lease = accounts[0].call_slot.clone().try_acquire_owned().unwrap();
+                let mut native = checked(
+                    NativeCall::connect(&accounts[0], room.room_id().as_str(), lease).await,
+                    "outgoing ring connection",
+                );
+                checked(
+                    timeout(Duration::from_secs(15), async {
+                        loop {
+                            if room.has_active_room_call() {
+                                break;
+                            }
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                    })
+                    .await,
+                    "own membership sync",
+                );
+                checked(native.ring(false).await, "send native ring");
+                assert!(matches!(native.state.phase, CallPhase::Ringing { .. }));
+                call = Some(native.drive());
+                checked(
+                    timeout(Duration::from_secs(30), async {
+                        loop {
+                            let line = checked(lines.next_line().await, "browser ring receipt")
+                                .expect("peer ended");
+                            let evidence: serde_json::Value =
+                                checked(serde_json::from_str(&line), "browser ring evidence");
+                            assert_ne!(evidence["failed"], true);
+                            if evidence["received"].as_u64().unwrap_or(0) > 0 {
+                                assert_eq!(evidence["shape"], true);
+                                break;
+                            }
+                        }
+                    })
+                    .await,
+                    "Element SDK receives native ring",
+                );
+                checked(
+                    input
+                        .write_all(if decline {
+                            b"{\"decline\":true}\n"
+                        } else {
+                            b"{\"join\":true}\n"
+                        })
+                        .await,
+                    "Element ring response",
+                );
+            } else {
+                checked(
+                    input.write_all(b"{\"join\":true}\n").await,
+                    "Element starts ringing",
+                );
+                checked(
+                    timeout(Duration::from_secs(30), async {
+                        while activity.borrow().incoming_calls.is_empty() {
+                            tokio::select! {
+                                changed=activity.changed()=>checked(changed,"incoming call update"),
+                                line=lines.next_line()=> {let data:serde_json::Value=checked(serde_json::from_str(&checked(line,"ring peer progress").expect("peer ended")),"ring progress"); assert_ne!(data["failed"],true,"ring peer stage {}",data["stage"]);}
+                            }
+                        }
+                    })
+                    .await,
+                    "Element ring arrives through SDK sync",
+                );
+                let invitation = activity.borrow().incoming_calls[0].clone();
+                assert!(invitation.ringing);
+                assert_eq!(invitation.caller_user, ready["user_id"].as_str().unwrap());
+                assert_eq!(
+                    invitation.caller_device.as_deref(),
+                    ready["device_id"].as_str()
+                );
+                if decline {
+                    checked(
+                        actions
+                            .send(IncomingAction::Decline(room.room_id().to_string()))
+                            .await,
+                        "native decline action",
+                    );
+                    checked(
+                        timeout(Duration::from_secs(30), async {
+                            loop {
+                                let line =
+                                    checked(lines.next_line().await, "Element decline receipt")
+                                        .expect("peer ended");
+                                let evidence: serde_json::Value =
+                                    checked(serde_json::from_str(&line), "decline evidence");
+                                assert_ne!(evidence["failed"], true);
+                                if evidence["declines"].as_u64().unwrap_or(0) > 0
+                                    && evidence["joined"] == false
+                                {
+                                    break;
+                                }
+                            }
+                        })
+                        .await,
+                        "Element actual decline lifecycle leaves",
+                    );
+                } else {
+                    let lease = accounts[0].call_slot.clone().try_acquire_owned().unwrap();
+                    call = Some(
+                        checked(
+                            NativeCall::connect(&accounts[0], room.room_id().as_str(), lease).await,
+                            "accept native call",
+                        )
+                        .drive(),
+                    );
+                }
+                checked(
+                    timeout(Duration::from_secs(30), async {
+                        while !activity.borrow().incoming_calls.is_empty() {
+                            checked(activity.changed().await, "incoming ring stops");
+                        }
+                    })
+                    .await,
+                    "incoming removed on accept or decline",
+                );
+            }
+            if let Some(call) = &mut call {
+                checked(
+                    timeout(Duration::from_secs(30), async {
+                        loop {
+                            let state = call.updates.borrow().clone();
+                            if native_starts && decline {
+                                if state.phase == CallPhase::Ended(EndReason::Declined) {
+                                    break;
+                                }
+                            } else if state.phase == CallPhase::Connected
+                                && state.participants.len() >= 2
+                            {
+                                break;
+                            }
+                            assert!(
+                                !matches!(state.phase, CallPhase::Ended(EndReason::Failed)),
+                                "ring call failed"
+                            );
+                            checked(call.updates.changed().await, "ring phase update");
+                        }
+                    })
+                    .await,
+                    "ring stops on join/decline",
+                );
+                if !decline {
+                    checked(call.leave().await, "ring fixture leave");
+                }
+            }
+            checked(
+                input.write_all(b"{\"stop\":true}\n").await,
+                "ring peer stop",
+            );
+            checked(
+                timeout(Duration::from_secs(15), peer.wait()).await,
+                "ring peer exit",
+            )
+            .expect("peer wait");
+            println!(
+                "ring interop: native_starts={native_starts}, decline={decline}, event shape accepted, ringing stopped, simulated_host_decrypted_forwarding={host_forward}"
+            );
+        }
+    }
 }

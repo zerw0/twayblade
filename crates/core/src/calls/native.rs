@@ -29,6 +29,7 @@ pub struct Member {
     /// Session membership ID (not the state key).
     pub member_id: String,
     pub created_ms: u64,
+    pub expires_ms: Option<u64>,
     pub service_url: Option<String>,
     pub alias: Option<String>,
 }
@@ -99,6 +100,9 @@ pub async fn members(room: &Room) -> Result<Vec<Member>, CallError> {
             }
             let device_id = membership.device_id().to_string();
             let mut member = Member {
+                expires_ms: membership
+                    .expires_ts(Some(sync.origin_server_ts()))
+                    .map(|t| u64::from(t.0)),
                 user_id: sync.sender().to_owned(),
                 device_id: device_id.clone(),
                 member_id: format!("{}:{device_id}", sync.sender()),
@@ -168,6 +172,7 @@ pub struct Signalling {
     content: Value,
     delayed: Option<String>,
     closed: bool,
+    pub(crate) membership_event_id: Option<String>,
     pub(crate) membership_updates: tokio::sync::watch::Receiver<u64>,
     _membership_handler: matrix_sdk::event_handler::EventHandlerDropGuard,
     pub(crate) lease: Option<tokio::sync::OwnedSemaphorePermit>,
@@ -310,6 +315,7 @@ impl Account {
             Signalling {
                 room,
                 own: Member {
+                    expires_ms: None,
                     user_id: user.clone(),
                     device_id: device.clone(),
                     member_id: format!("{user}:{device}"),
@@ -321,6 +327,7 @@ impl Account {
                 content,
                 delayed: None,
                 closed: false,
+                membership_event_id: None,
                 lease: None,
                 membership_updates,
                 _membership_handler: membership_handler,
@@ -334,11 +341,11 @@ fn membership_content(device: &str, service: &str, alias: &str, now: u64) -> Val
         "focus_active":{"type":"livekit","focus_selection":"oldest_membership"},"foci_preferred":[{"type":"livekit","livekit_service_url":service,"livekit_alias":alias}]})
 }
 impl Signalling {
-    async fn write(&self, content: Value) -> Result<(), CallError> {
+    async fn write(&mut self, content: Value) -> Result<(), CallError> {
         if self.room.state() != RoomState::Joined {
             return Err(CallError::InvalidRoom);
         }
-        tokio::time::timeout(
+        let response = tokio::time::timeout(
             Duration::from_secs(5),
             self.room
                 .send_state_event_raw(MEMBER_EVENT, self.state_key.as_ref(), content),
@@ -355,6 +362,7 @@ impl Signalling {
                 CallError::TransportFailed
             }
         })?;
+        self.membership_event_id = Some(response.event_id.to_string());
         Ok(())
     }
 
@@ -418,6 +426,31 @@ impl Signalling {
             Err(_) => Err(CallError::TransportFailed),
         }
     }
+    /// Reuse a retained delayed leave; replace it only after NotFound. A fired
+    /// delayed leave must be observed/retired before re-publishing membership.
+    pub async fn recover(&mut self) -> Result<(), CallError> {
+        if self.closed {
+            return Err(CallError::SessionClosed);
+        }
+        if let Some(id) = &self.delayed
+            && !self.restart_leave(id).await?
+        {
+            self.delayed = None;
+        }
+        let now = u64::from(MilliSecondsSinceUnixEpoch::now().0);
+        self.content["expires"] =
+            json!(now.saturating_sub(self.own.created_ms) + EXPIRY.as_millis() as u64);
+        self.write(self.content.clone()).await?;
+        if let Some(id) = &self.delayed
+            && !self.restart_leave(id).await?
+        {
+            self.delayed = None;
+        }
+        if self.delayed.is_none() {
+            self.schedule_leave().await;
+        }
+        Ok(())
+    }
     pub async fn maintain(&mut self) -> Result<(), CallError> {
         if self.closed {
             return Err(CallError::StaleRequest);
@@ -426,7 +459,8 @@ impl Signalling {
             && !self.restart_leave(id).await?
         {
             // A lost/fired delayed event may already have removed membership.
-            // End rather than silently resurrecting an unprotected session.
+            // Report the loss; the driver must retire the old timer before
+            // recovering membership within its bounded outage budget.
             return Err(CallError::TransportFailed);
         }
         let now = u64::from(MilliSecondsSinceUnixEpoch::now().0);
@@ -452,25 +486,40 @@ impl Signalling {
     }
     pub async fn leave(&mut self) -> Result<(), CallError> {
         self.write(json!({})).await?;
-        self.closed = true;
-        if let Some(id) = self.delayed.take() {
-            let _ = self
-                .room
-                .client()
-                .send(
-                    delayed_events::update_delayed_event::unstable_v1::Request::new(
-                        id,
-                        UpdateAction::Cancel,
-                    ),
-                )
-                .with_request_config(
-                    matrix_sdk::config::RequestConfig::new()
-                        .timeout(Duration::from_secs(5))
-                        .retry_limit(0),
-                )
-                .await;
+        if let Some(id) = &self.delayed {
+            cancel_leave(&self.room, id).await?;
+            self.delayed = None;
         }
+        self.closed = true;
         Ok(())
+    }
+}
+async fn cancel_leave(room: &Room, id: &str) -> Result<(), CallError> {
+    match room
+        .client()
+        .send(
+            delayed_events::update_delayed_event::unstable_v1::Request::new(
+                id.to_owned(),
+                UpdateAction::Cancel,
+            ),
+        )
+        .with_request_config(
+            matrix_sdk::config::RequestConfig::new()
+                .timeout(Duration::from_secs(5))
+                .retry_limit(0),
+        )
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(e)
+            if matches!(
+                e.client_api_error_kind(),
+                Some(matrix_sdk::ruma::api::error::ErrorKind::NotFound)
+            ) =>
+        {
+            Ok(())
+        }
+        Err(_) => Err(CallError::TransportFailed),
     }
 }
 impl Drop for Signalling {
@@ -481,15 +530,24 @@ impl Drop for Signalling {
         // Task cancellation/account replacement must also leave. A bounded
         // best-effort cleanup complements the server delayed event/expiry.
         let lease = self.lease.take();
+        let delayed = self.delayed.take();
         let room = self.room.clone();
         let key = self.state_key.as_ref().to_owned();
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
-                let _ = tokio::time::timeout(
+                let cleared = tokio::time::timeout(
                     Duration::from_secs(5),
                     room.send_state_event_raw(MEMBER_EVENT, &key, json!({})),
                 )
-                .await;
+                .await
+                .is_ok_and(|result| result.is_ok());
+                if let Some(id) = delayed
+                    && (!cleared || cancel_leave(&room, &id).await.is_err())
+                {
+                    // Keep the account reservation until the old server timer
+                    // has fired; it cannot delete a subsequent local session.
+                    tokio::time::sleep(LEAVE_DELAY).await;
+                }
                 drop(lease);
             });
         }
@@ -539,6 +597,7 @@ mod tests {
     #[test]
     fn existing_focus_comes_from_oldest_membership_or_fails_without_forking() {
         let older = Member {
+            expires_ms: None,
             user_id: matrix_sdk::ruma::user_id!("@a:example.org").to_owned(),
             device_id: "A".into(),
             member_id: "a".into(),

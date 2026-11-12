@@ -60,6 +60,42 @@ impl MatrixApp {
             .ok_or(twayblade_core::calls::CallError::StaleRequest)?
             .start_call(self.snapshot.account_instance, room_id, video, false)
     }
+    pub fn accept_call(
+        &self,
+        room_id: String,
+        video: bool,
+    ) -> Result<(), twayblade_core::calls::CallError> {
+        let backend = self
+            .backend
+            .as_ref()
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?;
+        backend.accept_call(self.snapshot.account_instance, room_id.clone(), video)?;
+        backend.incoming_action(
+            self.snapshot.account_instance,
+            twayblade_core::calls::IncomingAction::Dismiss(room_id),
+        )
+    }
+    pub fn decline_call(&self, room_id: String) -> Result<(), twayblade_core::calls::CallError> {
+        self.backend
+            .as_ref()
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?
+            .incoming_action(
+                self.snapshot.account_instance,
+                twayblade_core::calls::IncomingAction::Decline(room_id),
+            )
+    }
+    pub fn dismiss_incoming(
+        &self,
+        room_id: String,
+    ) -> Result<(), twayblade_core::calls::CallError> {
+        self.backend
+            .as_ref()
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?
+            .incoming_action(
+                self.snapshot.account_instance,
+                twayblade_core::calls::IncomingAction::Dismiss(room_id),
+            )
+    }
     pub fn join_call(&self, room_id: String) -> Result<(), twayblade_core::calls::CallError> {
         self.backend
             .as_ref()

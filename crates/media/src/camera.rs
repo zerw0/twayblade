@@ -7,7 +7,7 @@ use crate::{CaptureSource, Device, MediaError};
 )]
 mod macos;
 #[cfg(target_os = "macos")]
-pub use macos::{Camera, devices};
+pub use macos::{Camera, default_device, devices};
 #[cfg(not(target_os = "macos"))]
 pub fn devices() -> Vec<Device> {
     Vec::new()
@@ -28,4 +28,9 @@ impl CaptureSource for Camera {
         unreachable!("unsupported capture cannot be constructed")
     }
     fn stop(&mut self) {}
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn default_device() -> Option<String> {
+    None
 }

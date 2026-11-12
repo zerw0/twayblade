@@ -3,10 +3,7 @@
     reason = "Call contracts for the UI contributor; native call views are owned by the UI contributor"
 )]
 use super::{Account, Backend, Snapshot, State, publish};
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, watch};
 const QUEUE_CAPACITY: usize = 32;
 use twayblade_core::calls::{
@@ -57,72 +54,57 @@ impl Backend {
         video: bool,
         join: bool,
     ) -> Result<(), CallError> {
-        let mut state = self.state.lock().map_err(|_| CallError::StaleRequest)?;
-        let account = state
-            .account
-            .clone()
-            .filter(|a| a.instance_id() == expected_account)
+        launch_call(
+            self.runtime.handle(),
+            &self.state,
+            &self.updates,
+            expected_account,
+            room,
+            video,
+            join,
+            None,
+        )
+    }
+    pub(crate) fn accept_call(
+        &self,
+        expected: u128,
+        room: String,
+        video: bool,
+    ) -> Result<(), CallError> {
+        let invitation = self
+            .updates
+            .borrow()
+            .incoming_calls
+            .iter()
+            .find(|c| c.room_id == room)
+            .map(|c| c.event_id.clone())
             .ok_or(CallError::StaleRequest)?;
-        if state.call_control.is_some() {
-            return Err(CallError::AlreadyActive);
+        launch_call(
+            self.runtime.handle(),
+            &self.state,
+            &self.updates,
+            expected,
+            room,
+            video,
+            true,
+            Some(&invitation),
+        )
+    }
+    pub(crate) fn incoming_action(
+        &self,
+        expected: u128,
+        action: twayblade_core::calls::IncomingAction,
+    ) -> Result<(), CallError> {
+        let state = self.state.lock().map_err(|_| CallError::StaleRequest)?;
+        if state.account.as_ref().map(Account::instance_id) != Some(expected) {
+            return Err(CallError::StaleRequest);
         }
-        if !account.call_room_joined(&room) {
-            return Err(CallError::InvalidRoom);
-        }
-        state.cancel_call();
-        let ticket = CallTicket {
-            account: expected_account,
-            request: state.call_request,
-        };
-        let (tx, rx) = mpsc::channel(QUEUE_CAPACITY);
-        state.call_control = Some(tx);
-        publish(&self.updates, |v| {
-            v.call = Some(CallState {
-                local: Default::default(),
-                devices: Default::default(),
-                video_tracks: Vec::new(),
-                room_id: room.clone(),
-                kind: CallKind::Group,
-                phase: CallPhase::Starting,
-                participants: Vec::new(),
-                muted: None,
-                video: None,
-                screen_sharing: None,
-                error: None,
-            })
-        });
-        let shared = self.state.clone();
-        let updates = self.updates.clone();
-        state.call_task = Some(self.runtime.spawn(async move {
-            let result = run(
-                account,
-                room,
-                video,
-                join,
-                ticket,
-                shared.clone(),
-                updates.clone(),
-                rx,
-            )
-            .await;
-            let Ok(mut state) = shared.lock() else {
-                return;
-            };
-            if !state.accepts_call(ticket) {
-                return;
-            }
-            state.call_control = None;
-            publish(&updates, |v| {
-                if let Some(call) = &mut v.call {
-                    call.phase = CallPhase::Ended(match result {
-                        Ok(reason) => reason,
-                        Err(_) => EndReason::Failed,
-                    });
-                    call.error = result.err();
-                }
-            });
-        }));
-        Ok(())
+        state
+            .incoming_control
+            .as_ref()
+            .ok_or(CallError::ControlUnavailable)?
+            .try_send(action)
+            .map_err(|_| CallError::ControlUnavailable)
     }
     pub(crate) fn call_control(&self, expected: u128, control: Control) -> Result<(), CallError> {
         let state = self.state.lock().map_err(|_| CallError::StaleRequest)?;
@@ -150,15 +132,113 @@ impl Backend {
         Ok(())
     }
 }
+#[allow(clippy::too_many_arguments)]
+fn launch_call(
+    runtime: &tokio::runtime::Handle,
+    shared: &Arc<Mutex<State>>,
+    updates: &watch::Sender<Snapshot>,
+    expected_account: u128,
+    room: String,
+    video: bool,
+    join: bool,
+    invitation: Option<&str>,
+) -> Result<(), CallError> {
+    let mut state = shared.lock().map_err(|_| CallError::StaleRequest)?;
+    let account = state
+        .account
+        .clone()
+        .filter(|a| a.instance_id() == expected_account)
+        .ok_or(CallError::StaleRequest)?;
+    if let Some(id) = invitation
+        && !updates.borrow().incoming_calls.iter().any(|c| {
+            c.event_id == id
+                && c.room_id == room
+                && c.expires > twayblade_core::calls::ringing::now_ms()
+        })
+    {
+        return Err(CallError::StaleRequest);
+    }
+    if state.call_control.is_some() {
+        return Err(CallError::AlreadyActive);
+    }
+    if !account.call_room_joined(&room) {
+        return Err(CallError::InvalidRoom);
+    }
+    state.cancel_call();
+    let ticket = CallTicket {
+        account: expected_account,
+        request: state.call_request,
+    };
+    let (tx, rx) = mpsc::channel(QUEUE_CAPACITY);
+    state.call_control = Some(tx);
+    publish(updates, |v| {
+        v.call = Some(CallState {
+            events: Vec::new(),
+            local: Default::default(),
+            devices: Default::default(),
+            video_tracks: Vec::new(),
+            room_id: room.clone(),
+            kind: CallKind::Group,
+            phase: CallPhase::Starting,
+            participants: Vec::new(),
+            muted: None,
+            video: None,
+            screen_sharing: None,
+            error: None,
+        })
+    });
+    let shared = shared.clone();
+    let updates = updates.clone();
+    state.call_task = Some(runtime.spawn(async move {
+        let result = run(
+            account,
+            room,
+            video,
+            join,
+            ticket,
+            shared.clone(),
+            updates.clone(),
+            rx,
+        )
+        .await;
+        let Ok(mut state) = shared.lock() else {
+            return;
+        };
+        if !state.accepts_call(ticket) {
+            return;
+        }
+        state.call_control = None;
+        publish(&updates, |v| {
+            if let Some(call) = &mut v.call {
+                call.phase = CallPhase::Ended(match result {
+                    Ok(reason) => reason,
+                    Err(_) => EndReason::Failed,
+                });
+                call.error = result.err();
+            }
+        });
+    }));
+    Ok(())
+}
 pub(super) fn observe(backend: &Backend, state: &mut State, account: Account) {
+    use futures_util::StreamExt;
     let updates = backend.updates.clone();
     let shared = backend.state.clone();
     let instance = account.instance_id();
+    let (actions, receive) = mpsc::channel(32);
+    state.incoming_control = Some(actions);
+    state
+        .tasks
+        .push(backend.runtime.spawn(incoming_notifications(
+            account.clone(),
+            backend.state.clone(),
+            backend.updates.clone(),
+            backend.notification_config.subscribe(),
+        )));
     state.tasks.push(backend.runtime.spawn(async move {
-        let mut tick = tokio::time::interval(Duration::from_secs(1));
-        loop {
-            tick.tick().await;
-            let calls = account.room_calls().await;
+        let activity = account.call_activity(receive);
+        tokio::pin!(activity);
+        while let Some(activity) = activity.next().await {
             let Ok(mut state) = shared.lock() else {
                 return;
             };
@@ -179,11 +259,13 @@ pub(super) fn observe(backend: &Backend, state: &mut State, account: Account) {
                 {
                     call.phase = CallPhase::Ended(EndReason::RoomLeft);
                 }
-                v.room_calls = calls;
+                v.room_calls = activity.room_calls;
+                v.incoming_calls = activity.incoming_calls;
             });
         }
     }));
 }
+
 fn update(
     shared: &Mutex<State>,
     updates: &watch::Sender<Snapshot>,
@@ -212,14 +294,19 @@ async fn run(
     updates: watch::Sender<Snapshot>,
     mut controls: mpsc::Receiver<Control>,
 ) -> Result<EndReason, CallError> {
-    let _ = join; // Start and join use the same room-scoped MatrixRTC session.
     {
         let state = shared.lock().map_err(|_| CallError::StaleRequest)?;
         if !state.accepts_call(ticket) {
             return Err(CallError::StaleRequest);
         }
     }
-    let mut call = NativeCall::start(&account, &room, video).await?.drive();
+    let mut native = NativeCall::start(&account, &room, video).await?;
+    if !join {
+        tokio::time::timeout(std::time::Duration::from_secs(10), native.ring(video))
+            .await
+            .map_err(|_| CallError::TransportFailed)??;
+    }
+    let mut call = native.drive();
     {
         let mut state = shared.lock().map_err(|_| CallError::StaleRequest)?;
         if !state.accepts_call(ticket) {
@@ -254,6 +341,148 @@ async fn run(
     }
 }
 
+struct IncomingNotifications {
+    pending: std::collections::HashMap<String, (String, tokio::task::AbortHandle)>,
+}
+impl Drop for IncomingNotifications {
+    fn drop(&mut self) {
+        let ids: Vec<_> = self
+            .pending
+            .drain()
+            .map(|(_, (id, task))| {
+                task.abort();
+                id
+            })
+            .collect();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                for id in ids {
+                    twayblade_platform::notifications::dismiss(&id).await;
+                }
+            });
+        }
+    }
+}
+/// Native notification delivery stays on the backend runtime. Ringtone playback
+/// belongs to the views; no audio assets or repeating sound are started here.
+async fn incoming_notifications(
+    account: Account,
+    shared: Arc<Mutex<State>>,
+    updates: watch::Sender<Snapshot>,
+    config: watch::Receiver<super::notifications::NotificationConfig>,
+) {
+    use std::collections::HashSet;
+    use twayblade_platform::notifications as os;
+    let mut snapshots = updates.subscribe();
+    let mut delivered = IncomingNotifications {
+        pending: Default::default(),
+    };
+    let mut seen = HashSet::new();
+    let mut responses = tokio::task::JoinSet::new();
+    loop {
+        let snapshot = snapshots.borrow_and_update().clone();
+        if snapshot.account_instance != account.instance_id() || snapshot.user_id.is_empty() {
+            break;
+        }
+        let active: HashSet<_> = snapshot
+            .incoming_calls
+            .iter()
+            .map(|c| c.event_id.clone())
+            .collect();
+        let removed: Vec<_> = delivered
+            .pending
+            .keys()
+            .filter(|id| !active.contains(*id))
+            .cloned()
+            .collect();
+        for key in removed {
+            if let Some((id, task)) = delivered.pending.remove(&key) {
+                task.abort();
+                os::dismiss(&id).await;
+            }
+        }
+        seen.retain(|id| active.contains(id));
+        for call in &snapshot.incoming_calls {
+            if !call.ringing || !seen.insert(call.event_id.clone()) {
+                continue;
+            }
+            let live = config.borrow().clone();
+            if !live.device.enabled
+                || snapshot.notifications.room_mode(&call.room_id)
+                    == twayblade_core::notifications::RoomMode::Mute
+                || os::permission().await != os::Permission::Granted
+            {
+                continue;
+            }
+            let title = if live.device.preview {
+                format!("{} · {}", call.caller_name, call.room_name)
+            } else {
+                "Twayblade".into()
+            };
+            let notification = os::Notification {
+                title,
+                body: "Incoming call".into(),
+                sound: live.device.sound,
+                action_label: "Open",
+                target: os::Activation {
+                    account: account.instance_id(),
+                    room: call.room_id.clone(),
+                    thread: None,
+                },
+                launch: Some(os::LaunchActivation::new(
+                    account.notification_identity(),
+                    call.room_id.clone(),
+                    None,
+                )),
+            };
+            if let Ok(notification) = os::notify_call(notification).await {
+                let event = call.event_id.clone();
+                let expires = call.expires;
+                let abort = responses.spawn(async move {
+                    let result = tokio::time::timeout(
+                        std::time::Duration::from_millis(
+                            expires.saturating_sub(twayblade_core::calls::ringing::now_ms()),
+                        ),
+                        notification.response,
+                    )
+                    .await
+                    .ok()
+                    .flatten();
+                    (event, result)
+                });
+                delivered
+                    .pending
+                    .insert(call.event_id.clone(), (notification.id, abort));
+            }
+        }
+        tokio::select! {
+            changed = snapshots.changed() => {if changed.is_err() {break;}}
+            Some(result) = responses.join_next(), if !responses.is_empty() => {
+                if let Ok((event,Some(response))) = result {
+                    // A click racing expiry/removal must never answer a later call.
+                    let current = updates.borrow().clone();
+                    if current.account_instance != account.instance_id() || !current.incoming_calls.iter().any(|c|c.event_id == event && c.expires > twayblade_core::calls::ringing::now_ms()) {continue;}
+                    let target = response.target;
+                    match response.action {
+                        os::NotificationAction::Accept => {
+                            let _ = launch_call(&tokio::runtime::Handle::current(), &shared, &updates, account.instance_id(), target.room.clone(), false, true, Some(&event));
+                        }
+                        os::NotificationAction::Decline => {
+                            if let Ok(state) = shared.lock() && state.account.as_ref().map(Account::instance_id) == Some(account.instance_id()) && let Some(control) = &state.incoming_control { let _ = control.try_send(twayblade_core::calls::IncomingAction::Decline(target.room.clone())); }
+                        }
+                        os::NotificationAction::Open => {}
+                    }
+                    super::notifications::publish_click(&updates,target);
+                }
+            }
+        }
+    }
+    for (_, (id, task)) in delivered.pending.drain() {
+        task.abort();
+        os::dismiss(&id).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,7 +501,7 @@ mod tests {
         assert!(state.call_control.is_none());
         runtime.block_on(async {
             assert!(rx.recv().await.is_none());
-            tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
                 while !aborted.is_finished() {
                     tokio::task::yield_now().await;
                 }

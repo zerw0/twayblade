@@ -46,9 +46,20 @@ pub struct Notification {
     pub target: Activation,
     pub launch: Option<LaunchActivation>,
 }
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum NotificationAction {
+    #[default]
+    Open,
+    Accept,
+    Decline,
+}
+pub struct NotificationResponse {
+    pub target: Activation,
+    pub action: NotificationAction,
+}
 pub struct PendingNotification {
     pub id: String,
-    pub response: BoxFuture<'static, Option<Activation>>,
+    pub response: BoxFuture<'static, Option<NotificationResponse>>,
 }
 #[derive(Debug, thiserror::Error)]
 #[error("native_notification_unavailable")]
@@ -62,7 +73,14 @@ pub async fn request_permission() -> Permission {
 }
 pub async fn notify(notification: Notification) -> Result<PendingNotification, NotificationError> {
     let id = format!("{:016x}", uuid::Uuid::new_v4().as_u64_pair().0);
-    native::notify(id, notification).await
+    native::notify(id, notification, false).await
+}
+/// Calls expose native actions where implemented; OS Focus/DND owns presentation.
+pub async fn notify_call(
+    notification: Notification,
+) -> Result<PendingNotification, NotificationError> {
+    let id = format!("{:016x}", uuid::Uuid::new_v4().as_u64_pair().0);
+    native::notify(id, notification, true).await
 }
 pub async fn dismiss(id: &str) {
     native::dismiss(id).await;
