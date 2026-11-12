@@ -639,6 +639,9 @@ M4b — keyboard shortcuts UI (2026-11-12):
 - Review fixes to the technical branch: the quote binding `cmd-shift->` could never match (GPUI matches the typed `>` without shift), now `cmd->` / `ctrl-shift-.`; Ctrl+Alt+↑/↓ is taken by Kit's extra-cursor binding on Windows and reserved by Linux desktops, so history uses Alt+↑/↓ there; "Cancel reply / edit" became "Cancel edit" because Escape does not cancel a reply. Removed the placeholder `dead_code` allowances.
 - Checks: fmt, strict Clippy and workspace tests, including offline UI tests that ⌘B and ⌘I reach the main and thread composers through the real bindings (and ⌘I no longer opens room details) and that the Keyboard Shortcuts action opens Settings at Keyboard. Not verified: sent-message history against a server, non-US keyboard layouts for ⌘>, Linux and Windows.
 
+Room-open stop-gap (2026-11-12, Claude):
+- Rooms could stay on "Loading conversation…" forever with sync still running. A process sample showed no deadlock: an await before the first timeline snapshot never completed. Each open attempt (timeline build plus subscribe) now has 15 s; on timeout the room shows `TimelineStatus::Retrying` ("Still loading. Check your connection; trying again…") and retries after 1 s, doubling to 30 s. While retrying, selecting the room starts a fresh load. Root cause not established; tracked as fix/room-open-hang.
+
 Not yet verified:
 - Physical GUI checks of logout, pagination, IME and VoiceOver.
 - CI on any host; Linux and Windows builds and runs.
