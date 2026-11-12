@@ -24,6 +24,10 @@ tokio-tungstenite = { version = "=0.29.0", default-features = false, features = 
 async-trait = "=0.1.92"
 url.workspace = true
 
+# Screen sharing through xdg-desktop-portal needs a GLib main loop on Linux.
+[target.'cfg(target_os = "linux")'.dependencies]
+livekit = { version = "=0.10.1", features = ["rustls-tls-native-roots", "glib-main-loop"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "=0.6.5"
 objc2-foundation = { version = "=0.3.2", features = ["NSArray", "NSDictionary", "NSValue", "NSString"] }

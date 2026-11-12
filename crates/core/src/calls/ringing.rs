@@ -436,6 +436,7 @@ mod tests {
             video: None,
             connection_quality: None,
             media_blocked: false,
+            screen: false,
         };
         let mut active = ActiveCall {
             participants: vec![peer("@a:test", "A")],

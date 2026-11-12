@@ -135,6 +135,9 @@ impl MatrixApp {
             )
     }
     pub fn call_video_handle(&self, id: &str) -> Option<twayblade_core::calls::LatestFrame> {
+        if let Some(frame) = self.preview_frames.get(id) {
+            return Some(frame.clone());
+        }
         self.backend
             .as_ref()?
             .call_video_handle(self.snapshot.account_instance, id)
@@ -146,6 +149,15 @@ impl MatrixApp {
             .call_control(
                 self.snapshot.account_instance,
                 backend::calls::Control::Muted(muted),
+            )
+    }
+    pub fn set_screen_share(&self, share: bool) -> Result<(), twayblade_core::calls::CallError> {
+        self.backend
+            .as_ref()
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?
+            .call_control(
+                self.snapshot.account_instance,
+                backend::calls::Control::Screen(share),
             )
     }
     pub fn set_video(&self, video: bool) -> Result<(), twayblade_core::calls::CallError> {
@@ -299,6 +311,10 @@ pub(super) struct MatrixApp {
     pub(super) call_tiles: HashMap<String, Entity<crate::ui::calls::VideoTile>>,
     /// Repaints once a second during a call for its duration.
     pub(super) call_clock: Option<Task<()>>,
+    /// The screen share the user chose to show large, by track ID.
+    pub(super) call_screen_focus: Option<String>,
+    /// Generated frames for preview captures, by track ID.
+    pub(super) preview_frames: HashMap<String, twayblade_core::calls::LatestFrame>,
     /// The ended-call summary was closed.
     pub(super) call_end_dismissed: bool,
     /// The newest device notice the user dismissed.
@@ -613,6 +629,8 @@ impl MatrixApp {
             selection_trace: None,
             call_tiles: HashMap::new(),
             call_clock: None,
+            call_screen_focus: None,
+            preview_frames: HashMap::new(),
             call_end_dismissed: false,
             call_event_seen: 0,
             room_loading: None,

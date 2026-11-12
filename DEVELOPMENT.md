@@ -95,7 +95,8 @@ sudo apt-get update
 sudo apt-get install -y build-essential pkg-config cmake libdbus-1-dev \
   libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-dev \
   libxcursor-dev libxi-dev libxrandr-dev libgl1-mesa-dev libvulkan-dev \
-  libfontconfig1-dev libfreetype6-dev libssl-dev libxcb1-dev libxkbfile-dev
+  libfontconfig1-dev libfreetype6-dev libssl-dev libxcb1-dev libxkbfile-dev \
+  libglib2.0-dev
 cargo run --locked -p twayblade
 ```
 

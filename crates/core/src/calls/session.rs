@@ -8,11 +8,12 @@ use super::{
 use crate::auth::Account;
 use tokio::sync::OwnedSemaphorePermit;
 use twayblade_media::{
-    MediaError, NativeMedia,
+    LOCAL_SCREEN, MediaError, NativeMedia,
     livekit::{
         self,
         prelude::{RoomEvent, TrackSource},
     },
+    screen::ScreenStatus,
 };
 
 pub enum NativeControl {
@@ -21,6 +22,8 @@ pub enum NativeControl {
     Input(String),
     Output(String),
     Camera(String),
+    /// Start (opening the system picker where there is one) or stop sharing.
+    Screen(bool),
     Leave,
 }
 
@@ -46,6 +49,8 @@ pub struct NativeCall {
     device_changes: tokio::sync::watch::Receiver<u64>,
     permission_tick: tokio::time::Interval,
     event_serial: u64,
+    /// Capture status while a screen share is being chosen or sent.
+    screen_events: Option<tokio::sync::mpsc::Receiver<ScreenStatus>>,
 }
 /// After a rotation, keep encrypting with the previous key this long so the
 /// remaining members receive the new one first (matrix-js-sdk MatrixRTCSession
@@ -191,6 +196,7 @@ impl NativeCall {
             device_changes: twayblade_platform::media_devices::changes(),
             permission_tick: tokio::time::interval(std::time::Duration::from_secs(2)),
             event_serial: 0,
+            screen_events: None,
             ring: None,
             declines,
             _decline_guard: decline_guard,
@@ -325,6 +331,18 @@ impl NativeCall {
                 }
                 self.state.local.camera = Some(id);
             }
+            NativeControl::Screen(true) => {
+                if self.state.local.screen == ScreenShare::Off {
+                    self.screen_events = Some(
+                        self.media
+                            .begin_screen_share()
+                            .await
+                            .map_err(|_| CallError::ScreenUnavailable)?,
+                    );
+                    self.state.local.screen = ScreenShare::Choosing;
+                }
+            }
+            NativeControl::Screen(false) => self.stop_screen().await,
         }
         Ok(())
     }
@@ -341,7 +359,27 @@ impl NativeCall {
         let ring_remaining = self.ring.as_ref().map(|ring| {
             std::time::Duration::from_millis(ring.expires.saturating_sub(super::ringing::now_ms()))
         });
+        let screen = self.screen_events.as_mut();
         tokio::select! {
+            status = async move { match screen { Some(events) => events.recv().await, None => std::future::pending().await } } => {
+                if status == Some(ScreenStatus::Live) && self.state.local.screen == ScreenShare::Choosing {
+                    match self.media.publish_screen().await {
+                        Ok(()) => {
+                            self.state.local.screen = ScreenShare::Live;
+                            self.state.screen_sharing = Some(true);
+                        }
+                        Err(error) => {
+                            self.stop_screen().await;
+                            self.state.error = Some(error.into());
+                        }
+                    }
+                } else if status != Some(ScreenStatus::Live) {
+                    // Picker cancelled, sharing stopped from the system, or capture failed.
+                    self.stop_screen().await;
+                }
+                let current = members(&self.signalling.room).await?;
+                self.project(&current).await;
+            }
             changed = self.device_changes.changed() => {
                 changed.map_err(|_|CallError::DeviceUnavailable)?;
                 self.refresh_devices().await;
@@ -384,8 +422,17 @@ impl NativeCall {
                         self.state.error = self.control(control).await.err();
                     }
                     #[cfg(test)]
-                    Some(DriverCommand::Video(source, response)) => {
+                    Some(DriverCommand::Video(source, false, response)) => {
                         let result = self.media.publish_video(source).await.map_err(CallError::from);
+                        let _ = response.send(result);
+                    }
+                    #[cfg(test)]
+                    Some(DriverCommand::Video(source, true, response)) => {
+                        let result = self.media.publish_screen_source(source).await.map_err(CallError::from);
+                        if result.is_ok() {
+                            self.state.local.screen = ScreenShare::Live;
+                            self.state.screen_sharing = Some(true);
+                        }
                         let _ = response.send(result);
                     }
                 }
@@ -617,6 +664,7 @@ impl NativeCall {
                 .and_then(|m| m.display_name().map(str::to_owned));
             let mut muted = None;
             let mut video = None;
+            let mut screen = false;
             if let Some(peer) = peer {
                 for publication in peer.track_publications().values() {
                     match publication.source() {
@@ -634,6 +682,24 @@ impl NativeCall {
                                     user_id: member.user_id.to_string(),
                                     device_id: member.device_id.clone(),
                                     local: false,
+                                    source: VideoSource::Camera,
+                                });
+                            }
+                        }
+                        TrackSource::Screenshare if !publication.is_muted() => {
+                            screen = true;
+                            if self
+                                .media
+                                .video
+                                .get(&publication.sid().to_string())
+                                .is_some()
+                            {
+                                self.state.video_tracks.push(CallVideoTrack {
+                                    id: publication.sid().to_string(),
+                                    user_id: member.user_id.to_string(),
+                                    device_id: member.device_id.clone(),
+                                    local: false,
+                                    source: VideoSource::Screen,
                                 });
                             }
                         }
@@ -644,18 +710,27 @@ impl NativeCall {
             if local {
                 muted = Some(self.state.local.muted);
                 video = Some(self.state.local.video);
-                for id in self
+                screen = self.state.local.screen == ScreenShare::Live;
+                let mut ids: Vec<String> = self
                     .media
                     .video
                     .ids()
                     .into_iter()
                     .filter(|id| id.starts_with("local:"))
-                {
+                    .collect();
+                ids.sort();
+                for id in ids {
+                    let source = if id.starts_with(LOCAL_SCREEN) {
+                        VideoSource::Screen
+                    } else {
+                        VideoSource::Camera
+                    };
                     self.state.video_tracks.push(CallVideoTrack {
                         id,
                         user_id: member.user_id.to_string(),
                         device_id: member.device_id.clone(),
                         local: true,
+                        source,
                     });
                 }
             }
@@ -673,13 +748,21 @@ impl NativeCall {
                 muted,
                 video,
                 media_blocked: self.media.is_blocked(&member.identity()),
+                screen,
                 connection_quality,
             });
         }
         self.state.devices = self.media.devices();
     }
+    async fn stop_screen(&mut self) {
+        self.screen_events = None;
+        self.media.stop_screen_share().await;
+        self.state.local.screen = ScreenShare::Off;
+        self.state.screen_sharing = Some(false);
+    }
     pub async fn leave(&mut self) -> Result<(), CallError> {
         self.ring = None;
+        self.screen_events = None;
         self.media.close().await;
         self.signalling.leave().await?;
         self.state.phase = CallPhase::Ended(EndReason::Left);
@@ -704,9 +787,11 @@ pub struct CallHandle {
 }
 enum DriverCommand {
     Control(NativeControl),
+    /// Fixture media: a generated camera, or a generated screen share.
     #[cfg(test)]
     Video(
         twayblade_media::livekit::webrtc::video_source::RtcVideoSource,
+        bool,
         tokio::sync::oneshot::Sender<Result<(), CallError>>,
     ),
 }
@@ -764,10 +849,11 @@ impl CallHandle {
     pub(crate) async fn publish_video(
         &self,
         source: twayblade_media::livekit::webrtc::video_source::RtcVideoSource,
+        screen: bool,
     ) -> Result<(), CallError> {
         let (send, receive) = tokio::sync::oneshot::channel();
         self.commands
-            .send(DriverCommand::Video(source, send))
+            .send(DriverCommand::Video(source, screen, send))
             .await
             .map_err(|_| CallError::ControlUnavailable)?;
         receive.await.map_err(|_| CallError::ControlUnavailable)?
