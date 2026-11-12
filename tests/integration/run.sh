@@ -17,6 +17,8 @@ compose=(docker --context "$matrix_context" compose -f tests/integration/compose
 case "${1:-test}" in
     call)
         mkdir -p test-data/local/integration
+        # The headless Element peer's pinned browser lives under target/; restore it after a clean.
+        PLAYWRIGHT_BROWSERS_PATH=target/playwright tests/integration/browser/node_modules/.bin/playwright install chromium
         "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py generate
         "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py call-config
         trap '"${compose[@]}" --profile call stop element-call call-proxy lk-jwt-service livekit synapse' EXIT
