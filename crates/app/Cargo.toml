@@ -24,6 +24,7 @@ directories.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 url.workspace = true
+tracing = "0.1"
 
 [dev-dependencies]
 matrix-sdk.workspace = true
