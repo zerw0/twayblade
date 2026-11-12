@@ -261,7 +261,13 @@ async fn room_open_stalled_request_drop_and_selection_cancellation_recover() {
     proxy.fault("stall", "encryption").await;
     let mut updates = Box::pin(account.conversation_updates(id.clone(), 1));
     let snapshot = checked(
-        tokio::time::timeout(Duration::from_secs(12), updates.next()).await,
+        // A stalled request is cut off by the room-open limit (15 s), not the
+        // 30 s request timeout.
+        tokio::time::timeout(
+            crate::conversation::OPEN_TIMEOUT + Duration::from_secs(3),
+            updates.next(),
+        )
+        .await,
         "stalled response deadline",
     )
     .expect("retry snapshot");

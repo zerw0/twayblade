@@ -222,9 +222,11 @@ have independent roots. There is no claim that a crypto-lease heartbeat alone
 identifies the cause of a room-open wait.
 
 The 15-second open budget and base 1–30-second backoff remain; parsed Matrix
-rate-limit retry-after hints can extend that delay. Interactive SDK HTTP
-requests make one attempt with a 10-second timeout, so transient 5xx/rate-limit
-responses return control to the app rather than sleeping invisibly in the SDK.
+rate-limit retry-after hints can extend that delay. SDK HTTP requests
+that use the client default make one attempt (SDK default 30-second timeout),
+so transient 5xx/rate-limit responses return control to the app rather than
+sleeping invisibly in the SDK for up to 15 minutes. A stalled response is cut
+off by the 15-second open budget.
 SDK operations that explicitly supply a request configuration, such as sliding
 sync (long polling) or member fetching, retain their own limits. Unknown room
 encryption state is fetched through the SDK before timeline construction;

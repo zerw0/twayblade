@@ -51,8 +51,8 @@ the runner stops its Synapse service, including on failure.
 
 The SDK-default control stays pending on a transient state fetch. The fixed
 opener reports retry promptly, respects Matrix retry-after delays, and opens
-after recovery without reselection. Additional cases cover a 10-second stalled
-request, abrupt disconnect, selection cancellation mid-fetch and reopen,
+after recovery without reselection. Additional cases cover a stalled
+request (cut off by the 15-second open budget), abrupt disconnect, selection cancellation mid-fetch and reopen,
 unknown encryption state, a competing event-cache holder over the same store,
 a held/expired crypto lease, a room opened before first sync, and a room opened
 while sync is stalled/restarting. The 15-second outer opening guard stays.
