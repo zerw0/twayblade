@@ -1209,6 +1209,25 @@ impl MatrixApp {
             .filter(move |call| busy_room != Some(call.room_id.as_str()))
     }
 
+    /// Rings while the card shows a ringing call, unless you're already in a
+    /// call, the room is muted or notification sound is off.
+    pub(crate) fn sync_ringtone(&mut self) {
+        let ring = !self.preview
+            && self.preferences.notifications.sound
+            && self.live_call().is_none()
+            && self.shown_incoming().any(|call| {
+                call.ringing
+                    && call.notify_type == NotifyType::Ring
+                    && self.snapshot.notifications.room_mode(&call.room_id)
+                        != twayblade_core::notifications::RoomMode::Mute
+            });
+        if !ring {
+            self.ringtone = None;
+        } else if self.ringtone.is_none() {
+            self.ringtone = twayblade_platform::ringtone::start();
+        }
+    }
+
     /// Keyboard shortcuts act on the current call or the call on the card.
     pub(crate) fn call_shortcut(
         &mut self,

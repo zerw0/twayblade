@@ -7,6 +7,7 @@ pub mod diagnostics;
 pub mod media_devices;
 mod motion;
 pub mod notifications;
+pub mod ringtone;
 pub use motion::{reduce_motion, reduce_motion_changes};
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]

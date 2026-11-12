@@ -228,6 +228,7 @@ impl Render for MatrixApp {
             viewer.clamp_pan(window);
         }
         self.sync_call_views(cx);
+        self.sync_ringtone();
         self.sync_room_loading(cx);
         if self.security_open {
             self.security_open = false;
