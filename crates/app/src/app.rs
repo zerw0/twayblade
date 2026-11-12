@@ -2146,3 +2146,29 @@ impl MatrixApp {
         );
     }
 }
+
+// Technical action contracts only; composer/menu/keyboard wiring belongs to Claude.
+#[allow(dead_code, reason = "Message editing action contracts for the views")]
+impl MatrixApp {
+    pub fn begin_edit(&self, event_id: String) -> Result<(), crate::backend::ServiceError> {
+        self.backend
+            .as_ref()
+            .ok_or_else(|| crate::backend::ServiceError::Operation {
+                message: "Sign in first.".into(),
+            })?
+            .begin_edit(event_id)
+    }
+    pub fn save_edit(&self, text: String) -> Result<(), crate::backend::ServiceError> {
+        self.backend
+            .as_ref()
+            .ok_or_else(|| crate::backend::ServiceError::Operation {
+                message: "Sign in first.".into(),
+            })?
+            .save_edit(text)
+    }
+    pub fn cancel_edit(&self) {
+        if let Some(backend) = &self.backend {
+            backend.cancel_edit();
+        }
+    }
+}

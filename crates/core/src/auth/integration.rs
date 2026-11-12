@@ -2587,3 +2587,321 @@ async fn encrypted_notification_delivery_and_private_preview() {
     bob_sync.abort();
     eprintln!("PASS: encrypted SDK notification resolution, typed sender/body and private preview");
 }
+
+#[tokio::test]
+#[ignore = "requires isolated Synapse fixture"]
+async fn encrypted_message_editing_sources_navigation_and_threads() {
+    use crate::conversation::{DeliveryState, EditError};
+    use matrix_sdk::ruma::events::{
+        relation::Thread,
+        room::message::{Relation, RoomMessageEventContent as Content},
+    };
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-data/local/integration");
+    let fixture: Fixture = checked(
+        serde_json::from_slice(&checked(
+            tokio::fs::read(root.join("fixture.json")).await,
+            "fixture",
+        )),
+        "parse fixture",
+    );
+    assert!(fixture.homeserver == "https://127.0.0.1:18448");
+    let cert = checked(
+        Certificate::from_pem(&checked(tokio::fs::read(root.join("ca.crt")).await, "CA")),
+        "parse CA",
+    );
+    let run = root.join(format!("editing-{}", Uuid::new_v4()));
+    let mut accounts = Vec::new();
+    // Two independent stores/devices of Alice prove edits from another device;
+    // Bob proves the negative ownership rule.
+    for (store, user, password) in [
+        ("alice", "alice", &fixture.alice),
+        ("alice2", "alice", &fixture.alice),
+        ("bob", "bob", &fixture.bob),
+    ] {
+        let client = test_client(&run, store, &Uuid::new_v4().to_string(), &cert).await;
+        checked(
+            client.matrix_auth().login_username(user, password).await,
+            "login",
+        );
+        accounts.push(Account::new(
+            client,
+            run.join(store),
+            secrets::SessionStore::new("twayblade.integration.editing-unused"),
+            Arc::new(Mutex::new(())),
+        ));
+    }
+    let alice = &accounts[0];
+    let other = &accounts[1];
+    let bob = &accounts[2];
+    let tasks: Vec<_> = accounts.iter().map(sync).collect();
+    let encryption = InitialStateEvent::new(
+        Default::default(),
+        RoomEncryptionEventContent::with_recommended_defaults(),
+    );
+    let mut request = create_room::v3::Request::new();
+    request.invite = vec![bob.client.user_id().expect("Bob").to_owned()];
+    request.initial_state = vec![checked(Raw::new(&encryption), "encryption").cast()];
+    let room = checked(alice.client.create_room(request).await, "room");
+    let id = room.room_id();
+    checked(bob.client.join_room_by_id(id).await, "join");
+    for account in &accounts {
+        wait_for_room(account, id).await;
+        account.select_room(Some(id.as_str()));
+    }
+    let mut main = Box::pin(alice.conversation_updates(id.to_string(), 1));
+    let mut second = Box::pin(other.conversation_updates(id.to_string(), 1));
+    let mut foreign = Box::pin(bob.conversation_updates(id.to_string(), 1));
+    let conversation = wait_snapshot(&mut main, |s| s.conversation.is_some(), "ready")
+        .await
+        .conversation
+        .unwrap();
+    let peer = wait_snapshot(&mut second, |s| s.conversation.is_some(), "peer ready")
+        .await
+        .conversation
+        .unwrap();
+    let foreign_conversation =
+        wait_snapshot(&mut foreign, |s| s.conversation.is_some(), "foreign ready")
+            .await
+            .conversation
+            .unwrap();
+    let mut sent_ids = Vec::new();
+    for content in [
+        Content::text_plain("edit plain"),
+        crate::rich_text::compose("**edit markdown**".into()).unwrap(),
+        Content::notice_plain("edit notice"),
+        Content::emote_plain("edit emote"),
+    ] {
+        let source = content.body().to_owned();
+        let event_id = checked(room.send(content).await, "send")
+            .response
+            .event_id
+            .to_string();
+        let snapshot = wait_snapshot(
+            &mut main,
+            |s| {
+                s.messages
+                    .iter()
+                    .any(|m| m.event_id.as_deref() == Some(&event_id) && m.editable)
+            },
+            "editable projection",
+        )
+        .await;
+        let stable_id = snapshot
+            .messages
+            .iter()
+            .find(|m| m.event_id.as_deref() == Some(&event_id))
+            .unwrap()
+            .id
+            .clone();
+        assert!(checked(conversation.edit_source(&event_id).await, "source") == source);
+        assert!(matches!(
+            conversation.edit(&event_id, source.clone()).await,
+            Err(EditError::Unchanged)
+        ));
+        checked(
+            conversation
+                .edit(&event_id, format!("{source} changed"))
+                .await,
+            "edit",
+        );
+        let updated = wait_snapshot(
+            &mut main,
+            |s| {
+                s.messages.iter().any(|m| {
+                    m.event_id.as_deref() == Some(&event_id)
+                        && m.edited
+                        && m.body.ends_with(" changed")
+                })
+            },
+            "latest local version",
+        )
+        .await;
+        assert!(
+            updated
+                .messages
+                .iter()
+                .any(|m| m.id == stable_id && m.edited)
+        );
+        wait_snapshot(
+            &mut second,
+            |s| {
+                s.messages.iter().any(|m| {
+                    m.event_id.as_deref() == Some(&event_id)
+                        && m.edited
+                        && m.body.ends_with(" changed")
+                })
+            },
+            "second device sees edit",
+        )
+        .await;
+        wait_snapshot(
+            &mut foreign,
+            |s| {
+                s.messages
+                    .iter()
+                    .any(|m| m.event_id.as_deref() == Some(&event_id) && m.edited && !m.editable)
+            },
+            "foreign edit rejected",
+        )
+        .await;
+        assert!(matches!(
+            foreign_conversation
+                .edit(&event_id, "forbidden".into())
+                .await,
+            Err(EditError::NotEditable)
+        ));
+        sent_ids.push(event_id);
+    }
+    assert!(conversation.latest_editable(None).await == sent_ids.last().cloned());
+    assert!(conversation.previous_editable(&sent_ids[1]).await.as_ref() == Some(&sent_ids[0]));
+    assert!(conversation.next_editable(&sent_ids[1]).await.as_ref() == Some(&sent_ids[2]));
+    assert!(conversation.previous_editable(&sent_ids[0]).await.is_none());
+    assert!(
+        conversation
+            .next_editable(sent_ids.last().unwrap())
+            .await
+            .is_none()
+    );
+    let media: Content = checked(
+        serde_json::from_value(
+            serde_json::json!({"msgtype":"m.image", "body":"sample.png", "url":"mxc://example.invalid/sample"}),
+        ),
+        "media content",
+    );
+    let media_id = checked(room.send(media).await, "send media")
+        .response
+        .event_id
+        .to_string();
+    wait_snapshot(
+        &mut main,
+        |s| {
+            s.messages
+                .iter()
+                .any(|m| m.event_id.as_deref() == Some(&media_id) && !m.editable)
+        },
+        "media not editable",
+    )
+    .await;
+    assert!(matches!(
+        conversation.edit_source(&media_id).await,
+        Err(EditError::NotEditable)
+    ));
+    checked(
+        room.redact(
+            &matrix_sdk::ruma::EventId::parse(&sent_ids[3]).unwrap(),
+            None,
+            None,
+        )
+        .await,
+        "redact",
+    );
+    wait_snapshot(
+        &mut main,
+        |s| {
+            s.messages
+                .iter()
+                .any(|m| m.event_id.as_deref() == Some(&sent_ids[3]) && !m.editable)
+        },
+        "redacted not editable",
+    )
+    .await;
+    assert!(matches!(
+        conversation.edit_source(&sent_ids[3]).await,
+        Err(EditError::NotEditable)
+    ));
+    // An edit made on the other device must update the original timeline too.
+    checked(
+        peer.edit(&sent_ids[0], "other device edit".into()).await,
+        "edit from second device",
+    );
+    wait_snapshot(
+        &mut main,
+        |s| {
+            s.messages.iter().any(|m| {
+                m.event_id.as_deref() == Some(&sent_ids[0])
+                    && m.body == "other device edit"
+                    && m.edited
+            })
+        },
+        "incoming device edit",
+    )
+    .await;
+    let root_id = matrix_sdk::ruma::EventId::parse(&sent_ids[0]).unwrap();
+    let mut replies = Box::pin(alice.thread_updates(id.to_string(), root_id.to_string(), 2));
+    let mut peer_replies = Box::pin(other.thread_updates(id.to_string(), root_id.to_string(), 2));
+    let thread = wait_snapshot(&mut replies, |s| s.conversation.is_some(), "thread ready")
+        .await
+        .conversation
+        .unwrap();
+    wait_snapshot(
+        &mut peer_replies,
+        |s| s.conversation.is_some(),
+        "peer thread ready",
+    )
+    .await;
+    let mut reply = Content::text_plain("thread edit source");
+    reply.relates_to = Some(Relation::Thread(Thread::plain(
+        root_id.clone(),
+        root_id.clone(),
+    )));
+    let reply_id = checked(room.send(reply).await, "thread send")
+        .response
+        .event_id
+        .to_string();
+    wait_snapshot(
+        &mut replies,
+        |s| {
+            s.messages
+                .iter()
+                .any(|m| m.event_id.as_deref() == Some(&reply_id) && m.editable)
+        },
+        "thread editable",
+    )
+    .await;
+    assert!(
+        thread
+            .latest_editable(Some(root_id.as_str()))
+            .await
+            .as_ref()
+            == Some(&reply_id)
+    );
+    assert!(thread.latest_editable(None).await.is_none());
+    assert!(thread.previous_editable(&reply_id).await.is_none());
+    checked(
+        thread.edit(&reply_id, "**thread changed**".into()).await,
+        "thread edit",
+    );
+    wait_snapshot(
+        &mut peer_replies,
+        |s| {
+            s.messages.iter().any(|m| {
+                m.event_id.as_deref() == Some(&reply_id)
+                    && m.edited
+                    && m.rich.is_some()
+                    && m.body == "**thread changed**"
+            })
+        },
+        "thread peer latest",
+    )
+    .await;
+    // Queued local echoes are never eligible, even though the SDK can edit them.
+    room.send_queue().set_enabled(false);
+    checked(
+        conversation.send("queued edit source".into()).await,
+        "queue",
+    );
+    wait_snapshot(
+        &mut main,
+        |s| {
+            s.messages.iter().any(|m| {
+                m.body == "queued edit source" && m.delivery == DeliveryState::Queued && !m.editable
+            })
+        },
+        "queued not editable",
+    )
+    .await;
+    room.send_queue().set_enabled(true);
+    for task in tasks {
+        task.abort();
+    }
+}
