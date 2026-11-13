@@ -226,6 +226,24 @@ packaging, signing, updates. Exit: clean-machine install, upgrade with session
 retained, uninstall, notification activation. Signed artifacts need release
 credentials and explicit authorization.
 
+Packaging targets (requested 2026-11-13); each needs its own install, upgrade
+and uninstall check on a clean machine, and publishing needs authorization:
+- *macOS:* signed, notarised `.app` in a DMG, plus a Homebrew cask
+  (`brew install --cask twayblade`) in our own tap first, homebrew/cask once
+  eligible. The cask tracks GitHub releases and checksums.
+- *Linux, all major distributions:* Flatpak on Flathub as the universal
+  package (portals for screen sharing, notifications, secrets and the
+  browser); native `.deb` (Debian, Ubuntu and derivatives) and `.rpm` (Fedora,
+  openSUSE) built in CI with correct dependencies (libsecret, PipeWire, glib,
+  GPU/Vulkan stack); an AUR package for Arch; an AppImage for everything else.
+  Desktop entry, icons, AppStream metadata and the `matrix:` URI handler in
+  every package.
+- *Nix:* the flake exports `packages.<system>.default` (the app, built
+  reproducibly from `Cargo.lock`), `apps.default`, and an overlay; NixOS and
+  nix-darwin users can install it from the flake, and nixpkgs submission comes
+  after 1.0. The flake keeps its development shell.
+- *Windows:* signed MSI or MSIX, plus winget.
+
 ## Known technical debt
 
 - Message text is escaped and passed through Kit's Markdown renderer to get
