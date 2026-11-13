@@ -1,0 +1,4 @@
+# libwebrtc (call media) is prebuilt against the static MSVC runtime (/MT), so
+# everything linked with it must use the static runtime too.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

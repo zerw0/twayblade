@@ -100,6 +100,11 @@ sudo apt-get install -y build-essential pkg-config cmake libdbus-1-dev \
 cargo run --locked -p twayblade
 ```
 
+The call media library (libwebrtc) bundles a libc++ that needs clang 21 or
+later; Ubuntu 24.04 ships clang 18. Install clang 21 from
+[apt.llvm.org](https://apt.llvm.org) (or your distribution) and build with
+`CC=clang-21 CXX=clang++-21`.
+
 Run from Wayland or X11 with usable graphics drivers and fonts. GPUI uses its
 Linux graphics backend; this setup has not yet passed Linux native acceptance.
 Preserve `WAYLAND_DISPLAY` or `DISPLAY`, `XDG_RUNTIME_DIR` and your desktop's
@@ -123,6 +128,11 @@ From PowerShell in the checkout:
 rustup component add rustfmt clippy
 cargo run --locked -p twayblade
 ```
+
+`.cargo/config.toml` links the static MSVC runtime (`+crt-static`), which the
+prebuilt call-media library (libwebrtc) requires. A `RUSTFLAGS` environment
+variable replaces that setting, so include `-C target-feature=+crt-static` if
+you set one.
 
 Windows uses the configured Credential Manager backend, with no plaintext
 fallback. Windows native execution, input, notifications, media and packaging
@@ -251,6 +261,12 @@ text input, emoji/accent text, room switching, draft restoration and profile
 open/close. They do not establish VoiceOver/IME or physical platform acceptance.
 CI is defined in `.github/workflows/check.yml`; inspect its actual results before
 claiming it passed. Use `--offline` only after dependencies are cached.
+
+`target/` grows with every dependency update and feature combination. To keep
+it bounded, run cargo through `scripts/cargo-pruned` (needs Python 3), for
+example `scripts/cargo-pruned build --locked -p twayblade`. For each distinct
+command it keeps the latest build and the one before, and deletes everything
+else under `target/<profile>/`. Add `--dry-run` to list what would go.
 
 ## Isolated Matrix integration tests
 

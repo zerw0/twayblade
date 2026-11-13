@@ -231,13 +231,12 @@ and uninstall check on a clean machine, and publishing needs authorization:
 - *macOS:* signed, notarised `.app` in a DMG, plus a Homebrew cask
   (`brew install --cask twayblade`) in our own tap first, homebrew/cask once
   eligible. The cask tracks GitHub releases and checksums.
-- *Linux, all major distributions:* Flatpak on Flathub as the universal
-  package (portals for screen sharing, notifications, secrets and the
-  browser); native `.deb` (Debian, Ubuntu and derivatives) and `.rpm` (Fedora,
-  openSUSE) built in CI with correct dependencies (libsecret, PipeWire, glib,
-  GPU/Vulkan stack); an AUR package for Arch; an AppImage for everything else.
-  Desktop entry, icons, AppStream metadata and the `matrix:` URI handler in
-  every package.
+- *Linux, all major distributions:* native `.deb` (Debian, Ubuntu and
+  derivatives) and `.rpm` (Fedora, openSUSE) built in CI with correct
+  dependencies (libsecret, PipeWire, glib, GPU/Vulkan stack); an AUR package
+  for Arch; an AppImage as the universal package for everything else. Desktop
+  entry, icons, AppStream metadata and the `matrix:` URI handler in every
+  package. No Flatpak: Flathub doesn't accept AI-generated applications.
 - *Nix:* the flake exports `packages.<system>.default` (the app, built
   reproducibly from `Cargo.lock`), `apps.default`, and an overlay; NixOS and
   nix-darwin users can install it from the flake, and nixpkgs submission comes
@@ -249,10 +248,29 @@ GitHub **pre-release** with its artifacts, checksums and a changelog generated
 from the merged pull requests since the previous release (user-facing wording,
 grouped as New, Improved and Fixed, with known gaps stated). A build becomes a
 **stable** release only when the user says so at push time; then the
-pre-release is promoted (no rebuild), the Homebrew cask, Flatpak, AUR and
+pre-release is promoted (no rebuild), the Homebrew cask, AUR and
 winget manifests follow, and Linux/Windows packages are signed. Pre-releases
 never update stable channels. Publishing needs the release credentials and
 the user's authorization.
+
+Updates (requested 2026-11-13): the app checks GitHub releases at launch and
+once a day (no account data sent; off switch in Settings › General) and
+follows the channel it was installed from: stable by default, pre-releases
+only when the user opts in.
+- *Direct downloads* (DMG, AppImage, Windows installer): an in-app updater
+  downloads the new version in the background, verifies its signature and
+  checksum against the release, and offers "Restart to Update"; it never
+  restarts during a call and keeps the session (Keychain/Secret Service), the
+  local store and settings. macOS uses a signed update feed (Sparkle-style,
+  EdDSA-signed); a failed or unverifiable update leaves the current version
+  running and says so.
+- *Package-managed installs* (Homebrew, deb/rpm repositories, AUR, Nix,
+  winget): no self-update, which would fight the package manager. The app
+  shows a quiet update notice with what's new and the command to run
+  (`brew upgrade --cask twayblade`, and so on).
+- The notice and a "What's New" sheet show the release changelog. Verified
+  by upgrading an installed build from one pre-release to the next on each
+  OS, including a tampered download that must be rejected.
 
 ## Known technical debt
 

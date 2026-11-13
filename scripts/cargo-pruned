@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""Run a cargo command, then delete build output no recent build used.
+
+    scripts/cargo-pruned build -p twayblade
+    scripts/cargo-pruned clippy --workspace --all-targets -- -D warnings
+    scripts/cargo-pruned test --workspace
+
+Each distinct command is one kind of build. For every kind, the artifacts of
+its latest run and the run before it are kept; anything else under
+target/<profile>/{deps,build,.fingerprint,incremental} is removed: old
+dependency versions, stale feature combinations, superseded hashes. Kinds
+not run for KIND_DAYS are forgotten. Nothing is pruned after a failed build.
+Pass --dry-run first to see what would go.
+"""
+import contextlib
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+KEEP_PER_KIND = 2
+KIND_DAYS = 7
+HASHED = re.compile(r"^(?:lib)?(.+?)-([0-9a-f]{16})(?:\..*)?$")
+PRUNED = ("deps", "build", ".fingerprint", "incremental")
+
+
+def target_dir() -> Path:
+    if os.environ.get("CARGO_TARGET_DIR"):
+        return Path(os.environ["CARGO_TARGET_DIR"]).resolve()
+    meta = subprocess.run(
+        ["cargo", "metadata", "--format-version", "1", "--no-deps"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return Path(json.loads(meta.stdout)["target_directory"])
+
+
+def unit_hash(path: str) -> str | None:
+    for part in reversed(Path(path).parts):
+        match = HASHED.match(part)
+        if match:
+            return match.group(2)
+    return None
+
+
+def run(args: list[str]) -> tuple[int, set[str]]:
+    """Runs cargo, passing its output through, and collects unit hashes."""
+    # Insert before a `--` so the flag reaches cargo, not rustc or the tests.
+    split = args.index("--") if "--" in args else len(args)
+    command = ["cargo", *args[:split], "--message-format=json-render-diagnostics", *args[split:]]
+    hashes: set[str] = set()
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, text=True)
+    assert process.stdout is not None
+    for line in process.stdout:
+        message = None
+        if line.startswith("{"):
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError:
+                pass
+        if not isinstance(message, dict) or "reason" not in message:
+            sys.stdout.write(line)  # test output and the like
+            continue
+        paths = list(message.get("filenames") or [])
+        if message.get("executable"):
+            paths.append(message["executable"])
+        if message.get("out_dir"):
+            paths.append(message["out_dir"])
+        for path in paths:
+            found = unit_hash(path)
+            if found:
+                hashes.add(found)
+    return process.wait(), hashes
+
+
+def prune(target: Path, kind: str, hashes: set[str], dry_run: bool) -> None:
+    records = target / ".pruned"
+    records.mkdir(exist_ok=True)
+    now = time.time()
+    if not dry_run:
+        (records / f"{kind}-{now:.6f}.json").write_text(json.dumps(sorted(hashes)))
+    keep: set[str] = set(hashes)
+    oldest_kept = now
+    by_kind: dict[str, list[Path]] = {}
+    for record in records.glob("*.json"):
+        by_kind.setdefault(record.name.split("-", 1)[0], []).append(record)
+    for name, runs in by_kind.items():
+        runs.sort(key=lambda p: float(p.stem.split("-", 1)[1]), reverse=True)
+        latest = float(runs[0].stem.split("-", 1)[1])
+        expired = now - latest > KIND_DAYS * 86400
+        for index, record in enumerate(runs):
+            if expired or index >= KEEP_PER_KIND:
+                if not dry_run:
+                    record.unlink()
+                continue
+            keep.update(json.loads(record.read_text()))
+            oldest_kept = min(oldest_kept, float(record.stem.split("-", 1)[1]))
+    freed = 0
+    removed = 0
+    for profile in target.iterdir():
+        if not (profile / "deps").is_dir():
+            continue
+        # Another cargo may be building here; wait for its lock first.
+        with cargo_lock(profile):
+            for area in PRUNED:
+                folder = profile / area
+                if not folder.is_dir():
+                    continue
+                for entry in folder.iterdir():
+                    if area == "incremental":
+                        # Not named by unit hash: drop sessions no kept build touched.
+                        stale = entry.stat().st_mtime < oldest_kept - 60
+                    else:
+                        found = unit_hash(entry.name)
+                        stale = found is not None and found not in keep
+                    if not stale:
+                        continue
+                    size = size_of(entry)
+                    freed += size
+                    removed += 1
+                    if dry_run:
+                        print(f"would remove {entry} ({size / 1e6:.0f} MB)", file=sys.stderr)
+                    elif entry.is_dir() and not entry.is_symlink():
+                        shutil.rmtree(entry, ignore_errors=True)
+                    else:
+                        entry.unlink(missing_ok=True)
+    verb = "would free" if dry_run else "freed"
+    print(f"cargo-pruned: {verb} {freed / 1e9:.1f} GB ({removed} entries)", file=sys.stderr)
+
+
+@contextlib.contextmanager
+def cargo_lock(profile: Path):
+    """Holds cargo's own build lock for `profile`, so nothing is removed
+    while another cargo (another worktree sharing this target) builds."""
+    try:
+        import fcntl
+    except ImportError:  # Windows: no flock; prune unguarded.
+        yield
+        return
+    with open(profile / ".cargo-lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def size_of(path: Path) -> int:
+    if path.is_symlink() or path.is_file():
+        return path.lstat().st_size
+    return sum(p.lstat().st_size for p in path.rglob("*") if p.is_file())
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    dry_run = "--dry-run" in args
+    args = [a for a in args if a != "--dry-run"]
+    if not args:
+        print(__doc__, file=sys.stderr)
+        return 2
+    target = target_dir()
+    status, hashes = run(args)
+    if status != 0 or not hashes:
+        return status
+    kind = hashlib.sha1(" ".join(args).encode()).hexdigest()[:12]
+    prune(target, kind, hashes, dry_run)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -36,8 +36,8 @@ pub(super) fn observe(sender: watch::Sender<bool>) {
     runtime.block_on(async {
         loop {
             let connection = tokio::time::timeout(Duration::from_secs(2),ashpd::zbus::Connection::session()).await;
-            if let Ok(Ok(connection)) = connection {
-                if let Ok(Ok(settings)) = tokio::time::timeout(Duration::from_secs(2),Settings::with_connection(connection.clone())).await {
+            if let Ok(Ok(connection)) = connection
+                && let Ok(Ok(settings)) = tokio::time::timeout(Duration::from_secs(2),Settings::with_connection(connection.clone())).await {
                     let changes = tokio::time::timeout(Duration::from_secs(2),settings.receive_setting_changed()).await;
                     sender.send_replace(preference(&settings).await);
                     if let Ok(Ok(changes)) = changes {
@@ -47,7 +47,6 @@ pub(super) fn observe(sender: watch::Sender<bool>) {
                             _ = connection.closed() => break,
                         } }
                     }
-                }
             }
             tokio::time::sleep(Duration::from_secs(5)).await;
         }

@@ -12,7 +12,7 @@ mod macos;
 pub use macos::{changes, default_audio};
 #[cfg(not(target_os = "macos"))]
 pub fn changes() -> watch::Receiver<u64> {
-    let (send, receive) = watch::channel(0);
+    let (send, receive) = watch::channel(0u64);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(2));
         loop {

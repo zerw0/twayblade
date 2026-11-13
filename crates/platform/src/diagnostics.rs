@@ -71,6 +71,16 @@ impl RotatingFile {
     fn open(path: &Path) -> io::Result<File> {
         let mut options = OpenOptions::new();
         options.create(true).append(true);
+        Self::open_with(path, &mut options)
+    }
+    /// Windows `LockFileEx` needs read or write access; append-only handles
+    /// lack `FILE_WRITE_DATA` and fail with "Access is denied".
+    fn open_lock(path: &Path) -> io::Result<File> {
+        let mut options = OpenOptions::new();
+        options.create(true).read(true).write(true).truncate(false);
+        Self::open_with(path, &mut options)
+    }
+    fn open_with(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
@@ -93,7 +103,7 @@ impl RotatingFile {
         }
         // A preview or a second launch must not race the active log writer's
         // size accounting/rotation. The OS releases this lock on process exit.
-        let lock = Self::open(&directory.join(".diagnostics.lock"))?;
+        let lock = Self::open_lock(&directory.join(".diagnostics.lock"))?;
         lock.try_lock().map_err(io::Error::other)?;
         let file = Self::open(&directory.join("diagnostics.log"))?;
         let bytes = file.metadata()?.len();
