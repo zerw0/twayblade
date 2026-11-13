@@ -1,6 +1,6 @@
 # Twayblade — plan
 
-Updated 2026-11-12. Status: M0 in progress; no milestone exit claimed.
+Updated 2026-11-14. Status: M0 in progress; no milestone exit claimed.
 
 ## Goal
 
@@ -305,6 +305,30 @@ Linux and Windows CI passed on `36f850a`; macOS CI was switched to `macos-15`
 7. **M6 release.** Accessibility pass, packaging, signing, updates.
 
 ## Progress
+
+Nix packaging (2026-11-14, Codex):
+- Flake default/named packages, default apps and an overlay build the release app
+  from `Cargo.lock`; the development shell remains. WebRTC archives are explicit
+  SHA-256-pinned inputs, supplied to the SDK instead of downloaded by its build
+  script. Linux uses clang 21 and a runtime library wrapper; macOS installs a
+  native `.app` with permission metadata and a command-line link. License notices
+  include the full upstream WebRTC notice. Package builds use `cargo-pruned`.
+- Nix outputs cover Apple Silicon macOS and x86_64/aarch64 Linux. The existing
+  pinned Nixpkgs 26.11 rejects Intel macOS, so its previously advertised but
+  unevaluable Nix output is removed; standard Rust Intel macOS support is unchanged.
+  Standard OS setup remains separate from the optional Nix documentation.
+- Compilation/offline verification: fmt, strict all-target/all-feature locked
+  Clippy and workspace tests passed (197 passed; 31 isolated tests ignored).
+- Nix verification: all three systems' package/app/overlay/dev-shell evaluation
+  passed. A native Apple Silicon release build succeeded; installed Mach-O arm64
+  executable/link, production bundle ID/version, microphone/camera declarations
+  and full WebRTC license were checked. A cached invalid source-path evaluation
+  was resolved with `--no-eval-cache`. Documentation changes leave the filtered
+  app derivation unchanged. Review artifact: `/tmp/twayblade-nix-result`.
+- Linux Nix builds/runtime, native Nix GUI/session/notification acceptance, a
+  second byte-identical build, clean-machine installation, signatures/notarization
+  and physical media/permission acceptance remain open. No profile/system install
+  or release publication was performed.
 
 Done (macOS arm64, offline and isolated-server verification only):
 - Cargo workspace (`core`, `platform`, `app`), Nix shell, pinned dependencies.
