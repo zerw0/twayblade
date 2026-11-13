@@ -10329,6 +10329,8 @@ dependencies = [
  "objc2-av-foundation",
  "objc2-foundation 0.3.2",
  "objc2-user-notifications",
+ "reqwest 0.13.5",
+ "semver",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

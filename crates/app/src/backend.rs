@@ -37,6 +37,7 @@ pub(super) use twayblade_core::{
 
 #[derive(Clone, Default)]
 pub(super) struct Snapshot {
+    pub(super) updater: twayblade_platform::updates::Snapshot,
     pub(super) editing: Option<Editing>,
     pub(super) edit_error: Option<String>,
     pub(super) edit_saving: bool,
@@ -212,9 +213,24 @@ impl BrowserLogin {
     }
 }
 
+impl Snapshot {
+    /// Account lifecycle resets retain only global application state.
+    fn clear_account(&mut self, preview_size: previews::PreviewSize) {
+        *self = Self {
+            updater: self.updater.clone(),
+            revision: self.revision,
+            reduce_motion: self.reduce_motion,
+            preview_size,
+            ..Default::default()
+        };
+    }
+}
+
 pub(super) struct Backend {
     _instance: Option<auth::InstanceLock>,
     motion_task: JoinHandle<()>,
+    update_task: JoinHandle<()>,
+    update_config: watch::Sender<twayblade_platform::updates::Preferences>,
     runtime: Runtime,
     state: Arc<Mutex<State>>,
     updates: watch::Sender<Snapshot>,
@@ -416,11 +432,13 @@ fn conversation_failure(error: ConversationError) -> ServiceError {
 impl Backend {
     pub(super) fn new() -> Result<Arc<Self>, ServiceError> {
         let backend = Self::with_lock(Some(auth::lock_instance().map_err(auth_failure)?))?;
-        let size = crate::preferences::Preferences::path()
+        let preferences = crate::preferences::Preferences::path()
             .and_then(|p| crate::preferences::Preferences::load(&p).ok())
-            .map(|p| p.chat.preview_size)
             .unwrap_or_default();
-        backend.apply_preview_size(size)?;
+        backend.apply_preview_size(preferences.chat.preview_size)?;
+        // Unit/UI fixtures never contact the public release service.
+        #[cfg(not(test))]
+        backend.configure_updates(preferences.updates);
         Ok(backend)
     }
 
@@ -443,9 +461,20 @@ impl Backend {
                 }
             }
         });
+        let (update_config, receive) = watch::channel(twayblade_platform::updates::Preferences {
+            enabled: false,
+            ..Default::default()
+        });
+        let update_snapshots = updates.clone();
+        let update_task =
+            runtime.spawn(twayblade_platform::updates::run(receive, move |updater| {
+                publish(&update_snapshots, |snapshot| snapshot.updater = updater);
+            }));
         Ok(Arc::new(Self {
             _instance: instance,
             motion_task,
+            update_task,
+            update_config,
             runtime,
             updates,
             notification_config: watch::channel(NotificationConfig::default()).0,
@@ -453,6 +482,16 @@ impl Backend {
             lifecycle: Mutex::new(()),
             oauth: Mutex::new(None),
         }))
+    }
+
+    pub(super) fn configure_updates(&self, preferences: twayblade_platform::updates::Preferences) {
+        self.update_config.send_if_modified(|current| {
+            if *current == preferences {
+                return false;
+            }
+            *current = preferences;
+            true
+        });
     }
 
     pub(super) fn discover(&self, homeserver: String) -> Result<LoginOptions, ServiceError> {
@@ -618,10 +657,7 @@ impl Backend {
         state.stop();
         state.account = None;
         publish(&self.updates, |snapshot| {
-            let revision = snapshot.revision;
-            *snapshot = Snapshot::default();
-            snapshot.preview_size = state.previews.size;
-            snapshot.revision = revision;
+            snapshot.clear_account(state.previews.size);
         });
         Ok(())
     }
@@ -1495,10 +1531,7 @@ impl Backend {
         state.account = None;
         twayblade_platform::notifications::clear_launch_activation();
         publish(&self.updates, |snapshot| {
-            let revision = snapshot.revision;
-            *snapshot = Snapshot::default();
-            snapshot.preview_size = state.previews.size;
-            snapshot.revision = revision;
+            snapshot.clear_account(state.previews.size);
         });
         Ok(())
     }
@@ -1546,15 +1579,10 @@ impl Backend {
         state.security = Some(security);
         let epoch = state.epoch;
         publish(&self.updates, |snapshot| {
-            let revision = snapshot.revision;
-            *snapshot = Snapshot {
-                revision,
-                user_id: account.user_id(),
-                preview_size: state.previews.size,
-                account_instance: account.instance_id(),
-                sync_status: "Connecting…".into(),
-                ..Default::default()
-            };
+            snapshot.clear_account(state.previews.size);
+            snapshot.user_id = account.user_id();
+            snapshot.account_instance = account.instance_id();
+            snapshot.sync_status = "Connecting…".into();
         });
         calls::observe(self, &mut state, account.clone());
         state.tasks.push(self.runtime.spawn(notifications::run(
@@ -1683,6 +1711,7 @@ impl Backend {
 impl Drop for Backend {
     fn drop(&mut self) {
         self.motion_task.abort();
+        self.update_task.abort();
         let state = match self.state.lock() {
             Ok(mut state) => {
                 state.stop();
@@ -1707,6 +1736,47 @@ fn release_in_runtime<T>(runtime: &Runtime, value: T) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn account_reset_preserves_the_update_notice_but_clears_account_data() {
+        let updater = twayblade_platform::updates::Snapshot {
+            phase: twayblade_platform::updates::Phase::Available,
+            checked_unix_seconds: Some(123),
+            available: Some(twayblade_platform::updates::Available {
+                version: "2.0.0".into(),
+                prerelease: false,
+                changelog: "Fixture release changes".into(),
+                release_url: "https://github.com/zerw0/twayblade/releases/tag/v2.0.0".into(),
+                upgrade_command: Some("brew upgrade --cask twayblade".into()),
+            }),
+            ..Default::default()
+        };
+        let mut snapshot = super::Snapshot {
+            updater: updater.clone(),
+            user_id: "@fixture:test".into(),
+            account_instance: 42,
+            revision: 17,
+            ..Default::default()
+        };
+        snapshot.clear_account(Default::default());
+        assert_eq!(snapshot.updater, updater);
+        assert!(snapshot.user_id.is_empty());
+        assert_eq!(snapshot.account_instance, 0);
+        assert_eq!(snapshot.revision, 17);
+    }
+    #[test]
+    fn update_config_is_global_and_stays_off_in_backend_fixtures() {
+        let backend = super::Backend::with_lock(None).unwrap();
+        backend.configure_updates(twayblade_platform::updates::Preferences {
+            enabled: false,
+            channel: twayblade_platform::updates::Channel::Prerelease,
+        });
+        assert!(!backend.update_config.borrow().enabled);
+        assert_eq!(
+            backend.update_config.borrow().channel,
+            twayblade_platform::updates::Channel::Prerelease
+        );
+        assert!(backend.state.lock().unwrap().account.is_none());
+    }
     use super::*;
 
     #[test]

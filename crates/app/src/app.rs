@@ -47,8 +47,26 @@ pub(super) struct ProfilePage {
     pub error: String,
 }
 
-// Call actions used by `ui::calls`.
+// Service action contracts used by the views.
 impl MatrixApp {
+    /// Settings action contract for Claude: applies immediately and uses the
+    /// existing serialized preference writer. No settings controls are added.
+    #[allow(dead_code, reason = "Updater settings controls are owned by Claude")]
+    pub fn set_update_preferences(
+        &mut self,
+        enabled: bool,
+        channel: twayblade_platform::updates::Channel,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.preferences.updates = twayblade_platform::updates::Preferences { enabled, channel };
+        if let Some(backend) = &self.backend {
+            backend.configure_updates(self.preferences.updates);
+        }
+        self.save_preferences(window, cx);
+        cx.notify();
+    }
+
     pub fn start_call(
         &self,
         room_id: String,
