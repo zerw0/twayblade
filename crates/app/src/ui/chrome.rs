@@ -73,6 +73,12 @@ impl MatrixApp {
         } else {
             name.clone()
         };
+        let label = match (selected, unread > 0) {
+            (true, true) => format!("{name}, selected, {unread} unread"),
+            (true, false) => format!("{name}, selected"),
+            (false, true) => format!("{name}, {unread} unread"),
+            (false, false) => name,
+        };
         // A bar on the rail's left edge marks the selection (tall) or unread (short),
         // and the tile itself never changes shape.
         let bar = if selected {
@@ -103,7 +109,11 @@ impl MatrixApp {
                     .size(px(34.))
                     .p_0()
                     .rounded(px(9.))
-                    .accessibility_label(name)
+                    // macOS reports selection only for list-like roles, so the
+                    // label says it too; the edge bar shows it.
+                    .selected(selected)
+                    .bg(gpui_kit::transparent_black())
+                    .accessibility_label(label)
                     .tooltip(tooltip)
                     .child(
                         div()
@@ -144,6 +154,8 @@ impl MatrixApp {
             .fold(0u64, |sum, room| sum.saturating_add(room.unread));
         let mut rail = v_flex()
             .id("space-rail")
+            .role(Role::Group)
+            .aria_label("Spaces")
             .w(px(RAIL_WIDTH))
             .h_full()
             .flex_none()
@@ -312,15 +324,11 @@ impl MatrixApp {
             .h(px(density.row()))
             .p_0()
             .rounded(px(6.))
-            .accessibility_label(if room.muted {
-                format!("{}, notifications muted", room.name)
-            } else if room.mentions > 0 {
-                format!("{}, {} mentions", room.name, room.mentions)
-            } else if room.unread > 0 {
-                format!("{}, {} unread", room.name, room.unread)
-            } else {
-                room.name.clone()
-            })
+            // macOS reports selection only for list-like roles, so the label
+            // says it too; the inner row paints it.
+            .selected(selected)
+            .bg(gpui_kit::transparent_black())
+            .accessibility_label(room_label(room, selected))
             .child(
                 h_flex()
                     .size_full()
@@ -428,6 +436,13 @@ impl MatrixApp {
             .child(
                 div()
                     .id(SharedString::from(format!("section-toggle-{key}")))
+                    .role(Role::Button)
+                    // macOS doesn't report the expanded state, so say it.
+                    .aria_label(format!(
+                        "{label}, {}",
+                        if collapsed { "collapsed" } else { "expanded" }
+                    ))
+                    .aria_expanded(!collapsed)
                     .flex_1()
                     .min_w_0()
                     .h(px(22.))
@@ -478,7 +493,12 @@ impl MatrixApp {
                 )
             });
         let selected = self.navigation.selected_room.as_deref();
-        let mut section = v_flex().pt(px(density.section_gap())).child(header);
+        let mut section = v_flex()
+            .id(SharedString::from(format!("sidebar-section-{key}")))
+            .role(Role::Group)
+            .aria_label(label)
+            .pt(px(density.section_gap()))
+            .child(header);
         for room in rooms {
             // Collapsed sections still show the open room and anything needing attention.
             let keep = !collapsed
@@ -733,20 +753,27 @@ impl MatrixApp {
             ));
         }
         if visible.is_empty() {
+            let empty = if !query.is_empty() {
+                "No conversations match your search."
+            } else if self.snapshot.spaces_loaded {
+                "No conversations here yet."
+            } else {
+                "Organizing your rooms…"
+            };
             list = list.child(
                 div()
+                    .id("sidebar-empty")
+                    .role(Role::Status)
+                    .aria_label(empty)
                     .p(px(8.))
                     .text_color(muted)
-                    .child(if !query.is_empty() {
-                        "No conversations match your search."
-                    } else if self.snapshot.spaces_loaded {
-                        "No conversations here yet."
-                    } else {
-                        "Organizing your rooms…"
-                    }),
+                    .child(empty),
             );
         }
         v_flex()
+            .id("sidebar")
+            .role(Role::Navigation)
+            .aria_label("Conversations")
             .w(px(SIDEBAR_WIDTH))
             .flex_none()
             .h_full()
@@ -762,6 +789,9 @@ impl MatrixApp {
                     .gap(px(4.))
                     .child(
                         div()
+                            .id("sidebar-title")
+                            .role(Role::Heading)
+                            .aria_label(title.clone())
                             .flex_1()
                             .min_w_0()
                             .truncate()
@@ -878,6 +908,7 @@ impl MatrixApp {
                     .flex_none()
                     .child(
                         Input::new(&self.search)
+                            .aria_label("Search conversations")
                             .small()
                             .prefix(Icon::new(IconName::Search).xsmall().text_color(muted))
                             .suffix(
@@ -957,5 +988,53 @@ impl MatrixApp {
                     ),
             )
             .into_any_element()
+    }
+}
+
+/// What a screen reader says for a room row: name, then selection and what
+/// needs attention. macOS reports selection only for list-like roles, so it is
+/// part of the label.
+pub(crate) fn room_label(room: &Room, selected: bool) -> String {
+    let mut label = room.name.clone();
+    if selected {
+        label.push_str(", selected");
+    }
+    if room.muted {
+        label.push_str(", notifications muted");
+    } else if room.mentions == 1 {
+        label.push_str(", 1 mention");
+    } else if room.mentions > 1 {
+        label.push_str(&format!(", {} mentions", room.mentions));
+    } else if room.unread > 0 && !selected {
+        label.push_str(&format!(", {} unread", room.unread));
+    }
+    label
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Room, room_label};
+
+    #[test]
+    fn room_rows_read_name_selection_and_attention() {
+        let room = |unread, mentions, muted| Room {
+            name: "Design".into(),
+            unread,
+            mentions,
+            muted,
+            ..Default::default()
+        };
+        assert_eq!(room_label(&room(0, 0, false), false), "Design");
+        assert_eq!(room_label(&room(3, 0, false), true), "Design, selected");
+        assert_eq!(room_label(&room(3, 0, false), false), "Design, 3 unread");
+        assert_eq!(room_label(&room(3, 1, false), false), "Design, 1 mention");
+        assert_eq!(
+            room_label(&room(3, 2, false), true),
+            "Design, selected, 2 mentions"
+        );
+        assert_eq!(
+            room_label(&room(3, 2, true), false),
+            "Design, notifications muted"
+        );
     }
 }
