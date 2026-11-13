@@ -1683,10 +1683,26 @@ impl Backend {
 impl Drop for Backend {
     fn drop(&mut self) {
         self.motion_task.abort();
-        if let Ok(mut state) = self.state.lock() {
-            state.stop();
-        }
+        let state = match self.state.lock() {
+            Ok(mut state) => {
+                state.stop();
+                std::mem::take(&mut *state)
+            }
+            Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
+        };
+        // The fields drop the runtime before anything else, so release the
+        // account (and its SDK stores) now, while the runtime is still up.
+        release_in_runtime(&self.runtime, state);
     }
+}
+
+/// Drops `value` inside `runtime`. The SDK's SQLite stores close their
+/// connections with `spawn_blocking`, which panics outside a Tokio runtime.
+/// On macOS the app quits from an AppKit callback that can't unwind, so that
+/// panic aborted the app on every quit.
+fn release_in_runtime<T>(runtime: &Runtime, value: T) {
+    let _context = runtime.enter();
+    drop(value);
 }
 
 #[cfg(test)]
@@ -1710,5 +1726,35 @@ mod tests {
         assert!(snapshot.selected_room.is_empty());
         assert!(snapshot.messages.is_empty());
         assert_eq!(snapshot.revision, 0);
+    }
+
+    /// Regression: quitting aborted because the SDK store was dropped after
+    /// the runtime. Dropped outside a runtime, a client panics ("no reactor
+    /// running") and aborts the whole process, so only the safe path is tested.
+    #[test]
+    fn sdk_stores_are_released_inside_the_runtime() {
+        let store = std::env::temp_dir().join(format!("twayblade-release-{}", uuid_like_suffix()));
+        let client = |runtime: &Runtime| -> matrix_sdk::Client {
+            runtime
+                .block_on(
+                    matrix_sdk::Client::builder()
+                        .homeserver_url("http://localhost:1")
+                        .sqlite_store(&store, None)
+                        .build(),
+                )
+                .unwrap()
+        };
+        let runtime = Runtime::new().unwrap();
+        release_in_runtime(&runtime, client(&runtime));
+        drop(runtime);
+        let _ = std::fs::remove_dir_all(&store);
+    }
+
+    fn uuid_like_suffix() -> String {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        format!("{}-{nanos}", std::process::id())
     }
 }
