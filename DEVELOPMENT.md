@@ -252,6 +252,12 @@ open/close. They do not establish VoiceOver/IME or physical platform acceptance.
 CI is defined in `.github/workflows/check.yml`; inspect its actual results before
 claiming it passed. Use `--offline` only after dependencies are cached.
 
+`target/` grows with every dependency update and feature combination. To keep
+it bounded, run cargo through `scripts/cargo-pruned` (needs Python 3), for
+example `scripts/cargo-pruned build --locked -p twayblade`. For each distinct
+command it keeps the latest build and the one before, and deletes everything
+else under `target/<profile>/`. Add `--dry-run` to list what would go.
+
 ## Isolated Matrix integration tests
 
 With a **local** Docker engine and Compose running:
