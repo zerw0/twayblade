@@ -42,10 +42,10 @@ def evidence(expected):
         identities = {p['identity'] for p in participants}
         sizes.append(len(identities))
         matches.append(len(identities.intersection(expected)))
-        if len(identities) == 2 and identities == set(expected):
-            return {'livekit_participants': 2}
+        if identities == set(expected) and len(identities) == len(expected):
+            return {'livekit_participants': len(identities)}
     print('LiveKit counts: rooms=' + str(len(rooms)) + ' sizes=' + str(sizes) + ' expected_matches=' + str(matches), file=sys.stderr)
-    raise RuntimeError('Expected LiveKit participant pair not present')
+    raise RuntimeError('Expected LiveKit participant set not present')
 
 
 if __name__ == '__main__':

@@ -44,7 +44,7 @@ try{
     const session=await response.json();localStorage.setItem('matrix-auth-store',JSON.stringify({...session,passwordlessUser:false}));return {device_id:session.device_id,user_id:session.user_id};
   },config);
   await page.addInitScript(()=>{
-    window.fixtureEvidence={audio:0,video:0};window.fixturePCs=[];
+    window.fixtureEvidence={audio:0,video:0};window.fixtureAudioTracks={};window.fixturePCs=[];
     const Original=window.RTCPeerConnection;
     window.RTCPeerConnection=new Proxy(Original,{construct(Target,args){const pc=new Target(...args);window.fixturePCs.push(pc);if(window.fixturePCs.length>32)window.fixturePCs.shift();pc.addEventListener('track',event=>{
       if(event.track.kind==='audio'){
@@ -52,7 +52,7 @@ try{
         const input=audio.createMediaStreamSource(new MediaStream([event.track]));
         const module=new Blob([`class FixtureMeter extends AudioWorkletProcessor{constructor(){super();this.blocks=0;this.signal=0;}process(inputs){const channel=inputs[0]?.[0];if(channel){let sum=0;for(const sample of channel)sum+=sample*sample;if(Math.sqrt(sum/channel.length)>.01)this.signal++;if(++this.blocks>=20){this.port.postMessage(this.signal);this.blocks=0;this.signal=0;}}return true;}}registerProcessor('fixture-meter',FixtureMeter);`],{type:'text/javascript'});
         const moduleUrl=URL.createObjectURL(module);
-        audio.audioWorklet.addModule(moduleUrl).then(()=>{URL.revokeObjectURL(moduleUrl);const meter=new AudioWorkletNode(audio,'fixture-meter');meter.port.onmessage=message=>{window.fixtureEvidence.audio+=message.data;};input.connect(meter);meter.connect(audio.destination);});
+        audio.audioWorklet.addModule(moduleUrl).then(()=>{URL.revokeObjectURL(moduleUrl);const meter=new AudioWorkletNode(audio,'fixture-meter');meter.port.onmessage=message=>{window.fixtureEvidence.audio+=message.data;window.fixtureAudioTracks[event.track.id]=(window.fixtureAudioTracks[event.track.id]??0)+message.data;};input.connect(meter);meter.connect(audio.destination);});
       }else{
         const video=document.createElement('video');video.muted=true;video.autoplay=true;video.srcObject=new MediaStream([event.track]);video.play().catch(()=>{});
         const canvas=document.createElement('canvas');canvas.width=64;canvas.height=48;const ctx=canvas.getContext('2d',{willReadFrequently:true});
@@ -127,14 +127,20 @@ try{
   const mic=page.getByTestId('incall_mute');if((await mic.getAttribute('aria-label')??'').toLowerCase().includes('unmute'))await mic.click();
   await page.waitForFunction(()=>window.rtcSession?.isJoined(),{},{timeout:30000});
   process.stdout.write(JSON.stringify({ready:true,...session})+'\n');
-  let finished=false,enableVideo=false;lines.on('line',line=>{const command=JSON.parse(line);if(command.stop)finished=true;if(command.video)enableVideo=true;});
+  let finished=false,enableVideo=false,leave=false;lines.on('line',line=>{const command=JSON.parse(line);if(command.stop)finished=true;if(command.leave){leave=true;finished=true;}if(command.video)enableVideo=true;});
   while(!finished){
     if(enableVideo){enableVideo=false;const video=page.getByTestId('incall_videomute');if((await video.getAttribute('aria-label')??'').toLowerCase().includes('start'))await video.click();}
     const evidence=await page.evaluate(room=>{
       const client=window.matrixclient;const session=window.rtcSession??client?.matrixRTC?.getRoomSession(client.getRoom(room));
-      return {joined:session?.isJoined()??false,connections:window.fixturePCs.map(pc=>pc.connectionState),participants:session?.memberships?.length??0,keys:session?.statistics?.counters?.roomEventEncryptionKeysReceived??0,audio:window.fixtureEvidence.audio,video:window.fixtureEvidence.video};
+      return {audioTracks:Object.values(window.fixtureAudioTracks).filter(frames=>frames>10).length,joined:session?.isJoined()??false,connections:window.fixturePCs.map(pc=>pc.connectionState),participants:session?.memberships?.length??0,keys:session?.statistics?.counters?.roomEventEncryptionKeysReceived??0,audio:window.fixtureEvidence.audio,video:window.fixtureEvidence.video};
     },config.room_id);
     process.stdout.write(JSON.stringify({...evidence,errors,httpFailures})+'\n');await new Promise(r=>setTimeout(r,500));
+  }
+  if(leave){
+    stage='leave';
+    await page.getByTestId('incall_leave').click();
+    await page.waitForFunction(()=>!window.rtcSession?.isJoined(),{},{timeout:15000});
+    process.stdout.write(JSON.stringify({left:true})+'\n');
   }
   await browser.close();
   }

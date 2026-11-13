@@ -161,10 +161,10 @@ def register_security():
     register([username])
 
 
-def register_pair():
+def register_pair(roles=("alice", "bob")):
     fixture = json.loads(FIXTURE.read_text())
     users = []
-    for role in ['alice', 'bob']:
+    for role in roles:
         username = 'scenario_' + role + '_' + secrets.token_hex(8)
         password = secrets.token_urlsafe(32)
         fixture[username] = password
@@ -298,6 +298,8 @@ if __name__ == '__main__':
             call_config()
         elif action == 'spaces-config':
             spaces_config()
+        elif action == 'register-group':
+            register_pair(("alice", "bob", "carol"))
         elif action == 'register-pair':
             register_pair()
         elif action == 'register-security':

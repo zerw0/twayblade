@@ -415,6 +415,8 @@ impl NativeCall {
             }
             command = commands.recv() => {
                 match command {
+                    #[cfg(test)]
+                    Some(DriverCommand::KeyIndex(response)) => { let _ = response.send(self.keys.index); }
                     Some(DriverCommand::Control(NativeControl::Leave)) | None => {
                         self.leave().await?;
                     }
@@ -786,6 +788,8 @@ pub struct CallHandle {
     task: tokio::task::JoinHandle<()>,
 }
 enum DriverCommand {
+    #[cfg(test)]
+    KeyIndex(tokio::sync::oneshot::Sender<u8>),
     Control(NativeControl),
     /// Fixture media: a generated camera, or a generated screen share.
     #[cfg(test)]
@@ -830,6 +834,15 @@ impl NativeCall {
     }
 }
 impl CallHandle {
+    #[cfg(test)]
+    pub(crate) async fn sender_key_index(&self) -> u8 {
+        let (send, receive) = tokio::sync::oneshot::channel();
+        self.commands
+            .send(DriverCommand::KeyIndex(send))
+            .await
+            .unwrap();
+        receive.await.unwrap()
+    }
     pub fn control(&self, control: NativeControl) -> Result<(), CallError> {
         self.commands
             .try_send(DriverCommand::Control(control))

@@ -26,6 +26,24 @@ Chromium trusts only the fixture leaf's SPKI. No host trust roots are changed.
 Browser consoles and credential-bearing network URLs are never forwarded.
 `MATRIX_TEST_CALL_FILTER` can select one native call test during diagnosis.
 
+The default call suite also runs
+`native_matrixrtc_three_party_join_leave_rotation_and_screen`: three distinct
+fixture accounts, native/native/Element Call 0.28.2. It establishes native/Element
+audio before joining the third participant, requires both native senders' decoded
+audio at Element, and receives a generated native screen at both remote clients
+while all three memberships are present. No cameras are published in that case,
+so the browser's decoded video-pattern count identifies the screen source.
+Element uses its real Leave control before closing. Both remaining native senders
+must change key indices, exchange new encrypted keys, and continue audio/screen
+decoding after the five-second key-switch grace period. A later native departure
+must remove its membership and rotate the last sender again. Only counters and
+stage names are printed; the key-index query exists only in test builds.
+
+For the group case alone, set
+`MATRIX_TEST_CALL_FILTER=native_matrixrtc_three_party` before the runner command.
+The fixture generates a fresh Alice/Bob/Carol account set for each call run;
+it neither reuses production credentials nor changes host trust or Docker context.
+
 Physical microphone/speaker/camera permissions and media on this Mac require a
 person. Public-server Element Web, Linux and Windows are not attempted.
 [Architecture, key formats and UI contracts](../../docs/architecture/CALLS.md).

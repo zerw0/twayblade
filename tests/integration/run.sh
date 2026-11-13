@@ -23,8 +23,8 @@ case "${1:-test}" in
         "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py call-config
         trap '"${compose[@]}" --profile call stop element-call call-proxy lk-jwt-service livekit synapse' EXIT
         "${compose[@]}" --profile call up -d --wait --wait-timeout 90 synapse livekit lk-jwt-service element-call call-proxy
-        "${compose[@]}" exec -T synapse python /bootstrap.py register-pair
-        MATRIX_TEST_CALL_CONTEXT="$matrix_context" cargo test --locked -p twayblade-core --all-features "${MATRIX_TEST_CALL_FILTER:-native_matrixrtc}" -- --ignored --nocapture --test-threads=1
+        "${compose[@]}" exec -T synapse python /bootstrap.py register-group
+        MATRIX_TEST_CALL_CONTEXT="$matrix_context" scripts/cargo-pruned test --locked -p twayblade-core --all-features "${MATRIX_TEST_CALL_FILTER:-native_matrixrtc}" -- --ignored --nocapture --test-threads=1
         ;;
     presence)
         mkdir -p test-data/local/integration
@@ -124,5 +124,5 @@ case "${1:-test}" in
         ;;
     down) "${compose[@]}" down ;;
     status) "${compose[@]}" ps ;;
-    *) printf 'Usage: bash tests/integration/run.sh [up|test|keychain|services|presence|oauth|sso|recovery|security|media|threads|spaces|viewer|search|notifications|notification-delivery|room-open|down|status]\n' >&2; exit 1 ;;
+    *) printf 'Usage: bash tests/integration/run.sh [call|up|test|keychain|services|presence|oauth|sso|recovery|security|media|threads|spaces|viewer|search|notifications|notification-delivery|room-open|down|status]\n' >&2; exit 1 ;;
 esac

@@ -306,6 +306,31 @@ Linux and Windows CI passed on `36f850a`; macOS CI was switched to `macos-15`
 
 ## Progress
 
+Group call technical acceptance (2026-11-13, Codex):
+- `run.sh call` includes a three-party scenario with distinct Alice/Bob/Carol
+  fixture accounts, two native clients and pinned Element Call 0.28.2. It starts
+  native/Element audio, joins the second native client mid-call, verifies all
+  three participant lists and encrypted keys, and requires the browser to decode
+  two separate remote audio tracks.
+- With cameras off, a generated native screen is received as a screen by the
+  other native client and decoded as a test pattern by both remote clients.
+  Element uses its real Leave control before its browser closes; both
+  remaining native senders must rotate and exchange keys, then continue decoding
+  audio and screen frames beyond the key-switch delay. A later native departure
+  must remove its membership and rotate the last sender again.
+- Key-index inspection is test-only; no keys, media payloads, tokens or callback
+  URLs enter fixture output. The call runner uses `scripts/cargo-pruned`.
+- Compilation/offline verification: fmt, strict all-target/all-feature locked
+  Clippy and workspace tests passed (197 passed; 32 isolated tests ignored).
+  Shell, Python and Node syntax checks passed.
+- Isolated integration: the focused three-party case passed (19.75 s), then
+  the full `run.sh call` suite passed 4/4 (156.92 s), including existing
+  native/native recovery/departure, native/Element audio/video and ringing.
+  The first group run exposed an unavailable Element session method; the final
+  fixture uses the pinned SPA's real Leave control.
+  This is synthetic headless interoperability; physical group calls, device
+  permissions, screen capture and Linux/Windows runtime remain separate gates.
+
 Done (macOS arm64, offline and isolated-server verification only):
 - Cargo workspace (`core`, `platform`, `app`), Nix shell, pinned dependencies.
 - Server-name discovery via `.well-known`, HTTPS enforcement after delegation.
