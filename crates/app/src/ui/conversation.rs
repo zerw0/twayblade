@@ -270,8 +270,11 @@ impl MatrixApp {
             .collect();
         let typing = model::typing_text(&self.snapshot);
         let paste_target = cx.weak_entity();
-        let note = |text: String| {
+        let note = |(index, text): (usize, String)| {
             div()
+                .id(("composer-note", index))
+                .role(Role::Status)
+                .aria_label(text.clone())
                 .pl(px(12.))
                 .text_size(px(13.))
                 .text_color(muted)
@@ -282,7 +285,7 @@ impl MatrixApp {
             .pt(px(2.))
             .pb(px(6.))
             .gap(px(4.))
-            .children(notices.into_iter().map(note))
+            .children(notices.into_iter().enumerate().map(note))
             .when(self.emoji_picker.is_some(), |view| {
                 view.child(motion::rise(
                     div().child(self.emoji_panel(cx)),
