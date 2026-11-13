@@ -306,6 +306,58 @@ then run `direnv allow`. It contains only `use flake`. Nix packages do not confi
 the host GPU, desktop, user DBus session or keyring; non-NixOS graphics integration
 may need host-specific setup. Apple signing tools are isolated from Nix SDK settings.
 
+### Nix package and overlay
+
+The flake exports `packages.<system>.default` (also `twayblade`),
+`apps.<system>.default` and `overlays.default`. Supported Nix systems are
+`aarch64-darwin`, `x86_64-linux` and `aarch64-linux`. The pinned Nixpkgs 26.11
+rejects `x86_64-darwin`; Intel macOS uses the standard Rust setup above, not a
+claimed Nix package or shell. Windows likewise uses its standard toolchain.
+
+From the checkout, inside the development shell:
+
+```sh
+nix flake check --no-build --all-systems
+nix build .#default
+nix run .#default -- --preview   # offline sample data
+```
+
+`nix build` produces a release binary without installing it into your profile.
+On macOS the output includes `Applications/Twayblade.app`, bundle permission
+descriptions and a `bin/twayblade` link; Linux includes a launcher and runtime
+library wrapper. This is a locally built Nix package, not a Developer ID-signed
+or notarized distribution. Packaging alone does not establish call permissions,
+notifications, session restoration or graphics/media acceptance on a machine.
+
+The package builds offline from `Cargo.lock`, with crate checksums enforced by
+Nix. LiveKit's prebuilt WebRTC `webrtc-a545de4` archive is a separate SHA-256-pinned
+input (`nix/webrtc-sources.nix`), supplied through `LK_CUSTOM_WEBRTC`; the Rust
+build does not download it. This does not build WebRTC itself from source.
+The existing GPUI Kit runtime-shader feature avoids an undeclared Xcode Metal
+compiler step. Linux package builds and shells use clang 21 for WebRTC's pinned
+libc++ headers. The app and full WebRTC notices are installed with the package.
+Only Cargo inputs, `.cargo`, crates, scripts, the development bundle metadata,
+vendored patches and licenses enter the application source hash; editing the
+plan or development docs does not require recompiling the app.
+
+After the packaging change is available on the chosen Git revision, install a
+profile package explicitly with `nix profile install github:zerw0/twayblade`.
+For NixOS or nix-darwin, add the input and overlay to your existing configuration:
+
+```nix
+inputs.twayblade.url = "github:zerw0/twayblade";
+
+# In the NixOS/nix-darwin module, with inputs in scope:
+nixpkgs.overlays = [ inputs.twayblade.overlays.default ];
+environment.systemPackages = [ pkgs.twayblade ];
+```
+
+Package outputs use the committed Nixpkgs lock. An overlay uses its caller's
+Nixpkgs and needs Rust 1.99 or newer, and LLVM 21 on Linux. Configure the host's
+GPU, desktop, DBus, keyring and permissions separately. No profile or system
+configuration is changed by building the package. Keep `Cargo.lock`,
+`flake.lock` and the WebRTC archive hashes together when updating dependencies.
+
 ## AI design tooling
 
 UI work uses the user-requested [UI/UX Pro Max skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill)
