@@ -338,6 +338,9 @@ impl MatrixApp {
         };
         let mut row = v_flex()
             .id(SharedString::from(format!("message-row-{}", message.id)))
+            // Message text is drawn, not exposed; screen readers read this label.
+            .role(Role::Group)
+            .aria_label(accessible_message(message, &self.snapshot.user_id))
             .min_w_0()
             .max_w_full()
             .gap(px(3.))
@@ -693,6 +696,9 @@ impl MatrixApp {
             // A new day is a ruled divider; a long pause is just a centred time.
             group = group.child(
                 h_flex()
+                    .id(SharedString::from(format!("day-{}", first.id)))
+                    .role(Role::Heading)
+                    .aria_label(day.clone())
                     .w_full()
                     .py(px(8.))
                     .gap(px(10.))
@@ -720,6 +726,8 @@ impl MatrixApp {
             group = group.child(
                 h_flex()
                     .id(SharedString::from(format!("new-messages-{}", first.id)))
+                    .role(Role::Heading)
+                    .aria_label("New messages")
                     .py(px(6.))
                     .gap(px(8.))
                     .text_size(px(11.))
@@ -1012,5 +1020,78 @@ impl MatrixApp {
             )
             .test_support()
             .into_any_element()
+    }
+}
+
+/// What a screen reader announces for one message: who, when, what, and its
+/// state. Uses the same text the row shows; nothing is logged.
+pub(crate) fn accessible_message(message: &crate::backend::Message, own_user: &str) -> String {
+    let who = if message.sender == own_user {
+        "You".to_owned()
+    } else {
+        message.display_name.clone()
+    };
+    let what = match message.kind {
+        MessageKind::Undecryptable => "Unable to decrypt this message.".to_owned(),
+        MessageKind::Redacted => "Message deleted".to_owned(),
+        MessageKind::Image => format!("Image, {}", model::message_text(message)),
+        MessageKind::File => format!("File, {}", model::message_text(message)),
+        _ => model::message_text(message),
+    };
+    let mut label = if message.kind == MessageKind::Emote {
+        // The emote text already starts with the sender's name.
+        format!("{}, {what}", time_label(message.timestamp_ms))
+    } else {
+        format!("{who}, {}, {what}", time_label(message.timestamp_ms))
+    };
+    if let Some(ReplyTarget::Ready { sender, .. }) = &message.reply {
+        label.push_str(&format!(", replying to {sender}"));
+    }
+    if message.edited {
+        label.push_str(", edited");
+    }
+    match message.delivery {
+        DeliveryState::Failed => label.push_str(", not sent"),
+        DeliveryState::Queued => label.push_str(", sending"),
+        _ => {}
+    }
+    label
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DeliveryState, MessageKind, accessible_message};
+    #[test]
+    fn screen_readers_hear_sender_content_and_state() {
+        let message = |sender: &str, kind, body: &str| crate::backend::Message {
+            id: "m".into(),
+            sender: sender.into(),
+            display_name: "Alex".into(),
+            kind,
+            body: body.into(),
+            ..Default::default()
+        };
+        let text = message("@alex:test", MessageKind::Text, "Hello");
+        let label = accessible_message(&text, "@you:test");
+        assert!(
+            label.starts_with("Alex, ") && label.ends_with(", Hello"),
+            "{label}"
+        );
+
+        let mut own = message("@you:test", MessageKind::Text, "Hi");
+        own.edited = true;
+        own.delivery = DeliveryState::Failed;
+        let label = accessible_message(&own, "@you:test");
+        assert!(
+            label.starts_with("You, ") && label.ends_with("Hi, edited, not sent"),
+            "{label}"
+        );
+
+        let emote = message("@alex:test", MessageKind::Emote, "waves");
+        assert!(accessible_message(&emote, "@you:test").ends_with(", Alex waves"));
+        let locked = message("@alex:test", MessageKind::Undecryptable, "");
+        assert!(
+            accessible_message(&locked, "@you:test").ends_with("Unable to decrypt this message.")
+        );
     }
 }

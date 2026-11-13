@@ -690,6 +690,12 @@ Not yet verified:
 
 Evidence log: `docs/compatibility/STATUS.md`. Architecture: `docs/architecture/GPUI.md`.
 
+M6 — accessibility pass, part 1 (2026-11-12, Claude):
+- Finding: GPUI exposes an AccessKit tree, but only for elements with an ID and a role. Kit controls (buttons, inputs) were labelled; plain text was not exposed at all, so a screen reader heard each message's action buttons but not the message, and the call stage's status, tiles and notices were silent.
+- Fixed: every message row (timeline and threads) is a labelled group: sender (or "You"), time, content (image/file name and size, decryption failure, deleted), "replying to X", "edited", "sending"/"not sent". Day dividers and "New messages" are headings. Status notes above the composer are status nodes. Call stage is a "Call" region with a status node ("13:24, 3 people"), tiles labelled with name and state (speaking, muted, camera on, sharing screen, not encrypted), the ringing callee, "+N more people", the shared screen, a device notice as an alert, the other-room strip as status, and the incoming-call card as an alert ("Alex, Incoming video call").
+- Verified: a unit test of the message label; the macOS accessibility tree of a `--preview-call-screen` window read through the AX API shows the labels above. Not verified with VoiceOver itself, Linux AT-SPI or Windows UIA.
+- Remaining for the pass: VoiceOver walk-through (reading order, focus order, live announcements for new messages and call state), sidebar/room list grouping, settings and sign-in screens, reactions/read receipts wording, contrast and focus-ring audit in light/dark/custom themes.
+
 ## Workspace
 
 ```text

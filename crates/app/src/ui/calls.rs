@@ -330,6 +330,9 @@ impl MatrixApp {
             _ => "In a call in",
         };
         h_flex()
+            .id("call-elsewhere")
+            .role(Role::Status)
+            .aria_label(format!("{label} {}", self.room_name(&call.room_id)))
             .h(px(32.))
             .flex_none()
             .px(px(16.))
@@ -491,11 +494,26 @@ impl MatrixApp {
                 label.child(Icon::new(IconName::ScreenShare).size(px(11.)))
             })
             .child(div().truncate().child(name.clone()));
+        let mut spoken = name.clone();
+        for (on, word) in [
+            (speaking, "speaking"),
+            (muted, "muted"),
+            (video.is_some(), "camera on"),
+            (participant.screen, "sharing screen"),
+            (participant.media_blocked, "not encrypted, so not shown"),
+        ] {
+            if on {
+                spoken.push_str(", ");
+                spoken.push_str(word);
+            }
+        }
         div()
             .id(SharedString::from(format!(
                 "call-tile-{}-{}",
                 participant.user_id, participant.device_id
             )))
+            .role(Role::Group)
+            .aria_label(spoken)
             .relative()
             .flex_none()
             .w(px(width))
@@ -595,6 +613,8 @@ impl MatrixApp {
         Some(
             div()
                 .id("call-screen")
+                .role(Role::Group)
+                .aria_label(format!("{owner}'s screen"))
                 .relative()
                 .flex_1()
                 .min_w_0()
@@ -638,6 +658,8 @@ impl MatrixApp {
         Some(
             div()
                 .id("call-tile-own-screen")
+                .role(Role::Group)
+                .aria_label("Your screen")
                 .relative()
                 .flex_none()
                 .w(px(width))
@@ -685,6 +707,9 @@ impl MatrixApp {
             .unwrap_or_else(|| call.room_id.clone());
         let avatar = room.and_then(|room| room.avatar.clone());
         v_flex()
+            .id("call-tile-callee")
+            .role(Role::Group)
+            .aria_label(format!("{name}, ringing"))
             .flex_none()
             .w(px(width))
             .h(px(height))
@@ -793,6 +818,9 @@ impl MatrixApp {
             .when(overflow > 0, |row| {
                 row.child(
                     v_flex()
+                        .id("call-tile-more")
+                        .role(Role::Group)
+                        .aria_label(format!("{} more people", overflow + 1))
                         .flex_none()
                         .w(px(size.0))
                         .h(px(size.1))
@@ -855,6 +883,9 @@ impl MatrixApp {
                 };
                 let serial = *serial;
                 h_flex()
+                    .id("call-notice")
+                    .role(Role::Alert)
+                    .aria_label(text.clone())
                     .mx(px(16.))
                     .mt(px(10.))
                     .px(px(10.))
@@ -883,6 +914,12 @@ impl MatrixApp {
             });
         let reconnecting = call.phase == CallPhase::Reconnecting;
         let status = v_flex()
+            .id("call-status")
+            .role(Role::Status)
+            .aria_label(match &detail {
+                Some(detail) => format!("{title}, {detail}"),
+                None => title.clone(),
+            })
             .flex_1()
             .min_w_0()
             .child(
@@ -1097,6 +1134,8 @@ impl MatrixApp {
         motion::rise(
             v_flex()
                 .id("call-stage")
+                .role(Role::Region)
+                .aria_label("Call")
                 .flex_none()
                 .border_b_1()
                 .border_color(cx.theme().border)
@@ -1399,6 +1438,8 @@ impl MatrixApp {
                 .child(motion::rise(
                     v_flex()
                         .id("incoming-call")
+                        .role(Role::Alert)
+                        .aria_label(format!("{title}, {detail}"))
                         .occlude()
                         .w(px(300.))
                         .p(px(12.))
