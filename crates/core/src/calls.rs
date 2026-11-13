@@ -18,6 +18,8 @@ pub use twayblade_media::{
 pub enum CallError {
     #[error("call_no_foci")]
     NoFoci,
+    #[error("call_invalid_volume")]
+    InvalidVolume,
     #[error("call_media_e2ee_required")]
     MediaE2eeRequired,
     #[error("call_key_rejected")]
@@ -82,7 +84,12 @@ pub enum CallPhase {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Participant {
     pub device_id: String,
+    /// Raw LiveKit voice activity; UI must debounce (~1 s onset, several seconds hold).
     pub speaking: Option<bool>,
+    /// Stable MatrixRTC member identity, scoped to this call (user + device).
+    pub id: String,
+    /// Local receiver gain/mute; independent of the sender's microphone mute.
+    pub playback: twayblade_media::Playback,
     pub connection_quality: Option<ConnectionQuality>,
     pub user_id: String,
     pub display_name: Option<String>,
@@ -153,6 +160,8 @@ pub enum CallEvent {
 }
 #[derive(Clone, Debug)]
 pub struct CallState {
+    /// Backend generation for UI actions; None on core-only snapshots.
+    pub ticket: Option<CallTicket>,
     /// Bounded recent events with per-call serials for toast deduplication.
     pub events: Vec<(u64, CallEvent)>,
     pub local: LocalCallState,
@@ -211,8 +220,10 @@ impl Account {
                     .and_then(|m| m.display_name().map(str::to_owned));
                 participants.push(Participant {
                     user_id: member.user_id.to_string(),
-                    device_id: member.device_id,
+                    device_id: member.device_id.clone(),
                     display_name,
+                    id: member.identity(),
+                    playback: Default::default(),
                     speaking: None,
                     connection_quality: None,
                     muted: None,

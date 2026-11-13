@@ -431,6 +431,8 @@ mod tests {
             user_id: user.into(),
             device_id: device.into(),
             display_name: None,
+            id: format!("{user}:{device}"),
+            playback: Default::default(),
             speaking: None,
             muted: None,
             video: None,

@@ -24,7 +24,7 @@ case "${1:-test}" in
         trap '"${compose[@]}" --profile call stop element-call call-proxy lk-jwt-service livekit synapse' EXIT
         "${compose[@]}" --profile call up -d --wait --wait-timeout 90 synapse livekit lk-jwt-service element-call call-proxy
         "${compose[@]}" exec -T synapse python /bootstrap.py register-pair
-        MATRIX_TEST_CALL_CONTEXT="$matrix_context" cargo test --locked -p twayblade-core --all-features "${MATRIX_TEST_CALL_FILTER:-native_matrixrtc}" -- --ignored --nocapture --test-threads=1
+        MATRIX_TEST_CALL_CONTEXT="$matrix_context" scripts/cargo-pruned test --locked -p twayblade-core --all-features "${MATRIX_TEST_CALL_FILTER:-native_matrixrtc}" -- --ignored --nocapture --test-threads=1
         ;;
     presence)
         mkdir -p test-data/local/integration

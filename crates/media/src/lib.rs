@@ -3,6 +3,8 @@
 //! BGRA, replacing a single Arc slot; UI readers never receive queued frames.
 pub use livekit;
 pub mod camera;
+pub mod playback;
+pub use playback::Playback;
 pub mod screen;
 mod transport;
 use futures_util::StreamExt;
@@ -42,6 +44,8 @@ pub enum MediaError {
     DeviceUnavailable,
     #[error("media_invalid_frame")]
     InvalidFrame,
+    #[error("media_invalid_volume")]
+    InvalidVolume,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Device {
@@ -208,6 +212,7 @@ pub struct NativeMedia {
     installed: HashMap<String, HashSet<u8>>,
     /// Remote track sid → publishing identity, to stop a departed member's tracks.
     owners: HashMap<String, String>,
+    playback: playback::PlaybackStore,
 }
 impl NativeMedia {
     pub async fn connect(
@@ -276,6 +281,7 @@ impl NativeMedia {
             blocked: HashSet::new(),
             installed: HashMap::new(),
             owners: HashMap::new(),
+            playback: Default::default(),
         })
     }
     /// Replace the set of call members whose media may be received. Departed
@@ -285,6 +291,7 @@ impl NativeMedia {
         let next: HashSet<String> = identities.into_iter().collect();
         let departed: Vec<String> = self.allowed.difference(&next).cloned().collect();
         self.allowed = next;
+        self.playback.retain(&self.allowed);
         for identity in &departed {
             self.forget(identity);
         }
@@ -292,8 +299,30 @@ impl NativeMedia {
             let identity = peer.identity().to_string();
             for publication in peer.track_publications().values() {
                 self.decide(&identity, publication);
+                if let Some(RemoteTrack::Audio(track)) = publication.track() {
+                    track
+                        .rtc_track()
+                        .set_playback_volume(self.playback(&identity).gain());
+                }
             }
         }
+    }
+    pub fn playback(&self, id: &str) -> Playback {
+        self.playback.get(id)
+    }
+    pub fn set_playback(&mut self, id: &str, playback: Playback) -> Result<(), MediaError> {
+        if !self.allowed.contains(id) {
+            return Err(MediaError::DeviceUnavailable);
+        }
+        self.playback.set(id.to_owned(), playback);
+        if let Some(peer) = self.room.remote_participants().get(&id.into()) {
+            for publication in peer.track_publications().values() {
+                if let Some(RemoteTrack::Audio(track)) = publication.track() {
+                    track.rtc_track().set_playback_volume(playback.gain());
+                }
+            }
+        }
+        Ok(())
     }
     /// True when this member published media without end-to-end encryption.
     pub fn is_blocked(&self, identity: &str) -> bool {
@@ -603,6 +632,11 @@ impl NativeMedia {
                     return;
                 }
                 let id = track.sid().to_string();
+                if let RemoteTrack::Audio(audio) = track {
+                    audio
+                        .rtc_track()
+                        .set_playback_volume(self.playback(&identity).gain());
+                }
                 match track {
                     RemoteTrack::Video(track) => self.consume_video(id.clone(), track.rtc_track()),
                     // Remote audio plays through the platform audio device

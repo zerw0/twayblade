@@ -18,6 +18,8 @@ use twayblade_media::{
 
 pub enum NativeControl {
     Muted(bool),
+    ParticipantVolume(String, f32),
+    ParticipantMutedLocally(String, bool),
     Video(bool),
     Input(String),
     Output(String),
@@ -60,6 +62,7 @@ const USE_KEY_DELAY: std::time::Duration = std::time::Duration::from_secs(5);
 impl From<MediaError> for CallError {
     fn from(value: MediaError) -> Self {
         match value {
+            MediaError::InvalidVolume => Self::InvalidVolume,
             MediaError::E2eeRequired => Self::MediaE2eeRequired,
             MediaError::DeviceUnavailable => Self::DeviceUnavailable,
             _ => Self::TransportFailed,
@@ -147,6 +150,7 @@ impl NativeCall {
         eprintln!("Native fixture: encrypted SFU transport connected");
         let direct = signalling.room.is_direct().await.unwrap_or(false);
         let state = CallState {
+            ticket: None,
             room_id: room.into(),
             kind: if direct {
                 CallKind::Direct
@@ -273,9 +277,36 @@ impl NativeCall {
     pub fn evidence(&self) -> twayblade_media::Evidence {
         self.media.evidence.clone()
     }
+    async fn remote_playback(&self, id: &str) -> Result<twayblade_media::Playback, CallError> {
+        if id == self.signalling.own.identity()
+            || !members(&self.signalling.room)
+                .await?
+                .iter()
+                .any(|p| p.identity() == id)
+        {
+            return Err(CallError::StaleRequest);
+        }
+        Ok(self.media.playback(id))
+    }
     pub async fn control(&mut self, control: NativeControl) -> Result<(), CallError> {
         match control {
             NativeControl::Leave => return self.leave().await,
+            NativeControl::ParticipantVolume(id, volume) => {
+                let mut playback = self.remote_playback(&id).await?;
+                playback.set_volume(volume)?;
+                self.media.set_playback(&id, playback)?;
+                if let Some(peer) = self.state.participants.iter_mut().find(|p| p.id == id) {
+                    peer.playback = playback;
+                }
+            }
+            NativeControl::ParticipantMutedLocally(id, muted) => {
+                let mut playback = self.remote_playback(&id).await?;
+                playback.muted = muted;
+                self.media.set_playback(&id, playback)?;
+                if let Some(peer) = self.state.participants.iter_mut().find(|p| p.id == id) {
+                    peer.playback = playback;
+                }
+            }
             NativeControl::Muted(value) => {
                 self.media.set_muted(value)?;
                 self.state.local.muted = value;
@@ -415,6 +446,18 @@ impl NativeCall {
             }
             command = commands.recv() => {
                 match command {
+                    #[cfg(test)]
+                    Some(DriverCommand::Playback(id, response)) => {
+                        let gains = self.media.room.remote_participants().get(&id.into()).map(|p| {
+                            p.track_publications().values().filter_map(|publication| {
+                                match publication.track() {
+                                    Some(livekit::prelude::RemoteTrack::Audio(track)) => Some(track.rtc_track().playback_volume()),
+                                    _ => None,
+                                }
+                            }).collect()
+                        }).unwrap_or_default();
+                        let _ = response.send(gains);
+                    }
                     Some(DriverCommand::Control(NativeControl::Leave)) | None => {
                         self.leave().await?;
                     }
@@ -744,7 +787,13 @@ impl NativeCall {
                 user_id: member.user_id.to_string(),
                 device_id: member.device_id.clone(),
                 display_name: name,
-                speaking: peer.map(|p| p.is_speaking()),
+                id: member.identity(),
+                playback: self.media.playback(&member.identity()),
+                speaking: if local {
+                    Some(self.media.room.local_participant().is_speaking())
+                } else {
+                    peer.map(|p| p.is_speaking())
+                },
                 muted,
                 video,
                 media_blocked: self.media.is_blocked(&member.identity()),
@@ -763,7 +812,9 @@ impl NativeCall {
     pub async fn leave(&mut self) -> Result<(), CallError> {
         self.ring = None;
         self.screen_events = None;
+        self.media.set_members(std::iter::empty());
         self.media.close().await;
+        self.state.participants.clear();
         self.signalling.leave().await?;
         self.state.phase = CallPhase::Ended(EndReason::Left);
         Ok(())
@@ -786,6 +837,8 @@ pub struct CallHandle {
     task: tokio::task::JoinHandle<()>,
 }
 enum DriverCommand {
+    #[cfg(test)]
+    Playback(String, tokio::sync::oneshot::Sender<Vec<f64>>),
     Control(NativeControl),
     /// Fixture media: a generated camera, or a generated screen share.
     #[cfg(test)]
@@ -830,6 +883,15 @@ impl NativeCall {
     }
 }
 impl CallHandle {
+    #[cfg(test)]
+    pub(crate) async fn playback_gains(&self, id: &str) -> Vec<f64> {
+        let (send, receive) = tokio::sync::oneshot::channel();
+        self.commands
+            .send(DriverCommand::Playback(id.into(), send))
+            .await
+            .unwrap();
+        receive.await.unwrap()
+    }
     pub fn control(&self, control: NativeControl) -> Result<(), CallError> {
         self.commands
             .try_send(DriverCommand::Control(control))
