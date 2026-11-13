@@ -260,6 +260,16 @@ fn publish(sender: &watch::Sender<Snapshot>, update: impl FnOnce(&mut Snapshot))
     });
 }
 
+fn publish_updater(
+    sender: &watch::Sender<Snapshot>,
+    updater: twayblade_platform::updates::Snapshot,
+) {
+    let changed = sender.borrow().updater != updater;
+    if changed {
+        publish(sender, |snapshot| snapshot.updater = updater);
+    }
+}
+
 pub(super) enum SpaceAction {
     Directory(String),
     NextDirectory(String),
@@ -468,7 +478,7 @@ impl Backend {
         let update_snapshots = updates.clone();
         let update_task =
             runtime.spawn(twayblade_platform::updates::run(receive, move |updater| {
-                publish(&update_snapshots, |snapshot| snapshot.updater = updater);
+                publish_updater(&update_snapshots, updater);
             }));
         Ok(Arc::new(Self {
             _instance: instance,
@@ -1736,6 +1746,21 @@ fn release_in_runtime<T>(runtime: &Runtime, value: T) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unchanged_updater_state_does_not_publish_or_advance_the_revision() {
+        let (sender, receiver) = tokio::sync::watch::channel(super::Snapshot::default());
+        super::publish_updater(&sender, Default::default());
+        assert_eq!(sender.borrow().revision, 0);
+        assert!(!receiver.has_changed().unwrap());
+        let checking = twayblade_platform::updates::Snapshot {
+            phase: twayblade_platform::updates::Phase::Checking,
+            ..Default::default()
+        };
+        super::publish_updater(&sender, checking.clone());
+        assert_eq!(sender.borrow().revision, 1);
+        super::publish_updater(&sender, checking);
+        assert_eq!(sender.borrow().revision, 1);
+    }
     #[test]
     fn account_reset_preserves_the_update_notice_but_clears_account_data() {
         let updater = twayblade_platform::updates::Snapshot {

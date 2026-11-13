@@ -324,10 +324,14 @@ Updater groundwork (2026-11-14, Codex):
   call restart guard and session retention design: `docs/architecture/UPDATES.md`.
   No asset download, signature implementation, self-install or restart yet.
 - Compilation/offline verification: fmt, strict locked all-target/all-feature
-  Clippy and workspace tests passed (212 passed; 31 isolated tests ignored).
+  Clippy and workspace tests passed (213 passed; 31 isolated tests ignored).
   Controlled-clock launch/daily scheduling, loopback HTTP request privacy,
   channels/version precedence, body limits, off-switch cancellation, package
   ownership parsing, settings persistence and account-reset retention are covered.
+- CI caught a no-op initial disabled-status publication advancing the shared
+  revision during an unauthenticated-action test. Unchanged updater snapshots
+  now publish nothing; the revision/no-notification regression test passes.
+  The local full suite was rerun after this fix; hosted CI is being rechecked.
 - Isolated Matrix regression: `run.sh services` passed 6/6, including encrypted
   same-device restore. The integration runner now uses `scripts/cargo-pruned`
   for every Cargo test invocation. This does not establish live GitHub or UI use.
