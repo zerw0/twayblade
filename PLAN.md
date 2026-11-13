@@ -244,6 +244,16 @@ and uninstall check on a clean machine, and publishing needs authorization:
   after 1.0. The flake keeps its development shell.
 - *Windows:* signed MSI or MSIX, plus winget.
 
+Release flow (requested 2026-11-13): every packaged build is published as a
+GitHub **pre-release** with its artifacts, checksums and a changelog generated
+from the merged pull requests since the previous release (user-facing wording,
+grouped as New, Improved and Fixed, with known gaps stated). A build becomes a
+**stable** release only when the user says so at push time; then the
+pre-release is promoted (no rebuild), the Homebrew cask, Flatpak, AUR and
+winget manifests follow, and Linux/Windows packages are signed. Pre-releases
+never update stable channels. Publishing needs the release credentials and
+the user's authorization.
+
 ## Known technical debt
 
 - Message text is escaped and passed through Kit's Markdown renderer to get
