@@ -394,8 +394,8 @@ impl MatrixApp {
             .child(group(rows, cx))
             .child(div().text_size(px(13.)).child("Keywords"))
             .child(keywords)
-            .child(h_flex().id("notification-keyword-entry").gap(px(8.)).child(Input::new(&self.notification_keyword).disabled(self.notification_busy)).child(
-                Button::new("add-notification-keyword").small().label("Add").disabled(self.notification_busy)
+            .child(h_flex().id("notification-keyword-entry").gap(px(8.)).child(Input::new(&self.notification_keyword).aria_label("New keyword").disabled(self.notification_busy)).child(
+                Button::new("add-notification-keyword").small().label("Add").accessibility_label("Add keyword").disabled(self.notification_busy)
                 .on_click(cx.listener(|this, _, window, cx| {
                     let word = this.notification_keyword.read(cx).value().to_string();
                     if word.trim().is_empty() { return; }
@@ -1176,7 +1176,7 @@ impl MatrixApp {
                     form_row(
                         "Interface size",
                         stepper(
-                            "scale",
+                            "interface size",
                             format!("{}%", appearance.scale),
                             appearance.scale > 85,
                             appearance.scale < 150,
@@ -1189,7 +1189,7 @@ impl MatrixApp {
                     form_row(
                         "Message text size",
                         stepper(
-                            "message-size",
+                            "message text size",
                             format!("{} pt", appearance.message_size),
                             appearance.message_size > 10,
                             appearance.message_size < 28,
@@ -1407,7 +1407,11 @@ impl MatrixApp {
             .gap_3()
             .child(div().child(self.snapshot.user_id.clone()))
             .child(div().child("Display name"))
-            .child(Input::new(self.account_name.as_ref().unwrap()).disabled(disabled))
+            .child(
+                Input::new(self.account_name.as_ref().unwrap())
+                    .aria_label("Display name")
+                    .disabled(disabled),
+            )
             .child(
                 Button::new("save-account-name")
                     .label("Save display name")
@@ -1467,7 +1471,14 @@ impl Render for SettingsWindow {
                         .h(px(28.))
                         .p_0()
                         .rounded(px(6.))
-                        .accessibility_label(item.label())
+                        // The label says "selected" for macOS (see `room_label`).
+                        .selected(selected)
+                        .bg(gpui_kit::transparent_black())
+                        .accessibility_label(if selected {
+                            format!("{}, selected", item.label())
+                        } else {
+                            item.label().to_owned()
+                        })
                         .child(
                             h_flex()
                                 .size_full()
@@ -1514,6 +1525,9 @@ impl Render for SettingsWindow {
                 .border_color(cx.theme().border)
                 .child(
                     div()
+                        .id("settings-title")
+                        .role(Role::Heading)
+                        .aria_label(section.label())
                         .text_size(px(13.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(section.label()),
@@ -1669,6 +1683,9 @@ fn form_row(label: &'static str, control: impl IntoElement, cx: &App) -> Div {
         .gap(px(12.))
         .child(
             div()
+                .id(SharedString::from(format!("label-{label}")))
+                .role(Role::Label)
+                .aria_label(label)
                 .flex_none()
                 .w(px(150.))
                 .text_size(px(13.))
@@ -1703,6 +1720,10 @@ fn segmented<const N: usize>(
                 .px(px(10.))
                 .rounded(px(5.))
                 .label(label)
+                // macOS reports selection only for list-like roles; say it.
+                .when(selected, |button| {
+                    button.accessibility_label(format!("{label}, selected"))
+                })
                 .selected(selected)
                 .when(selected, |button| button.bg(pill).shadow_xs())
                 .on_click(cx.listener(move |this, _, window, cx| on_pick(this, index, window, cx))),
@@ -1713,7 +1734,7 @@ fn segmented<const N: usize>(
 
 /// − value + with a quiet hint, for ranges too long for a segmented control.
 fn stepper(
-    id: &'static str,
+    name: &'static str,
     value: String,
     can_decrease: bool,
     can_increase: bool,
@@ -1722,6 +1743,7 @@ fn stepper(
     on_step: impl Fn(&mut MatrixApp, i16, &mut Window, &mut Context<MatrixApp>) + Clone + 'static,
 ) -> Div {
     let down = on_step.clone();
+    let id = name.replace(' ', "-");
     h_flex()
         .gap(px(8.))
         .child(
@@ -1743,7 +1765,7 @@ fn stepper(
                         .h(px(22.))
                         .w(px(26.))
                         .icon(gpui_kit::assets::IconName::Minus)
-                        .accessibility_label("Decrease")
+                        .accessibility_label(format!("Decrease {name}"))
                         .disabled(!can_decrease)
                         .on_click(
                             cx.listener(move |this, _, window, cx| down(this, -1, window, cx)),
@@ -1751,6 +1773,9 @@ fn stepper(
                 )
                 .child(
                     div()
+                        .id(SharedString::from(format!("{id}-value")))
+                        .role(Role::Label)
+                        .aria_label(format!("{name} {value}"))
                         .min_w(px(52.))
                         .text_center()
                         .text_size(px(12.))
@@ -1764,7 +1789,7 @@ fn stepper(
                         .h(px(22.))
                         .w(px(26.))
                         .icon(gpui_kit::assets::IconName::Plus)
-                        .accessibility_label("Increase")
+                        .accessibility_label(format!("Increase {name}"))
                         .disabled(!can_increase)
                         .on_click(
                             cx.listener(move |this, _, window, cx| on_step(this, 1, window, cx)),
@@ -1854,6 +1879,9 @@ fn keyboard_settings(cx: &App) -> AnyElement {
         body = body
             .child(
                 div()
+                    .id(("shortcut-area", index))
+                    .role(Role::Heading)
+                    .aria_label(title)
                     .px(px(4.))
                     .when(index > 0, |d| d.pt(px(12.)))
                     .text_size(px(13.))
@@ -1872,6 +1900,9 @@ fn keyboard_settings(cx: &App) -> AnyElement {
             .pt(px(8.))
             .text_size(px(11.))
             .text_color(cx.theme().muted_foreground)
+            .id("shortcuts-note")
+            .role(Role::Label)
+            .aria_label("Shortcuts can't be changed yet.")
             .child("Shortcuts can't be changed yet."),
     )
     .into_any_element()
@@ -1879,6 +1910,12 @@ fn keyboard_settings(cx: &App) -> AnyElement {
 
 fn shortcut_row(label: &'static str, chords: Vec<Vec<String>>, cx: &App) -> Div {
     let muted = cx.theme().muted_foreground;
+    // The key caps aren't exposed; the label carries the keys, e.g. "Bold, ⌘B".
+    let spoken = chords
+        .iter()
+        .map(|chord| chord.join(if cfg!(target_os = "macos") { "" } else { "+" }))
+        .collect::<Vec<_>>()
+        .join(" or ");
     let mut keys = h_flex().flex_none().gap(px(6.)).items_center();
     for (index, chord) in chords.into_iter().enumerate() {
         if index > 0 {
@@ -1897,6 +1934,9 @@ fn shortcut_row(label: &'static str, chords: Vec<Vec<String>>, cx: &App) -> Div 
         .gap(px(12.))
         .child(
             div()
+                .id(SharedString::from(format!("shortcut-{label}")))
+                .role(Role::Label)
+                .aria_label(format!("{label}, {spoken}"))
                 .flex_1()
                 .min_w_0()
                 .text_size(px(13.))

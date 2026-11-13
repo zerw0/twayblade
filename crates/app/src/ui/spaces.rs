@@ -287,33 +287,38 @@ impl MatrixApp {
     }
 
     pub fn invite_section(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut section = v_flex().gap(px(6.)).child(
-            div()
-                .px(px(6.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(cx.theme().muted_foreground)
-                .child("Invites"),
-        );
+        let mut section = v_flex()
+            .id("invites")
+            .role(Role::Group)
+            .aria_label("Invites")
+            .gap(px(6.))
+            .child(
+                div()
+                    .px(px(6.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Invites"),
+            );
         for invite in &self.snapshot.invites {
+            let kind = if invite.space {
+                "Space invitation"
+            } else if invite.direct {
+                "Direct message invitation"
+            } else {
+                "Room invitation"
+            };
             let accept_id = invite.id.clone();
             let decline_id = accept_id.clone();
             let disabled = self.preview || self.invite_pending.contains(&invite.id);
             section = section.child(
                 v_flex()
+                    .id(SharedString::from(format!("invite-{}", invite.id)))
+                    .role(Role::Group)
+                    .aria_label(format!("{}, {kind}", invite.name))
                     .px(px(6.))
                     .gap(px(4.))
                     .child(div().truncate().child(invite.name.clone()))
-                    .child(
-                        div()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(if invite.space {
-                                "Space invitation"
-                            } else if invite.direct {
-                                "Direct message invitation"
-                            } else {
-                                "Room invitation"
-                            }),
-                    )
+                    .child(div().text_color(cx.theme().muted_foreground).child(kind))
                     .child(
                         h_flex()
                             .gap(px(6.))
@@ -321,6 +326,7 @@ impl MatrixApp {
                                 Button::new(SharedString::from(format!("accept-{}", invite.id)))
                                     .small()
                                     .label("Accept")
+                                    .accessibility_label(format!("Accept {}", invite.name))
                                     .tooltip(format!("Accept {}", invite.name))
                                     .disabled(disabled)
                                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -332,6 +338,7 @@ impl MatrixApp {
                                     .ghost()
                                     .small()
                                     .label("Decline")
+                                    .accessibility_label(format!("Decline {}", invite.name))
                                     .tooltip(format!("Decline {}", invite.name))
                                     .disabled(disabled)
                                     .on_click(cx.listener(move |this, _, window, cx| {

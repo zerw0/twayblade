@@ -195,10 +195,64 @@ runtime spike (`call-host`) has been removed after native encrypted audio intero
 Element on each OS, including denied permissions, device removal, network change
 and screen sharing (Wayland and X11). Transport TLS is not media E2EE.
 
+Call view, next (requested 2026-11-13):
+- *Focus on a person.* Clicking a tile (or its "Focus" button, also from the
+  keyboard) makes that person the large view, with everyone else in a strip;
+  clicking again or Escape returns to the grid. A shared screen is focusable
+  the same way.
+- *Full screen.* The call stage can go full screen on its own (the focused
+  person or the grid), with the controls appearing on pointer movement and a
+  keyboard path out (Escape / ⌃⌘F). Works with the macOS full-screen space.
+- *Follow the speaker.* An option to focus whoever is talking automatically.
+  Switches only after someone has spoken for about a second and holds for a
+  few seconds, so the view doesn't flicker between people; a person you
+  focused yourself stays until you release them.
+- *Mute or turn people down for yourself.* Per participant, in their tile's
+  menu: Mute for me, and a volume slider (0–200%). Local playback only; it
+  never changes what others hear and is shown on the tile. Remembered for the
+  call only. Muting someone for everyone needs moderator permissions that
+  MatrixRTC/LiveKit don't standardise yet; out of scope until they do.
+- Each mode is announced to screen readers and follows Reduce Motion.
+
+**UI motion polish (with M5/M6, requested 2026-11-13).** Hover and press
+states animate instead of snapping: rows, buttons, rail tiles, message
+actions and call tiles fade their background and actions in over 150–200 ms
+with an ease-out curve; nothing moves or resizes on hover. Reduce Motion
+switches them back to instant changes. Verified in captures and on a
+physical Mac at 60 and 120 Hz.
+
 **M6 — release (3–5 weeks).** Accessibility pass, migrations,
 packaging, signing, updates. Exit: clean-machine install, upgrade with session
 retained, uninstall, notification activation. Signed artifacts need release
 credentials and explicit authorization.
+
+Packaging targets (requested 2026-11-13); each needs its own install, upgrade
+and uninstall check on a clean machine, and publishing needs authorization:
+- *macOS:* signed, notarised `.app` in a DMG, plus a Homebrew cask
+  (`brew install --cask twayblade`) in our own tap first, homebrew/cask once
+  eligible. The cask tracks GitHub releases and checksums.
+- *Linux, all major distributions:* Flatpak on Flathub as the universal
+  package (portals for screen sharing, notifications, secrets and the
+  browser); native `.deb` (Debian, Ubuntu and derivatives) and `.rpm` (Fedora,
+  openSUSE) built in CI with correct dependencies (libsecret, PipeWire, glib,
+  GPU/Vulkan stack); an AUR package for Arch; an AppImage for everything else.
+  Desktop entry, icons, AppStream metadata and the `matrix:` URI handler in
+  every package.
+- *Nix:* the flake exports `packages.<system>.default` (the app, built
+  reproducibly from `Cargo.lock`), `apps.default`, and an overlay; NixOS and
+  nix-darwin users can install it from the flake, and nixpkgs submission comes
+  after 1.0. The flake keeps its development shell.
+- *Windows:* signed MSI or MSIX, plus winget.
+
+Release flow (requested 2026-11-13): every packaged build is published as a
+GitHub **pre-release** with its artifacts, checksums and a changelog generated
+from the merged pull requests since the previous release (user-facing wording,
+grouped as New, Improved and Fixed, with known gaps stated). A build becomes a
+**stable** release only when the user says so at push time; then the
+pre-release is promoted (no rebuild), the Homebrew cask, Flatpak, AUR and
+winget manifests follow, and Linux/Windows packages are signed. Pre-releases
+never update stable channels. Publishing needs the release credentials and
+the user's authorization.
 
 ## Known technical debt
 
@@ -695,6 +749,14 @@ M6 — accessibility pass, part 1 (2026-11-12, Claude):
 - Fixed: every message row (timeline and threads) is a labelled group: sender (or "You"), time, content (image/file name and size, decryption failure, deleted), "replying to X", "edited", "sending"/"not sent". Day dividers and "New messages" are headings. Status notes above the composer are status nodes. Call stage is a "Call" region with a status node ("13:24, 3 people"), tiles labelled with name and state (speaking, muted, camera on, sharing screen, not encrypted), the ringing callee, "+N more people", the shared screen, a device notice as an alert, the other-room strip as status, and the incoming-call card as an alert ("Alex, Incoming video call").
 - Verified: a unit test of the message label; the macOS accessibility tree of a `--preview-call-screen` window read through the AX API shows the labels above. Not verified with VoiceOver itself, Linux AT-SPI or Windows UIA.
 - Remaining for the pass: VoiceOver walk-through (reading order, focus order, live announcements for new messages and call state), sidebar/room list grouping, settings and sign-in screens, reactions/read receipts wording, contrast and focus-ring audit in light/dark/custom themes.
+
+M6 — accessibility pass, part 2 (2026-11-13, Claude):
+- Room list: the space rail is a "Spaces" group; the sidebar a "Conversations" navigation landmark with its title as a heading; Favourites/Rooms/Direct messages are labelled groups whose headers are buttons reading "Rooms, expanded/collapsed"; room rows read "Name, selected, 2 mentions" / "3 unread" / "notifications muted"; invites are groups ("Sam, Direct message invitation") with "Accept Sam"/"Decline Sam"; the empty-list text is a status.
+- Settings: form-row labels, stepper values ("interface size 100%") and "Decrease/Increase interface size", shortcut rows with their keys ("Bold, ⌘B"), section headings, the page title as a heading, and "selected" on the chosen section and segmented options.
+- Sign-in and fields: the sign-in title is a heading, subtitle/hint/storage note are text, status is a live status; the Server, Username, Password, conversation search, recovery key, account password, keyword and display-name fields were unnamed and now have names.
+- Finding: AccessKit's macOS adapter reports selection only for item roles (list items, tabs…) and never reports expanded; list-item roles turned the rows into plain groups and still didn't report selection. So the state is part of the label on macOS; `selected`/`aria_expanded` stay set for other platforms.
+- Verified: unit test of the room-row wording; the macOS accessibility tree of the `--preview-invites`, `--preview-settings` and `--preview-signin` windows. Not verified with VoiceOver itself, AT-SPI or UIA.
+- Remaining: section headers are not keyboard-focusable (they're clickable elements, not Kit buttons, because Kit buttons can't carry an expanded state); accent swatches and theme presets don't say which is chosen; Settings › Security and Notifications body text; the VoiceOver walk-through, reactions/receipts wording and the contrast/focus-ring audit from part 1.
 
 ## Workspace
 

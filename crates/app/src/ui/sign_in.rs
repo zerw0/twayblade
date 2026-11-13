@@ -1,6 +1,27 @@
 //! Sign-in and session recovery screens.
 use super::*;
 
+const SERVER_HINT: &str = "The part after the colon in your Matrix ID, such as matrix.org.";
+
+/// Text a screen reader reads as a heading. GPUI exposes only elements with an
+/// id and a role, so visible text needs both to be read at all.
+fn heading(id: &'static str, text: &'static str) -> Stateful<Div> {
+    div()
+        .id(id)
+        .role(Role::Heading)
+        .aria_label(text)
+        .font_weight(FontWeight::SEMIBOLD)
+        .child(text)
+}
+/// Plain text exposed to screen readers; the caller adds the visible child.
+fn text_label(id: &'static str, text: impl Into<SharedString>) -> Stateful<Div> {
+    div().id(id).role(Role::Label).aria_label(text)
+}
+/// Status text that screen readers announce when it changes.
+fn status_text(id: &'static str, text: impl Into<SharedString>) -> Stateful<Div> {
+    div().id(id).role(Role::Status).aria_label(text)
+}
+
 impl MatrixApp {
     pub(crate) fn field_label(&self, text: &'static str) -> Div {
         div()
@@ -15,8 +36,22 @@ impl MatrixApp {
             return self.sign_in_view(cx);
         }
         let soft = self.snapshot.session_state == SessionState::SoftLoggedOut;
-        let mut form = v_flex().w(px(360.)).gap(px(16.)).child(div().text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).child("You were signed out"))
-            .child(div().text_color(cx.theme().muted_foreground).child(if soft { "Re-authenticate to continue with this device. Your local keys and history will be kept." } else if self.confirm_session_reset { "Delete this device’s local keys and cached history? Recovery or another verified device may be needed to read encrypted messages after signing in again." } else { "This session was revoked. Sign in again to continue." }));
+        let detail = if soft {
+            "Re-authenticate to continue with this device. Your local keys and history will be kept."
+        } else if self.confirm_session_reset {
+            "Delete this device’s local keys and cached history? Recovery or another verified device may be needed to read encrypted messages after signing in again."
+        } else {
+            "This session was revoked. Sign in again to continue."
+        };
+        let mut form = v_flex()
+            .w(px(360.))
+            .gap(px(16.))
+            .child(heading("recovery-title", "You were signed out").text_size(px(22.)))
+            .child(
+                text_label("recovery-detail", detail)
+                    .text_color(cx.theme().muted_foreground)
+                    .child(detail),
+            );
         if soft {
             form =
                 form.child(
@@ -68,7 +103,7 @@ impl MatrixApp {
         }
         if !self.status.is_empty() {
             form = form.child(
-                div()
+                status_text("recovery-status", self.status.clone())
                     .text_color(cx.theme().muted_foreground)
                     .child(self.status.clone()),
             );
@@ -107,20 +142,24 @@ impl MatrixApp {
                         ),
                 )
                 .child(
-                    div()
-                        .text_size(px(22.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(
-                            if self.snapshot.session_state
-                                == twayblade_core::auth::SessionState::SoftLoggedOut
-                            {
-                                "You were signed out"
-                            } else {
-                                "Sign in"
-                            },
-                        ),
+                    heading(
+                        "sign-in-title",
+                        if self.snapshot.session_state
+                            == twayblade_core::auth::SessionState::SoftLoggedOut
+                        {
+                            "You were signed out"
+                        } else {
+                            "Sign in"
+                        },
+                    )
+                    .text_size(px(22.)),
                 )
-                .child(div().text_color(muted).text_center().child(subtitle)),
+                .child(
+                    text_label("sign-in-subtitle", subtitle.clone())
+                        .text_color(muted)
+                        .text_center()
+                        .child(subtitle),
+                ),
         );
         match &self.options {
             None => {
@@ -129,10 +168,17 @@ impl MatrixApp {
                         v_flex()
                             .gap(px(6.))
                             .child(self.field_label("Server"))
-                            .child(Input::new(&self.homeserver).disabled(self.busy))
-                            .child(div().text_size(px(11.5)).text_color(muted).child(
-                                "The part after the colon in your Matrix ID, such as matrix.org.",
-                            )),
+                            .child(
+                                Input::new(&self.homeserver)
+                                    .aria_label("Server")
+                                    .disabled(self.busy),
+                            )
+                            .child(
+                                text_label("server-hint", SERVER_HINT)
+                                    .text_size(px(11.5))
+                                    .text_color(muted)
+                                    .child(SERVER_HINT),
+                            ),
                     )
                     .child(
                         Button::new("discover")
@@ -154,7 +200,7 @@ impl MatrixApp {
                         .bg(cx.theme().secondary)
                         .child(Icon::new(IconName::Lock).small().text_color(muted))
                         .child(
-                            div()
+                            text_label("chosen-server", format!("Server: {}", options.homeserver))
                                 .flex_1()
                                 .min_w_0()
                                 .truncate()
@@ -166,6 +212,7 @@ impl MatrixApp {
                                 .ghost()
                                 .xsmall()
                                 .label("Change")
+                                .accessibility_label("Change server")
                                 .disabled(
                                     self.busy
                                         || self.snapshot.session_state
@@ -237,7 +284,7 @@ impl MatrixApp {
                             v_flex()
                                 .gap(px(6.))
                                 .child(self.field_label("Username"))
-                                .child(Input::new(&self.username).disabled(
+                                .child(Input::new(&self.username).aria_label("Username").disabled(
                                     self.busy
                                         || self.snapshot.session_state
                                             != twayblade_core::auth::SessionState::Active,
@@ -247,7 +294,11 @@ impl MatrixApp {
                             v_flex()
                                 .gap(px(6.))
                                 .child(self.field_label("Password"))
-                                .child(Input::new(&self.password).disabled(self.busy)),
+                                .child(
+                                    Input::new(&self.password)
+                                        .aria_label("Password")
+                                        .disabled(self.busy),
+                                ),
                         )
                         .child(sign_in.primary());
                 }
@@ -268,23 +319,24 @@ impl MatrixApp {
         };
         if !status.is_empty() {
             form = form.child(
-                div()
+                status_text("sign-in-status", status.clone())
                     .text_size(px(12.))
                     .text_color(muted)
                     .text_center()
                     .child(status),
             );
         }
+        let storage = format!(
+            "Twayblade keeps your session securely in the {}.",
+            secret_store_name()
+        );
         form = form.child(
-            div()
+            text_label("session-storage", storage.clone())
                 .pt(px(8.))
                 .text_size(px(11.5))
                 .text_color(muted)
                 .text_center()
-                .child(format!(
-                    "Twayblade keeps your session securely in the {}.",
-                    secret_store_name()
-                )),
+                .child(storage),
         );
         v_flex()
             .id("sign-in")

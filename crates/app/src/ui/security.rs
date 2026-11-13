@@ -185,7 +185,7 @@ impl MatrixApp {
             body = body.child(div().font_weight(FontWeight::SEMIBOLD).child("Recover encrypted conversations"))
                 .child(div().text_color(muted).child("Enter your recovery key or recovery passphrase to verify this device and restore backed-up room keys."))
                 .child(div().child("Recovery key or passphrase"))
-                .child(Input::new(&self.security_input).disabled(self.busy))
+                .child(Input::new(&self.security_input).aria_label("Recovery key or passphrase").disabled(self.busy))
                 .child(Button::new("restore-recovery").primary().label("Recover").disabled(self.busy || self.preview).on_click(cx.listener(|this, _, window, cx| {
                     let key = this.take_security_input(window, cx); this.perform_security(SecurityAction::Recover(key), window, cx);
                 })))
@@ -234,7 +234,11 @@ impl MatrixApp {
                         .text_color(muted)
                         .child("Enter your account password to confirm."),
                 )
-                .child(Input::new(&self.security_input).disabled(self.busy))
+                .child(
+                    Input::new(&self.security_input)
+                        .aria_label("Account password")
+                        .disabled(self.busy),
+                )
                 .child(
                     Button::new("confirm-device-signout")
                         .label("Sign out device")
