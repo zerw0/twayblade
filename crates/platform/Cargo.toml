@@ -30,7 +30,7 @@ objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "=3.6.3", features = ["windows-native"] }
-windows = { version = "=0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "UI_ViewManagement", "UI_Notifications", "Data_Xml_Dom", "Foundation"] }
+windows = { version = "=0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "UI_ViewManagement", "UI_Notifications", "Data_Xml_Dom", "Foundation", "Win32_Media_Audio", "Win32_System_Com"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "=3.6.3", features = ["sync-secret-service", "crypto-rust"] }
@@ -38,6 +38,7 @@ keyring = { version = "=3.6.3", features = ["sync-secret-service", "crypto-rust"
 # refuses both. Its futures run on any executor, including our tokio runtime.
 ashpd = { version = "=0.13.13", default-features = false, features = ["async-io", "settings"] }
 zbus = { version = "=5.19.0", default-features = false, features = ["async-io"] }
+libpulse-binding = "=2.30.1"
 
 # Native observer registration and Win32 output pointers are isolated in audited
 # platform modules. Core/frontend retain the workspace-wide forbid policy.

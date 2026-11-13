@@ -23,7 +23,7 @@ jobs:
           pkg-config cmake libdbus-1-dev libwayland-dev libxkbcommon-dev
           libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl1-mesa-dev
           libfontconfig1-dev libfreetype6-dev libssl-dev libxcb1-dev libxkbfile-dev
-          libxkbcommon-x11-dev libvulkan-dev libglib2.0-dev
+          libxkbcommon-x11-dev libvulkan-dev libglib2.0-dev libpulse-dev
       # libwebrtc's bundled libc++ needs clang 21+; Ubuntu 24.04 ships 18.
       - name: Install clang 21
         if: runner.os == 'Linux'

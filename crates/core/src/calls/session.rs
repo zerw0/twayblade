@@ -24,6 +24,8 @@ pub enum NativeControl {
     Camera(String),
     /// Start (opening the system picker where there is one) or stop sharing.
     Screen(bool),
+    ScreenSources(SourceKind),
+    ShareScreen(ScreenSelection),
     Leave,
 }
 
@@ -51,6 +53,7 @@ pub struct NativeCall {
     event_serial: u64,
     /// Capture status while a screen share is being chosen or sent.
     screen_events: Option<tokio::sync::mpsc::Receiver<ScreenStatus>>,
+    screen_timeout: Option<tokio::time::Instant>,
 }
 /// After a rotation, keep encrypting with the previous key this long so the
 /// remaining members receive the new one first (matrix-js-sdk MatrixRTCSession
@@ -60,6 +63,7 @@ const USE_KEY_DELAY: std::time::Duration = std::time::Duration::from_secs(5);
 impl From<MediaError> for CallError {
     fn from(value: MediaError) -> Self {
         match value {
+            MediaError::Screen(error) => Self::ScreenCapture(error),
             MediaError::E2eeRequired => Self::MediaE2eeRequired,
             MediaError::DeviceUnavailable => Self::DeviceUnavailable,
             _ => Self::TransportFailed,
@@ -95,16 +99,21 @@ impl NativeCall {
         }
         let mut call = Self::connect(account, room, lease).await?;
         call.media.start_microphone().await?;
-        // CoreAudio UIDs and WebRTC IDs can disagree; keep WebRTC's choice then.
-        if let Some(id) = twayblade_platform::media_devices::default_audio(true)
-            && call.media.select_input(&id).is_ok()
-        {
-            call.state.local.input_device = Some(id);
-        }
-        if let Some(id) = twayblade_platform::media_devices::default_audio(false)
-            && call.media.select_output(&id).is_ok()
-        {
-            call.state.local.output_device = Some(id);
+        // Match real OS defaults to SDK IDs (or a unique PulseAudio description
+        // when ADM only exposes indices). An unknown/ambiguous match leaves
+        // WebRTC's existing choice intact; never select an arbitrary first item.
+        if let Ok(defaults) = twayblade_platform::media_devices::query_audio_defaults().await {
+            let devices = call.media.devices();
+            if let Some(id) = resolve_default(&devices.inputs, defaults.input.as_ref())
+                && call.media.select_input(&id).is_ok()
+            {
+                call.state.local.input_device = Some(id);
+            }
+            if let Some(id) = resolve_default(&devices.outputs, defaults.output.as_ref())
+                && call.media.select_output(&id).is_ok()
+            {
+                call.state.local.output_device = Some(id);
+            }
         }
         // Camera capture is attached below through the native capture adapter.
         if video {
@@ -147,6 +156,8 @@ impl NativeCall {
         eprintln!("Native fixture: encrypted SFU transport connected");
         let direct = signalling.room.is_direct().await.unwrap_or(false);
         let state = CallState {
+            screen_backend: twayblade_media::screen::backend().ok(),
+            screen_sources: Vec::new(),
             room_id: room.into(),
             kind: if direct {
                 CallKind::Direct
@@ -197,6 +208,7 @@ impl NativeCall {
             permission_tick: tokio::time::interval(std::time::Duration::from_secs(2)),
             event_serial: 0,
             screen_events: None,
+            screen_timeout: None,
             ring: None,
             declines,
             _decline_guard: decline_guard,
@@ -294,11 +306,7 @@ impl NativeCall {
                             .local
                             .camera
                             .clone()
-                            .or_else(|| {
-                                twayblade_media::camera::devices()
-                                    .first()
-                                    .map(|d| d.id.clone())
-                            })
+                            .or_else(twayblade_media::camera::default_device)
                             .ok_or(CallError::DeviceUnavailable)?,
                     )
                 } else {
@@ -331,18 +339,13 @@ impl NativeCall {
                 }
                 self.state.local.camera = Some(id);
             }
-            NativeControl::Screen(true) => {
-                if self.state.local.screen == ScreenShare::Off {
-                    self.screen_events = Some(
-                        self.media
-                            .begin_screen_share()
-                            .await
-                            .map_err(|_| CallError::ScreenUnavailable)?,
-                    );
-                    self.state.local.screen = ScreenShare::Choosing;
-                }
-            }
+            NativeControl::Screen(true) => self.begin_screen(None).await?,
             NativeControl::Screen(false) => self.stop_screen().await,
+            NativeControl::ScreenSources(kind) => {
+                self.state.screen_sources.clear();
+                self.state.screen_sources = twayblade_media::screen::sources(kind).await?;
+            }
+            NativeControl::ShareScreen(selection) => self.begin_screen(Some(selection)).await?,
         }
         Ok(())
     }
@@ -360,11 +363,17 @@ impl NativeCall {
             std::time::Duration::from_millis(ring.expires.saturating_sub(super::ringing::now_ms()))
         });
         let screen = self.screen_events.as_mut();
+        let screen_timeout = self.screen_timeout;
         tokio::select! {
+            _ = async move { match screen_timeout {Some(at)=>tokio::time::sleep_until(at).await,None=>std::future::pending().await} } => {
+                self.state.error=Some(ScreenError::SelectionTimeout.into());
+                self.stop_screen().await;
+            }
             status = async move { match screen { Some(events) => events.recv().await, None => std::future::pending().await } } => {
                 if status == Some(ScreenStatus::Live) && self.state.local.screen == ScreenShare::Choosing {
                     match self.media.publish_screen().await {
                         Ok(()) => {
+                            self.screen_timeout = None;
                             self.state.local.screen = ScreenShare::Live;
                             self.state.screen_sharing = Some(true);
                         }
@@ -374,6 +383,9 @@ impl NativeCall {
                         }
                     }
                 } else if status != Some(ScreenStatus::Live) {
+                    if let Some(ScreenStatus::Failed(error)) = status {
+                        self.state.error = Some(CallError::ScreenCapture(error));
+                    }
                     // Picker cancelled, sharing stopped from the system, or capture failed.
                     self.stop_screen().await;
                 }
@@ -548,6 +560,20 @@ impl NativeCall {
     }
     async fn refresh_devices(&mut self) {
         let devices = self.media.devices();
+        let missing = |selected: &Option<String>, list: &[CallDevice]| {
+            selected
+                .as_ref()
+                .is_some_and(|id| !list.iter().any(|device| &device.id == id))
+        };
+        let defaults = if missing(&self.state.local.input_device, &devices.inputs)
+            || missing(&self.state.local.output_device, &devices.outputs)
+        {
+            twayblade_platform::media_devices::query_audio_defaults()
+                .await
+                .ok()
+        } else {
+            None
+        };
         for kind in [DeviceKind::Input, DeviceKind::Output, DeviceKind::Camera] {
             let (selected, list) = match kind {
                 DeviceKind::Input => (&self.state.local.input_device, &devices.inputs),
@@ -562,12 +588,21 @@ impl NativeCall {
             };
             let default = match kind {
                 DeviceKind::Camera => twayblade_media::camera::default_device(),
-                _ => twayblade_platform::media_devices::default_audio(kind == DeviceKind::Input)
-                    .or_else(|| {
-                        list.iter()
-                            .find(|d| d.id == "default")
-                            .map(|d| d.id.clone())
+                _ => resolve_default(
+                    list,
+                    defaults.as_ref().and_then(|defaults| {
+                        if kind == DeviceKind::Input {
+                            defaults.input.as_ref()
+                        } else {
+                            defaults.output.as_ref()
+                        }
                     }),
+                )
+                .or_else(|| {
+                    list.iter()
+                        .find(|d| d.id == "default")
+                        .map(|d| d.id.clone())
+                }),
             };
             let to = fallback_device(Some(&from), list, default.as_deref());
             let result = match (kind, to.as_deref()) {
@@ -754,13 +789,28 @@ impl NativeCall {
         }
         self.state.devices = self.media.devices();
     }
+    async fn begin_screen(&mut self, selection: Option<ScreenSelection>) -> Result<(), CallError> {
+        if self.state.local.screen != ScreenShare::Off {
+            if selection.is_some() {
+                return Err(ScreenError::Busy.into());
+            }
+            return Ok(());
+        }
+        self.screen_events = Some(self.media.begin_screen_share(selection).await?);
+        self.screen_timeout =
+            Some(tokio::time::Instant::now() + twayblade_media::screen::CHOOSE_TIMEOUT);
+        self.state.local.screen = ScreenShare::Choosing;
+        Ok(())
+    }
     async fn stop_screen(&mut self) {
+        self.screen_timeout = None;
         self.screen_events = None;
         self.media.stop_screen_share().await;
         self.state.local.screen = ScreenShare::Off;
         self.state.screen_sharing = Some(false);
     }
     pub async fn leave(&mut self) -> Result<(), CallError> {
+        self.state.screen_sources.clear();
         self.ring = None;
         self.screen_events = None;
         self.media.close().await;
@@ -893,9 +943,84 @@ fn fallback_device(
         .or_else(|| default.filter(|id| devices.iter().any(|d| d.id == *id)))
         .map(str::to_owned)
 }
+
+fn resolve_default(
+    devices: &[CallDevice],
+    default: Option<&twayblade_platform::media_devices::DefaultAudioDevice>,
+) -> Option<String> {
+    let default = default?;
+    let id_matches = |id: &str| {
+        if cfg!(target_os = "windows") {
+            id.eq_ignore_ascii_case(&default.id)
+        } else {
+            id == default.id
+        }
+    };
+    let mut exact = devices.iter().filter(|device| id_matches(&device.id));
+    if let Some(device) = exact.next() {
+        return exact.next().is_none().then(|| device.id.clone());
+    }
+    let name = default.name.as_deref()?;
+    let mut named = devices.iter().filter(|device| device.name == name);
+    let device = named.next()?;
+    named.next().is_none().then(|| device.id.clone())
+}
 #[cfg(test)]
 mod resilience_tests {
     use super::*;
+    #[test]
+    fn defaults_match_real_ids_or_unique_descriptions_but_never_guess() {
+        use twayblade_platform::media_devices::DefaultAudioDevice;
+        let devices = vec![
+            CallDevice {
+                id: "index:0".into(),
+                name: "Other".into(),
+            },
+            CallDevice {
+                id: "index:2".into(),
+                name: "Headset".into(),
+            },
+        ];
+        let mut default = DefaultAudioDevice {
+            id: "pulse-headset".into(),
+            name: Some("Headset".into()),
+        };
+        assert_eq!(
+            resolve_default(&devices, Some(&default)),
+            Some("index:2".into())
+        );
+        let mut duplicate = devices.clone();
+        duplicate.push(CallDevice {
+            id: "index:3".into(),
+            name: "Headset".into(),
+        });
+        assert_eq!(resolve_default(&duplicate, Some(&default)), None);
+        default.id = "index:2".into();
+        assert_eq!(
+            resolve_default(&duplicate, Some(&default)),
+            Some("index:2".into())
+        );
+        default.id = "missing".into();
+        default.name = None;
+        assert_eq!(resolve_default(&devices, Some(&default)), None);
+        assert_eq!(resolve_default(&devices, None), None);
+    }
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_endpoint_guid_matching_ignores_only_ascii_case() {
+        let devices = [CallDevice {
+            id: "{ENDPOINT-GUID}".into(),
+            name: "Headset".into(),
+        }];
+        let default = twayblade_platform::media_devices::DefaultAudioDevice {
+            id: "{endpoint-guid}".into(),
+            name: None,
+        };
+        assert_eq!(
+            resolve_default(&devices, Some(&default)),
+            Some("{ENDPOINT-GUID}".into())
+        );
+    }
     #[test]
     fn fallback_preserves_selection_or_uses_only_the_system_default() {
         let devices = vec![

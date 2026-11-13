@@ -9,15 +9,18 @@
         let pkgs = import nixpkgs { inherit system; };
         in {
           default = pkgs.mkShell {
-            buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.dbus pkgs.fontconfig pkgs.freetype pkgs.glib pkgs.openssl ];
+            buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.dbus pkgs.fontconfig pkgs.freetype pkgs.glib pkgs.openssl pkgs.libpulseaudio ];
             packages = with pkgs; [ cargo rustc rustfmt clippy pkg-config cmake python3 nodejs openssl ]
               ++ lib.optionals stdenv.hostPlatform.isLinux [
                 wayland libxkbcommon libGL vulkan-loader fontconfig freetype openssl
+                dbus glib libpulseaudio pipewire libdrm
                 xorg.libX11 xorg.libXcursor xorg.libXi xorg.libXrandr xorg.libxcb xorg.libxkbfile
               ];
             LD_LIBRARY_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux
               (pkgs.lib.makeLibraryPath (with pkgs; [
                 wayland libxkbcommon libGL vulkan-loader fontconfig freetype openssl
+                dbus glib libpulseaudio pipewire libdrm
+                xorg.libXfixes xorg.libXdamage xorg.libXcomposite xorg.libXext
                 xorg.libX11 xorg.libXcursor xorg.libXi xorg.libXrandr xorg.libxcb xorg.libxkbfile
               ]));
           };

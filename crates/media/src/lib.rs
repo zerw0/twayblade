@@ -42,6 +42,8 @@ pub enum MediaError {
     DeviceUnavailable,
     #[error("media_invalid_frame")]
     InvalidFrame,
+    #[error(transparent)]
+    Screen(#[from] screen::ScreenError),
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Device {
@@ -419,10 +421,17 @@ impl NativeMedia {
     /// Publish with `publish_screen` once `ScreenStatus::Live` arrives.
     pub async fn begin_screen_share(
         &mut self,
+        selection: Option<screen::ScreenSelection>,
     ) -> Result<mpsc::Receiver<screen::ScreenStatus>, MediaError> {
         self.stop_screen_share().await;
         let (send, receive) = mpsc::channel(4);
-        self.screen_capture = Some(screen::ScreenCapture::start(send)?);
+        // Native initialization can wait for OS IPC. Keep it off the async
+        // driver thread; aborting the call drops any late returned capture.
+        self.screen_capture = Some(
+            tokio::task::spawn_blocking(move || screen::ScreenCapture::start(send, selection))
+                .await
+                .map_err(|_| screen::ScreenError::WorkerUnavailable)??,
+        );
         Ok(receive)
     }
     pub async fn publish_screen(&mut self) -> Result<(), MediaError> {

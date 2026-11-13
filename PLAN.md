@@ -1,6 +1,6 @@
 # Twayblade — plan
 
-Updated 2026-11-12. Status: M0 in progress; no milestone exit claimed.
+Updated 2026-11-14. Status: M0 in progress; no milestone exit claimed.
 
 ## Goal
 
@@ -305,6 +305,39 @@ Linux and Windows CI passed on `36f850a`; macOS CI was switched to `macos-15`
 7. **M6 release.** Accessibility pass, packaging, signing, updates.
 
 ## Progress
+
+Linux/Windows screen and default-audio contracts (2026-11-14, Codex):
+- Wayland requests the SDK's XDG portal/PipeWire generic capturer; X11 uses an
+  explicit screen/window source. Windows initializes WinRT on the capture-owning
+  thread, checks GraphicsCapture support and uses the SDK's WGC-enabled native
+  capturers (its DirectX fallback remains). Native backend selection and physical
+  capture are unverified. Mandatory frame E2EE and bounded video handles remain.
+- Typed screen errors cover unavailable backend/session, source selection,
+  stale/missing/duplicate source, busy worker, startup/query/first-frame timeout
+  and SDK permanent failure. Stop is neutral; cancellation/denial are not guessed
+  from the SDK's generic failure. Startup runs off the async worker and core
+  enforces the first-frame deadline independently. Native workers retain global
+  permits until completion, bounding work even after caller cancellation.
+- `CallState.screen_backend`/`screen_sources`, read-only source requests and
+  ticket-checked Share actions expose the X11/Windows source-picker contract.
+  Names are bounded, redacted in Debug, not persisted and cleared on call end.
+  Claude still owns that picker; no views were built or restyled. View changes
+  only supply fixture defaults and map the new typed error for compilation.
+- Audio defaults: Windows IMMDevice communications/console endpoints; Linux
+  PulseAudio/PipeWire-Pulse default names/descriptions, with no stream creation,
+  routing change or daemon autospawn. Bounded blocking queries return typed
+  errors. Core matches exact IDs or unique descriptions, never an arbitrary
+  first input; camera activation likewise uses the OS default where implemented.
+- **Existing source gap:** Linux/Windows webcam capture is still unimplemented,
+  rather than merely awaiting physical acceptance. This task ports the named
+  screen-capture/audio-default paths. Physical portal consent/cancel, X11/WGC
+  sources, actual Windows backend, multiple monitors, playback/default mapping,
+  hot-plug and permission acceptance remain open.
+- macOS compilation/offline verification: fmt, strict all-target/all-feature
+  locked Clippy and workspace tests passed (203 passed; 31 isolated tests ignored).
+  Isolated generated-media `run.sh call` passed 3/3 (164.88 s). Hosted
+  Linux/Windows compilation is pending. No physical or milestone acceptance
+  claimed.
 
 Done (macOS arm64, offline and isolated-server verification only):
 - Cargo workspace (`core`, `platform`, `app`), Nix shell, pinned dependencies.

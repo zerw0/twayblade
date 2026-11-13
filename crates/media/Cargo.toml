@@ -28,6 +28,9 @@ url.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 livekit = { version = "=0.10.1", features = ["rustls-tls-native-roots", "glib-main-loop"] }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "=0.62.2", features = ["Graphics_Capture", "Win32_System_WinRT"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "=0.6.5"
 objc2-foundation = { version = "=0.3.2", features = ["NSArray", "NSDictionary", "NSValue", "NSString"] }
