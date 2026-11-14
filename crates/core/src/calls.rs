@@ -10,12 +10,17 @@ use matrix_sdk::RoomState;
 pub use ringing::{CallActivity, IncomingAction, IncomingCall};
 pub use session::{CallHandle, NativeCall, NativeControl};
 use std::collections::HashMap;
+pub use twayblade_media::screen::{
+    ScreenBackend, ScreenError, ScreenSelection, ScreenSource, SourceKind,
+};
 pub use twayblade_media::{
     Device as CallDevice, Devices as CallDevices, LatestFrame, VideoFrame, VideoTracks,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum CallError {
+    #[error(transparent)]
+    ScreenCapture(#[from] ScreenError),
     #[error("call_no_foci")]
     NoFoci,
     #[error("call_media_e2ee_required")]
@@ -153,6 +158,10 @@ pub enum CallEvent {
 }
 #[derive(Clone, Debug)]
 pub struct CallState {
+    /// Routing capability, not proof that OS capture permission is granted.
+    pub screen_backend: Option<ScreenBackend>,
+    /// Real OS choices, loaded only on an explicit source-list request.
+    pub screen_sources: Vec<ScreenSource>,
     /// Bounded recent events with per-call serials for toast deduplication.
     pub events: Vec<(u64, CallEvent)>,
     pub local: LocalCallState,

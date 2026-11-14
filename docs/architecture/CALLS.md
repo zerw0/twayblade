@@ -138,13 +138,15 @@ extra sink per remote track.
 Microphone/playout use libwebrtc's PlatformAudio ADM. Stable device IDs are
 validated against a fresh enumeration before switching. Device lists refresh
 with session updates and phase 2a hot-plug listeners; physical device-removal
-acceptance remains open. `None` for the selected input/output means the system default. Camera
+acceptance remains open. `None` for the selected input/output retains the SDK's
+own choice without claiming a resolved OS device ID. Camera
 capture uses AVFoundation on a dedicated worker, a serial callback queue,
 `alwaysDiscardsLateVideoFrames`, bounded pixel dimensions and a native SDK video
 source. Camera-off stops capture; switching replaces the source. The platform
 crate owns microphone/camera prompts and typed denied/restricted errors.
-`macos/Info.plist` declares both usage descriptions. `CaptureSource` leaves the
-screen-capture boundary available for a later phase.
+`macos/Info.plist` declares both usage descriptions. `CaptureSource` also feeds
+the native screen adapter described below. Webcam capture remains implemented
+only on macOS; Linux/Windows camera lists and capture are still source gaps.
 
 ## App contract and threading
 
@@ -229,7 +231,8 @@ These synthetic checks do not establish physical capture/playout acceptance.
 
 Acceptance still requires a person to test actual microphone/speaker/camera
 permissions and media on this Mac. Public-server Element Web interoperability,
-Linux and Windows are not attempted. Screen sharing remains open M5 work.
+Those phase-1 results did not exercise Linux or Windows. The later screen
+adapter and cross-platform contracts below have separate verification gates.
 Phase 2a below adds ringing, notification, device-removal and reconnect
 contracts with separate acceptance limits.
 
@@ -304,9 +307,12 @@ system input/output defaults, plus AVFoundation connect/disconnect notifications
 Other targets have a two-second list-refresh timer. Selected-device removal
 chooses the OS default only; never an arbitrary first microphone/camera.
 CoreAudio supplies stable default audio UIDs and AVFoundation the default camera.
+Windows now queries the communications endpoint (console default if absent),
+and Linux queries PulseAudio/PipeWire-Pulse server defaults. Exact IDs take
+priority; a unique PulseAudio description can match index-only SDK devices.
 On unsupported default discovery, or with no replacement, report
-`DeviceUnavailable` and mute/stop affected capture. Cross-platform default-device
-resolution and physical hot-plug remain acceptance gaps. Existing permission
+`DeviceUnavailable` and mute/stop affected capture. Physical default-device
+resolution and hot-plug remain acceptance gaps. Existing permission
 grants are checked without prompts every two seconds on macOS; revocation
 mutes/stops the affected track and reports its typed permission error.
 
@@ -360,3 +366,75 @@ ringing scenarios. The native call retained membership and resumed bidirectional
 decrypted audio/video after the interruption. PLAN.md also records the standalone
 decline limitation and the earlier transient Element media failure; two subsequent
 complete runs passed. No physical or cross-platform acceptance is claimed.
+
+
+## Linux/Windows screen and audio-default contracts (2026-11-14)
+
+`CallState.screen_backend` reports the platform route, not permission or runtime
+acceptance. macOS keeps the ScreenCaptureKit system picker. Wayland uses the
+SDK's PipeWire/XDG desktop portal generic capturer; the Rust route does not retry
+through X11 when that request fails. X11 uses explicit screen/window
+sources. Windows requires WinRT GraphicsCapture support and uses the pinned
+SDK's WGC-enabled screen/window capturers (the SDK also enables its DirectX
+fallback). The exact Windows capturer selected still needs runtime verification.
+No web runtime or second rendering frontend is involved.
+
+For macOS/Wayland, `Control::Screen(true)` opens the OS picker. For X11/Windows,
+the source-selection view, not yet built, must use:
+
+1. `Backend::request_screen_sources(account_instance, SourceKind) -> CallTicket`.
+   Choices arrive in `Snapshot.call.screen_sources`, with an OS title and a typed
+   `ScreenSelection { kind, id }`. The list is bounded to 128 choices, titles to
+   512 characters, and is cleared on terminal call state. Source titles are
+   omitted from Debug output and never logged or persisted.
+2. Capture that returned ticket with the picker. After explicit user selection,
+   call `Backend::share_screen_source(ticket, selection)`. The backend checks
+   account/call generation before enqueueing and again in the call task; the
+   native worker re-enumerates and validates the selected ID. Missing, duplicate
+   or stale IDs fail rather than selecting the first screen/window.
+3. `Control::Screen(false)` stops sharing. Existing native controls/views have
+   not been expanded into an X11/Windows source picker by this technical change.
+
+Capture and source-query workers each have one global permit. A timed-out or
+cancelled caller does not release a native worker's permit until that worker
+returns, preventing repeated requests from creating unbounded stranded workers.
+Source queries wait at most five seconds, capture initialization ten seconds.
+Initialization runs off the async worker; late returned captures are dropped
+after call cancellation. Core also enforces a 120-second first-frame deadline
+independently of the capture loop, keeping the call responsive if native capture
+stalls. A blocking native call can outlive the caller's wait; OS calls are not
+forcibly interrupted. Stop requests are neutral `Ended`; SDK permanent errors and
+first-frame timeout become typed `ScreenError` values in `CallState.error`.
+The SDK does not distinguish picker cancellation, denial and other permanent
+failures; no permission cause is invented. A late startup after cancellation
+sees its stop flag. Windows Runtime initialization and teardown stay on the
+capturer-owning thread, with non-Send guards and capturer-first destruction.
+
+`platform::media_devices::query_audio_defaults` uses one bounded blocking query
+with a three-second caller budget. macOS keeps CoreAudio IDs. Windows queries
+IMMDevice communications input/output endpoints, falling back only to the OS
+console default. Linux reads the running PulseAudio/PipeWire-Pulse server's
+actual default names and descriptions, without autospawning a daemon, creating
+an audio stream or changing routing. Its context/mainloop has a two-second
+budget. Server user/host/cookie fields are not copied. COM allocations are freed
+and initialization is balanced on the same worker thread.
+
+Core resolves exact SDK IDs first (Windows endpoint IDs compare ASCII case
+insensitively), then a unique PulseAudio description if ADM exposes index-only
+IDs. Unknown or ambiguous startup matches retain the SDK's existing choice.
+Hot-plug fallback preserves an available selection, otherwise uses only a
+resolved OS default or the SDK's explicit `default` entry; no arbitrary first
+microphone is chosen. Camera activation likewise uses AVFoundation's real
+default rather than the first enumerated camera. **Linux/Windows webcam capture
+is still unimplemented**; this port does not relabel that source gap as merely
+unverified hardware behavior.
+
+All screen frames continue through the existing bounded native video source,
+mandatory LiveKit frame E2EE and latest-frame handles. Screen failure stops the
+share, not the encrypted call. Message E2EE and media E2EE remain distinct gates.
+
+Verification: macOS fmt, strict Clippy and 203 offline tests passed; isolated
+generated-media call regressions passed 3/3. Linux/Windows CI is pending. Physical XDG portal consent and
+cancellation, X11/WGC source capture, actual selected Windows backend, desktop
+lock/stop, multiple monitors, default-device mapping, playback and hot-plug on
+Linux/Windows remain unverified. The source-picker view is not built yet. No physical or milestone acceptance is claimed.
