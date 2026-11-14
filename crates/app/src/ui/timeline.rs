@@ -93,10 +93,17 @@ impl MatrixApp {
                         );
                     }
                     let message_font = theme::message_font(cx);
+                    // A few emoji on their own read as a reaction: show them large.
+                    let base = f32::from(self.preferences.appearance.message_size);
+                    let emoji_size = (message.kind == MessageKind::Text
+                        && message.attachment.is_none())
+                    .then(|| model::emoji_only_count(&message.body))
+                    .flatten()
+                    .map(|count| if count <= 3 { base * 2.6 } else { base * 1.7 });
                     content = content.child(
                         div()
                             .font_family(message_font)
-                            .text_size(px(f32::from(self.preferences.appearance.message_size)))
+                            .text_size(px(emoji_size.unwrap_or(base)))
                             .child(
                                 TextView::markdown(
                                     SharedString::from(format!("message-{}", message.id)),

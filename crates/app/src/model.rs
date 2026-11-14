@@ -348,6 +348,33 @@ pub(super) fn size_label(size: Option<u64>) -> String {
     }
 }
 
+/// For a message made only of emoji (spaces allowed), how many there are, so
+/// the timeline can show it larger. Limited to a short run; longer ones read as text.
+pub(super) fn emoji_only_count(text: &str) -> Option<usize> {
+    use unicode_segmentation::UnicodeSegmentation;
+    let mut count = 0;
+    for grapheme in text.trim().graphemes(true) {
+        if grapheme.trim().is_empty() {
+            continue;
+        }
+        // Text-style hearts and similar arrive without the emoji selector.
+        let is_emoji = emojis::get(grapheme).is_some()
+            || emojis::get(&format!(
+                "{}\u{FE0F}",
+                grapheme.trim_end_matches('\u{FE0F}')
+            ))
+            .is_some();
+        if !is_emoji || grapheme.is_ascii() {
+            return None;
+        }
+        count += 1;
+        if count > 10 {
+            return None;
+        }
+    }
+    (count > 0).then_some(count)
+}
+
 pub(super) fn message_text(message: &Message) -> String {
     if let Some(attachment) = &message.attachment {
         let size = match attachment.size {
@@ -366,6 +393,20 @@ pub(super) fn message_text(message: &Message) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn emoji_only_messages_are_recognised_and_text_is_not() {
+        use super::emoji_only_count as count;
+        assert_eq!(count("😀"), Some(1));
+        assert_eq!(count(" 😀 👍🏽 "), Some(2));
+        assert_eq!(count("👨‍👩‍👧"), Some(1));
+        assert_eq!(count("❤️"), Some(1));
+        assert_eq!(count("hi 😀"), None);
+        assert_eq!(count("1"), None);
+        assert_eq!(count("#"), None);
+        assert_eq!(count(""), None);
+        assert_eq!(count("😀😀😀😀😀😀😀😀😀😀😀"), None);
+    }
+
     use super::*;
 
     #[test]
