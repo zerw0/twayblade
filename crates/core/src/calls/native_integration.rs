@@ -108,6 +108,7 @@ async fn native_matrixrtc_audio_and_video() {
         .await,
         "two memberships, participant lists, bidirectional keys and decrypted audio",
     );
+    verify_playback_controls(&call_a, &call_b, &accounts).await;
     verify_livekit_pair(
         accounts
             .iter()
@@ -888,4 +889,62 @@ async fn native_matrixrtc_ringing_element_host() {
             );
         }
     }
+}
+
+async fn verify_playback_controls(a: &CallHandle, b: &CallHandle, accounts: &[Account]) {
+    let id = format!(
+        "{}:{}",
+        accounts[1].user_id(),
+        accounts[1].client.device_id().unwrap()
+    );
+    let own = format!(
+        "{}:{}",
+        accounts[0].user_id(),
+        accounts[0].client.device_id().unwrap()
+    );
+    for (volume, muted, expected) in [
+        (3.0, false, 2.0),
+        (0.375, true, 0.0),
+        (0.375, false, 0.375),
+        (-1.0, false, 0.0),
+    ] {
+        a.control(NativeControl::ParticipantVolume(id.clone(), volume))
+            .unwrap();
+        a.control(NativeControl::ParticipantMutedLocally(id.clone(), muted))
+            .unwrap();
+        checked(
+            timeout(Duration::from_secs(10), async {
+                loop {
+                    let gains = a.playback_gains(&id).await;
+                    let projected = a
+                        .updates
+                        .borrow()
+                        .participants
+                        .iter()
+                        .find(|p| p.id == id)
+                        .map(|p| p.playback);
+                    if !gains.is_empty()
+                        && gains.iter().all(|gain| (*gain - expected).abs() < 0.0001)
+                        && projected.is_some_and(|p| {
+                            p.muted == muted && (p.gain() - expected).abs() < 0.0001
+                        })
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await,
+            "WebRTC remote playout gain and snapshot agree",
+        );
+        assert!(
+            b.playback_gains(&own).await.iter().all(|gain| *gain == 1.0),
+            "other receiver is unaffected"
+        );
+    }
+    a.control(NativeControl::ParticipantVolume(id, 1.0))
+        .unwrap();
+    println!(
+        "native playback: bounded gain, local mute/unmute, independent receiver and native WebRTC getter passed"
+    );
 }

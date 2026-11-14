@@ -35,3 +35,7 @@ debug = 1
 [profile.dev.package."*"]
 opt-level = 2
 debug = 0
+
+[patch.crates-io]
+libwebrtc = { path = "vendor/libwebrtc-0.4.0" }
+webrtc-sys = { path = "vendor/webrtc-sys-0.3.53" }

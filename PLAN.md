@@ -306,6 +306,26 @@ Linux and Windows CI passed on `36f850a`; macOS CI was switched to `macos-15`
 
 ## Progress
 
+Call view technical contracts (2026-11-13, Codex):
+- Call-scoped participant `id`, receiver `playback` gain (0–2) and independent
+  local mute in `Snapshot.call.participants`; bounded ticket-aware backend actions.
+  Finite input clamps; nonfinite input fails without changing gain. Settings
+  survive resubscription, reset on departure/rejoin and clear on leave.
+- Raw LiveKit speaking state now includes the local participant. Claude must
+  debounce follow-the-speaker selection; no view layout or controls implemented.
+- Pinned SDK WebRTC gain bridge is documented in `vendor/README.md` and
+  `docs/architecture/CALLS.md`. Only view edits fill new preview fields and map
+  the additional typed error for exhaustive compilation.
+- Compilation/offline verification: fmt, strict all-target/all-feature Clippy and
+  locked workspace tests passed (200 passed, 31 isolated tests ignored).
+- Isolated integration: `run.sh call` with `native_matrixrtc_audio_and_video`
+  passed, including WebRTC gain readback, independent second receiver, encrypted
+  tone/video/screen, 75-second membership renewal, SFU pause/reconnect and departure.
+  A first wrapper failed because its script was edited while executing; the
+  unchanged wrapper rerun passed. Physical output-volume acceptance, Claude's
+  controls and Linux/Windows CI remain open.
+
+
 Done (macOS arm64, offline and isolated-server verification only):
 - Cargo workspace (`core`, `platform`, `app`), Nix shell, pinned dependencies.
 - Server-name discovery via `.well-known`, HTTPS enforcement after delegation.

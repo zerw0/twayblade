@@ -94,6 +94,7 @@ pub(crate) fn call_error_text(error: CallError) -> &'static str {
         CallError::TransportFailed => "The connection was lost.",
         CallError::MembershipForbidden => "You don't have permission to call in this room.",
         CallError::DeviceUnavailable => "Your microphone or camera isn't available.",
+        CallError::InvalidVolume => "The playback volume is invalid.",
         CallError::ScreenUnavailable => "Screen sharing couldn't start.",
         CallError::PermissionDenied => {
             "Twayblade can't use your microphone or camera. Allow it in System Settings → Privacy & Security."
@@ -1520,6 +1521,9 @@ impl MatrixApp {
                 user_id: user.into(),
                 device_id: "PREVIEW".into(),
                 display_name: name.map(Into::into),
+                // Preview participants use default playback state.
+                id: format!("{user}:PREVIEW"),
+                playback: Default::default(),
                 speaking,
                 muted: Some(muted),
                 video: Some(false),
@@ -1648,6 +1652,7 @@ impl MatrixApp {
             }
         }
         self.snapshot.call = Some(CallState {
+            ticket: None,
             events,
             local: LocalCallState {
                 muted: false,

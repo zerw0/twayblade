@@ -360,3 +360,35 @@ ringing scenarios. The native call retained membership and resumed bidirectional
 decrypted audio/video after the interruption. PLAN.md also records the standalone
 decline limitation and the earlier transient Element media failure; two subsequent
 complete runs passed. No physical or cross-platform acceptance is claimed.
+
+## Call view playback and speaker contracts
+
+`Snapshot.call.participants` contains a stable `id` (Matrix user + device,
+not a tile index). Each participant has `playback: Playback`: `volume()` is
+linear 0–2 (100% = 1), `muted` is local-only and independent of sender `muted`.
+Finite volume input clamps to this range; NaN/infinity return `InvalidVolume`.
+Muting keeps the selected volume so unmute restores it. These preferences live
+only in the call's media instance; membership departure removes them, rejoining
+starts at 100%/unmuted, and leave clears participant snapshots. They are never
+written to settings or sent to Matrix/LiveKit as publication state.
+
+Capture `Snapshot.call.ticket` and participant `id` when constructing an action.
+Backend `set_participant_volume(ticket, id, f32)` and
+`set_participant_muted_locally(ticket, id, bool)` validate account and call
+request together before enqueueing in the bounded current-call queue. Commands
+also reject the local member and check current SDK membership after queueing.
+Core-only snapshots have no backend ticket. Snapshot replacement preserves the
+backend ticket; old generations cannot publish or control a replacement call.
+
+`Participant.speaking` is **raw LiveKit voice activity**, including the local
+participant. It is not a ranked or debounced active-speaker selection. Unknown
+remote media yields `None`. Follow-the-speaker UI must track the stable `id`,
+require about one second of speech and hold focus for several seconds; manual
+focus takes priority. No focus, tile or menu views use these fields yet.
+
+The pinned Rust SDK lacks gain controls; the narrowly modified Apache-2.0
+`libwebrtc` / `webrtc-sys` sources under `vendor/` expose remote WebRTC
+`SetVolume`/`GetVolume`. Gain applies to all remote audio publications, including
+new subscriptions and resubscriptions, without touching media encryption,
+subscription permission or sender state. Physical output loudness and the new
+view actions still need operator acceptance on each OS.

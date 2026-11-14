@@ -12,6 +12,8 @@ use twayblade_core::calls::{
 
 pub(crate) enum Control {
     Muted(bool),
+    ParticipantVolume(String, f32),
+    ParticipantMutedLocally(String, bool),
     Video(bool),
     Input(String),
     Output(String),
@@ -119,6 +121,38 @@ impl Backend {
             .try_send(control)
             .map_err(|_| CallError::ControlUnavailable)
     }
+    /// Use the ticket captured with the rendered call, never a freshly read ticket.
+    pub(crate) fn set_participant_volume(
+        &self,
+        ticket: CallTicket,
+        id: String,
+        volume: f32,
+    ) -> Result<(), CallError> {
+        if !volume.is_finite() {
+            return Err(CallError::InvalidVolume);
+        }
+        self.participant_control(ticket, Control::ParticipantVolume(id, volume))
+    }
+    pub(crate) fn set_participant_muted_locally(
+        &self,
+        ticket: CallTicket,
+        id: String,
+        muted: bool,
+    ) -> Result<(), CallError> {
+        self.participant_control(ticket, Control::ParticipantMutedLocally(id, muted))
+    }
+    fn participant_control(&self, ticket: CallTicket, control: Control) -> Result<(), CallError> {
+        let state = self.state.lock().map_err(|_| CallError::StaleRequest)?;
+        if !state.accepts_call(ticket) {
+            return Err(CallError::StaleRequest);
+        }
+        state
+            .call_control
+            .as_ref()
+            .ok_or(CallError::ControlUnavailable)?
+            .try_send(control)
+            .map_err(|_| CallError::ControlUnavailable)
+    }
     pub(crate) fn leave_call(&self, expected: u128) -> Result<(), CallError> {
         let mut state = self.state.lock().map_err(|_| CallError::StaleRequest)?;
         if state.account.as_ref().map(Account::instance_id) != Some(expected) {
@@ -127,6 +161,7 @@ impl Backend {
         state.cancel_call();
         publish(&self.updates, |v| {
             if let Some(call) = &mut v.call {
+                call.participants.clear();
                 call.phase = CallPhase::Ended(EndReason::Left);
             }
         });
@@ -174,6 +209,7 @@ fn launch_call(
     state.call_control = Some(tx);
     publish(updates, |v| {
         v.call = Some(CallState {
+            ticket: Some(ticket),
             events: Vec::new(),
             local: Default::default(),
             devices: Default::default(),
@@ -216,6 +252,7 @@ fn launch_call(
                     Err(_) => EndReason::Failed,
                 });
                 call.error = result.err();
+                call.participants.clear();
             }
         });
     }));
@@ -258,6 +295,7 @@ pub(super) fn observe(backend: &Backend, state: &mut State, account: Account) {
                 if let Some(call) = &mut v.call
                     && room_left
                 {
+                    call.participants.clear();
                     call.phase = CallPhase::Ended(EndReason::RoomLeft);
                 }
                 v.room_calls = activity.room_calls;
@@ -280,6 +318,7 @@ fn update(
     publish(updates, |v| {
         if let Some(call) = &mut v.call {
             f(call);
+            call.ticket = Some(ticket);
         }
     });
     Ok(())
@@ -327,6 +366,8 @@ async fn run(
             },
             control=controls.recv()=>{
                 let control=match control{
+                    Some(Control::ParticipantVolume(id,v))=>NativeControl::ParticipantVolume(id,v),
+                    Some(Control::ParticipantMutedLocally(id,v))=>NativeControl::ParticipantMutedLocally(id,v),
                     Some(Control::Muted(v))=>NativeControl::Muted(v),
                     Some(Control::Video(v))=>NativeControl::Video(v),
                     Some(Control::Input(id))=>NativeControl::Input(id),
@@ -495,6 +536,33 @@ async fn incoming_notifications(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stale_playback_commands_and_snapshots_are_rejected_after_leave() {
+        let backend = Backend::new().unwrap();
+        let ticket = CallTicket {
+            account: 5,
+            request: 0,
+        };
+        assert_eq!(
+            backend.set_participant_volume(ticket, "peer".into(), 1.5),
+            Err(CallError::StaleRequest)
+        );
+        assert_eq!(
+            backend.set_participant_muted_locally(ticket, "peer".into(), true),
+            Err(CallError::StaleRequest)
+        );
+        assert_eq!(
+            backend.set_participant_volume(ticket, "peer".into(), f32::NAN),
+            Err(CallError::InvalidVolume)
+        );
+        backend.state.lock().unwrap().cancel_call();
+        assert_eq!(
+            update(&backend.state, &backend.updates, ticket, |_| panic!(
+                "stale projection"
+            )),
+            Err(CallError::StaleRequest)
+        );
+    }
     #[test]
     fn cancelling_a_call_invalidates_pending_work_and_drops_controls() {
         let runtime = tokio::runtime::Runtime::new().unwrap();
