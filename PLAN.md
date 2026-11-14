@@ -335,9 +335,10 @@ Linux/Windows screen and default-audio contracts (2026-11-14, Codex):
   hot-plug and permission acceptance remain open.
 - macOS compilation/offline verification: fmt, strict all-target/all-feature
   locked Clippy and workspace tests passed (203 passed; 31 isolated tests ignored).
-  Isolated generated-media `run.sh call` passed 3/3 (164.88 s). Hosted
-  Linux/Windows compilation is pending. No physical or milestone acceptance
-  claimed.
+  Isolated generated-media `run.sh call` passed 3/3 (164.88 s). Hosted CI
+  (lint, test and native build) passed on macOS, Ubuntu and Windows at
+  `0d3ecb0`, which covers Linux/Windows compilation and offline tests only. No
+  physical or milestone acceptance claimed.
 
 Done (macOS arm64, offline and isolated-server verification only):
 - Cargo workspace (`core`, `platform`, `app`), Nix shell, pinned dependencies.

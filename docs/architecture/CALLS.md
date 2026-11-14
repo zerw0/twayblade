@@ -380,7 +380,7 @@ fallback). The exact Windows capturer selected still needs runtime verification.
 No web runtime or second rendering frontend is involved.
 
 For macOS/Wayland, `Control::Screen(true)` opens the OS picker. For X11/Windows,
-Claude must wire the native source-selection views:
+the source-selection view, not yet built, must use:
 
 1. `Backend::request_screen_sources(account_instance, SourceKind) -> CallTicket`.
    Choices arrive in `Snapshot.call.screen_sources`, with an OS title and a typed
@@ -437,5 +437,4 @@ Verification: macOS fmt, strict Clippy and 203 offline tests passed; isolated
 generated-media call regressions passed 3/3. Linux/Windows CI is pending. Physical XDG portal consent and
 cancellation, X11/WGC source capture, actual selected Windows backend, desktop
 lock/stop, multiple monitors, default-device mapping, playback and hot-plug on
-Linux/Windows remain unverified. The source picker is a Claude UI integration
-gap. No physical or milestone acceptance is claimed.
+Linux/Windows remain unverified. The source-picker view is not built yet. No physical or milestone acceptance is claimed.

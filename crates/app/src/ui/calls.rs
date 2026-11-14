@@ -88,7 +88,7 @@ fn live(call: &CallState) -> bool {
 /// User wording for call failures; core returns only typed errors.
 pub(crate) fn call_error_text(error: CallError) -> &'static str {
     match error {
-        // Typed media contract only; source-picker views are owned by Claude.
+        // Typed media contract only; no source-picker view exists yet.
         CallError::ScreenCapture(twayblade_core::calls::ScreenError::SelectionRequired) => {
             "Choose a screen or window before sharing."
         }
@@ -1653,7 +1653,7 @@ impl MatrixApp {
             }
         }
         self.snapshot.call = Some(CallState {
-            // Contract fixture defaults; no source picker is rendered here.
+            // Preview defaults; no source picker is rendered here.
             screen_backend: None,
             screen_sources: Vec::new(),
             events,
