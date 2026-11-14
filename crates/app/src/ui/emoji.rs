@@ -609,18 +609,7 @@ impl MatrixApp {
                                     } else {
                                         emoji.name().to_owned()
                                     })
-                                    // A fixed, centred box: newer emoji fall back to fonts whose advance
-                                    // is narrower than the drawn glyph, which clipped them.
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .size(px(CELL - 4.))
-                                            .text_size(px(20.))
-                                            .line_height(px(CELL - 4.))
-                                            .child(emoji.as_str()),
-                                    )
+                                    .child(div().text_size(px(20.)).child(emoji.as_str()))
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.pick_emoji(index, window, cx)
                                     }))
