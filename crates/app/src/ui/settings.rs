@@ -37,8 +37,9 @@ impl Section {
         Self::Security,
         Self::Account,
     ];
-    /// Sections with working settings. General remains hidden until it has controls.
-    pub const VISIBLE: [Self; 6] = [
+    /// Sections with working settings.
+    pub const VISIBLE: [Self; 7] = [
+        Self::General,
         Self::Notifications,
         Self::Appearance,
         Self::Chat,
@@ -1224,6 +1225,167 @@ impl MatrixApp {
         self.save_preferences(window, cx);
         cx.notify();
     }
+    /// Software updates: a notice-only check against public releases. Nothing is
+    /// downloaded or installed from here; the command shown is for the user's
+    /// package manager.
+    fn general_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        use twayblade_platform::updates::{Channel, Phase, UpdateError};
+        let prefs = self.preferences.updates;
+        let updater = &self.snapshot.updater;
+        let muted = cx.theme().muted_foreground;
+        let enabled = switch::Switch::new("updates-enabled")
+            .checked(prefs.enabled)
+            .accessibility_label("Check for updates")
+            .on_click(cx.listener(|this, checked: &bool, window, cx| {
+                let channel = this.preferences.updates.channel;
+                this.set_update_preferences(*checked, channel, window, cx);
+            }));
+        let channel = segmented(
+            [
+                ("updates-Stable", "Stable", prefs.channel == Channel::Stable),
+                (
+                    "updates-Prerelease",
+                    "Include pre-releases",
+                    prefs.channel == Channel::Prerelease,
+                ),
+            ],
+            cx,
+            |this, index, window, cx| {
+                let enabled = this.preferences.updates.enabled;
+                this.set_update_preferences(
+                    enabled,
+                    [Channel::Stable, Channel::Prerelease][index],
+                    window,
+                    cx,
+                );
+            },
+        );
+        let status: String = match &updater.phase {
+            Phase::Disabled => "Update checks are off.".into(),
+            Phase::Checking => "Checking for updates…".into(),
+            Phase::UpToDate => format!(
+                "Twayblade {} is up to date.{}",
+                env!("CARGO_PKG_VERSION"),
+                checked_ago(updater.checked_unix_seconds)
+            ),
+            Phase::Available => match &updater.available {
+                Some(a) => format!(
+                    "Version {}{} is available.",
+                    a.version,
+                    if a.prerelease { " (pre-release)" } else { "" }
+                ),
+                None => "An update is available.".into(),
+            },
+            Phase::Failed(UpdateError::InvalidCurrentVersion) => {
+                "This build has no valid version number, so updates can't be compared.".into()
+            }
+            Phase::Failed(_) => {
+                "Couldn't check for updates. Twayblade will try again later.".into()
+            }
+        };
+        let mut column = v_flex()
+            .gap(px(18.))
+            .child(group(
+                [
+                    form_row("Check for updates", enabled, cx),
+                    form_row("Release channel", channel, cx).opacity(if prefs.enabled {
+                        1.0
+                    } else {
+                        0.5
+                    }),
+                ],
+                cx,
+            ))
+            .child(
+                div()
+                    .id("update-status")
+                    .role(Role::Label)
+                    .aria_label(status.clone())
+                    .px(px(4.))
+                    .text_size(px(12.))
+                    .child(status),
+            );
+        if let Some(available) = updater
+            .available
+            .as_ref()
+            .filter(|_| updater.phase == Phase::Available)
+        {
+            // Release notes are untrusted text: shown as plain, bounded text,
+            // never interpreted, and no link inside them is followed.
+            let notes: String = available.changelog.chars().take(1500).collect();
+            let url = available.release_url.clone();
+            let command = available.upgrade_command.clone();
+            column = column
+                .when(!notes.trim().is_empty(), |v| {
+                    v.child(
+                        v_flex()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .px(px(4.))
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("What's new"),
+                            )
+                            .child(
+                                div()
+                                    .id("update-notes")
+                                    .max_h(px(220.))
+                                    .overflow_y_scroll()
+                                    .rounded(px(8.))
+                                    .border_1()
+                                    .border_color(cx.theme().border)
+                                    .p(px(12.))
+                                    .text_size(px(12.))
+                                    .child(notes),
+                            ),
+                    )
+                })
+                .child(match command {
+                    Some(command) => v_flex()
+                        .gap(px(6.))
+                        .child(
+                            div()
+                                .px(px(4.))
+                                .text_size(px(12.))
+                                .text_color(muted)
+                                .child("Update with your package manager:"),
+                        )
+                        .child(
+                            div()
+                                .id("update-command")
+                                .rounded(px(8.))
+                                .bg(cx.theme().secondary)
+                                .p(px(10.))
+                                .font_family("monospace")
+                                .text_size(px(12.))
+                                .child(command),
+                        ),
+                    None => div()
+                        .px(px(4.))
+                        .text_size(px(12.))
+                        .text_color(muted)
+                        .child("Download the new version from the release page."),
+                })
+                .child(
+                    h_flex().child(
+                        Button::new("update-release-page")
+                            .label("View Release on GitHub")
+                            .on_click(move |_, _, cx| cx.open_url(&url)),
+                    ),
+                );
+        }
+        column
+            .child(
+                div()
+                    .px(px(4.))
+                    .text_size(px(11.))
+                    .text_color(muted)
+                    .child("Twayblade only checks public release information and never installs updates on its own."),
+            )
+            .into_any_element()
+    }
+
     fn chat_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let chat = &self.preferences.chat;
         let style = segmented(
@@ -1539,7 +1701,7 @@ impl Render for SettingsWindow {
                 Section::Chat => main.chat_settings(cx),
                 Section::Keyboard => keyboard_settings(cx),
                 Section::Notifications => main.notification_settings(cx),
-                Section::General => div().into_any_element(),
+                Section::General => main.general_settings(cx),
             };
             let resettable = matches!(section, Section::Appearance | Section::Chat);
             let muted = cx.theme().muted_foreground;
@@ -1963,4 +2125,20 @@ fn key_cap(key: String, cx: &App) -> Div {
         .font_weight(FontWeight::MEDIUM)
         .text_color(cx.theme().foreground)
         .child(key)
+}
+
+/// " Checked 5 minutes ago." for the status line; empty when never checked.
+fn checked_ago(checked: Option<u64>) -> String {
+    let Some(checked) = checked else {
+        return String::new();
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let secs = now.saturating_sub(checked);
+    match secs {
+        0..=89 => " Checked just now.".into(),
+        90..=5399 => format!(" Checked {} minutes ago.", (secs + 30) / 60),
+        _ => format!(" Checked {} hours ago.", (secs + 1800) / 3600),
+    }
 }

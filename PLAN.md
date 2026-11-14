@@ -354,6 +354,11 @@ Integration base (2026-11-14):
 - GitHub project Board rendering and date-field configuration remain unverified;
   this session could not open the user's Chrome. No roadmap dates were invented.
 - No remote publication or PR merge was performed by this integration work.
+Updater views (2026-11-14, `feature/updater-views`): Settings > General has the
+update switch, channel, status, plain-text What's New, displayed upgrade command
+and release-page button. Verified by compilation, strict Clippy and offline app
+tests only; no capture, Element comparison or physical Mac review. A launch-time
+notice outside Settings is not implemented.
 
 ## Workspace
 

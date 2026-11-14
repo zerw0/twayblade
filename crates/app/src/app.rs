@@ -51,7 +51,6 @@ pub(super) struct ProfilePage {
 impl MatrixApp {
     /// Applies the update settings immediately through the serialized
     /// preference writer.
-    #[allow(dead_code, reason = "No settings view calls this yet")]
     pub fn set_update_preferences(
         &mut self,
         enabled: bool,

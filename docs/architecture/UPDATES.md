@@ -31,9 +31,11 @@ command. Account replacement and sign-out preserve this global state.
 
 The settings view should call
 `MatrixApp::set_update_preferences(enabled, channel, window, cx)`: it applies the
-setting immediately and uses the existing serialized preference writer. General
-settings controls, update notices and What's New rendering are intentionally
-unimplemented here. Treat changelog Markdown as untrusted content; never execute
+setting immediately and uses the existing serialized preference writer. Settings > General
+now shows the on/off switch, channel, status, plain-text What's New, the
+displayed package-manager command and a release-page button (offline tests only;
+not yet reviewed on a physical Mac). A launch-time notice outside Settings is
+still unimplemented. Treat changelog Markdown as untrusted content; never execute
 it or automatically follow its links. Offline previews and backend fixtures
 leave network checks disabled.
 
