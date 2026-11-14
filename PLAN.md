@@ -354,6 +354,12 @@ Integration base (2026-11-14):
 - GitHub project Board rendering and date-field configuration remain unverified;
   this session could not open the user's Chrome. No roadmap dates were invented.
 - No remote publication or PR merge was performed by this integration work.
+Invite people (2026-11-14, `feature/invite-members`): room info has an
+Invite action that opens a dialog for a Matrix ID; core checks the invite power
+level and maps a server 403 to a permission message. Verified by compilation,
+strict Clippy and an offline UI test only. Not verified against a live homeserver
+or Element, and there is no member picker or user-directory search yet.
+
 Updater views (2026-11-14, `feature/updater-views`): Settings > General has the
 update switch, channel, status, plain-text What's New, displayed upgrade command
 and release-page button. Verified by compilation, strict Clippy and offline app

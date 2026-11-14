@@ -40,6 +40,10 @@ pub enum SpaceError {
     Leave,
     #[error("create_failed")]
     Create,
+    #[error("invite_denied")]
+    InviteDenied,
+    #[error("invite_failed")]
+    InviteFailed,
     #[error("parent_link_failed")]
     ParentLink { room: String },
 }
@@ -365,6 +369,35 @@ impl Account {
                 .map_err(|_| SpaceError::ParentLink { room: id.clone() })?;
         }
         Ok(id)
+    }
+    /// Invites one user to a room this account is in. The room's power levels
+    /// decide who may invite; `InviteDenied` reports a missing permission.
+    pub async fn invite_user(&self, room_id: &str, user_id: &str) -> Result<(), SpaceError> {
+        let user = UserId::parse(user_id.trim()).map_err(|_| SpaceError::InvalidId)?;
+        let room_id =
+            matrix_sdk::ruma::RoomId::parse(room_id).map_err(|_| SpaceError::InvalidId)?;
+        let room = self
+            .client
+            .get_room(&room_id)
+            .ok_or(SpaceError::Unavailable)?;
+        // A known member who lacks the invite power level gets a clear answer
+        // without a round trip; otherwise the server decides.
+        if let Some(me) = self.client.user_id()
+            && let Ok(Some(member)) = room.get_member_no_sync(me).await
+            && !member.can_invite()
+        {
+            return Err(SpaceError::InviteDenied);
+        }
+        room.invite_user_by_id(&user).await.map_err(|error| {
+            if error
+                .as_client_api_error()
+                .is_some_and(|e| e.status_code == matrix_sdk::reqwest::StatusCode::FORBIDDEN)
+            {
+                SpaceError::InviteDenied
+            } else {
+                SpaceError::InviteFailed
+            }
+        })
     }
     pub async fn start_dm(&self, id: &str) -> Result<String, SpaceError> {
         let user = UserId::parse(id).map_err(|_| SpaceError::InvalidId)?;

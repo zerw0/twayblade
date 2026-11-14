@@ -26,12 +26,17 @@ pub(crate) enum ManageKind {
     Create,
     Dm,
     JoinSpace,
+    /// Invite someone to this room (room ID).
+    InviteMember(String),
 }
 impl ManageKind {
     /// Short forms open as a small centred dialog; browsing and leaving keep
     /// the full conversation area because they list many rooms.
     pub fn is_dialog(&self) -> bool {
-        matches!(self, Self::Create | Self::Dm | Self::JoinSpace)
+        matches!(
+            self,
+            Self::Create | Self::Dm | Self::JoinSpace | Self::InviteMember(_)
+        )
     }
 }
 pub(crate) struct Management {
@@ -247,6 +252,9 @@ impl MatrixApp {
                                 .into();
                     }
                     Ok(SpaceOutcome::Done) => {
+                        if matches!(page.kind, ManageKind::InviteMember(_)) {
+                            this.status = "Invitation sent.".into();
+                        }
                         this.management = None;
                     }
                     Err(error) => page.status = error.to_string(),
@@ -359,6 +367,7 @@ impl MatrixApp {
             ManageKind::Create => "Create Room",
             ManageKind::Dm => "Start a Direct Message",
             ManageKind::JoinSpace => "Join a Space",
+            ManageKind::InviteMember(_) => "Invite People",
         };
         let mut body = v_flex()
             .id("management-body")
@@ -671,6 +680,31 @@ impl MatrixApp {
                             )
                         })),
                 );
+            }
+            ManageKind::InviteMember(room) => {
+                let room = room.clone();
+                let input = page.name.clone();
+                body = body
+                    .child("Matrix ID (for example, @name:example.org)")
+                    .child(Input::new(&page.name).aria_label("Matrix ID"))
+                    .child(
+                        Button::new("invite-submit")
+                            .primary()
+                            .label("Send Invitation")
+                            .disabled(
+                                self.preview
+                                    || page.busy
+                                    || page.name.read(cx).value().trim().is_empty(),
+                            )
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                let user = input.read(cx).value().trim().to_owned();
+                                this.run_space_action(
+                                    SpaceAction::InviteMember(room.clone(), user),
+                                    window,
+                                    cx,
+                                );
+                            })),
+                    );
             }
             ManageKind::Dm | ManageKind::JoinSpace => {
                 let dm = matches!(page.kind, ManageKind::Dm);

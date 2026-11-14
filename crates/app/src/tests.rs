@@ -2256,3 +2256,25 @@ fn call_focus_button_toggles_one_person_large(cx: &mut TestAppContext) {
     .expect("release focus");
     cx.update(|cx| assert!(app.read(cx).call_focus.is_none()));
 }
+
+#[gpui_kit::test]
+fn invite_tile_opens_the_invite_dialog_for_the_selected_room(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("details", cx);
+        window.render_frame(cx);
+        window.click("info-invite", cx);
+        window.render_frame(cx);
+        assert!(window.find("invite-submit").visible());
+    })
+    .expect("open the invite dialog");
+    cx.update(|cx| {
+        let app = app.read(cx);
+        let page = app.management.as_ref().expect("dialog");
+        assert!(matches!(
+            &page.kind,
+            crate::ui::spaces::ManageKind::InviteMember(room) if *room == app.snapshot.selected_room
+        ));
+    });
+}

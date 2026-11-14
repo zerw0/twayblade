@@ -280,6 +280,7 @@ pub(super) enum SpaceAction {
     Leave(String, std::collections::HashSet<String>),
     Create(twayblade_core::space_actions::CreateRoom),
     Dm(String),
+    InviteMember(String, String),
 }
 pub(super) enum SpaceOutcome {
     Directory(twayblade_core::space_actions::DirectorySnapshot),
@@ -307,6 +308,10 @@ fn space_failure(error: twayblade_core::space_actions::SpaceError) -> ServiceErr
         }
         ParentLink { .. } => {
             "The room was created, but its space links could not be completed. Do not create it again."
+        }
+        InviteDenied => "You do not have permission to invite people to this room.",
+        InviteFailed => {
+            "The invitation could not be sent. Check the Matrix ID and your connection."
         }
     })
 }
@@ -1103,6 +1108,11 @@ impl Backend {
                     .start_dm(&id)
                     .await
                     .map(SpaceOutcome::Room)
+                    .map_err(space_failure),
+                InviteMember(room, user) => account
+                    .invite_user(&room, &user)
+                    .await
+                    .map(|_| SpaceOutcome::Done)
                     .map_err(space_failure),
             };
             if self

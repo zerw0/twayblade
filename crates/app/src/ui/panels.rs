@@ -457,6 +457,7 @@ impl MatrixApp {
         let favourite = room.favourite;
         let mute_room = room.id.clone();
         let link_room = room.id.clone();
+        let invite_room = room.id.clone();
         let copy_id = room.id.clone();
         let files = self
             .snapshot
@@ -531,6 +532,19 @@ impl MatrixApp {
                                         } else {
                                             RoomMode::Mute
                                         },
+                                    ),
+                                    window,
+                                    cx,
+                                )
+                            },
+                        )),
+                    )
+                    .child(
+                        tile("info-invite", IconName::Plus, "Invite", false).on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.open_management(
+                                    crate::ui::spaces::ManageKind::InviteMember(
+                                        invite_room.clone(),
                                     ),
                                     window,
                                     cx,
