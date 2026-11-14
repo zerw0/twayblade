@@ -34,6 +34,9 @@ impl MatrixApp {
         radius: f32,
         cx: &Context<Self>,
     ) -> Div {
+        // Every avatar is a circle; callers' radii are ignored.
+        let _ = radius;
+        let radius = size / 2.;
         let fallback = || {
             crate::ui::avatar(
                 &theme::initials(name),
@@ -57,7 +60,7 @@ impl MatrixApp {
                     .size(px(size))
                     .rounded(px(radius))
                     .overflow_hidden()
-                    .child(img(image.clone()).size_full());
+                    .child(img(image.clone()).size_full().rounded(px(radius)));
             }
             Some(AvatarState::Loading | AvatarState::Failed) => return fallback(),
             None => {}
