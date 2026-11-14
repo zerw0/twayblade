@@ -49,9 +49,9 @@ pub(super) struct ProfilePage {
 
 // Service action contracts used by the views.
 impl MatrixApp {
-    /// Settings action contract for Claude: applies immediately and uses the
-    /// existing serialized preference writer. No settings controls are added.
-    #[allow(dead_code, reason = "Updater settings controls are owned by Claude")]
+    /// Applies the update settings immediately through the serialized
+    /// preference writer.
+    #[allow(dead_code, reason = "No settings view calls this yet")]
     pub fn set_update_preferences(
         &mut self,
         enabled: bool,

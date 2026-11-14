@@ -29,7 +29,7 @@ method, last-attempt timestamp and optional `Available` data: version,
 pre-release status, changelog, fixed-repository release URL and optional upgrade
 command. Account replacement and sign-out preserve this global state.
 
-Claude's integration point is
+The settings view should call
 `MatrixApp::set_update_preferences(enabled, channel, window, cx)`: it applies the
 setting immediately and uses the existing serialized preference writer. General
 settings controls, update notices and What's New rendering are intentionally
