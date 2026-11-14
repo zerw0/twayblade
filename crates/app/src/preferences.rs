@@ -15,6 +15,7 @@ pub(super) struct Preferences {
     pub appearance: Appearance,
     pub chat: Chat,
     pub notifications: DeviceNotifications,
+    pub updates: twayblade_platform::updates::Preferences,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -23,6 +24,7 @@ impl Default for Preferences {
             appearance: Default::default(),
             chat: Default::default(),
             notifications: Default::default(),
+            updates: Default::default(),
         }
     }
 }
@@ -331,6 +333,8 @@ mod tests {
         custom.notifications.preview = false;
         custom.notifications.sound = false;
         custom.notifications.badge = false;
+        custom.updates.enabled = false;
+        custom.updates.channel = twayblade_platform::updates::Channel::Prerelease;
         custom.save(&path).unwrap();
         assert_eq!(Preferences::load(&path).unwrap(), custom);
         for invalid in ["corrupt", "{\"version\":999}", "{\"unknown\":true}"] {

@@ -24,7 +24,7 @@ case "${1:-test}" in
         trap '"${compose[@]}" --profile call stop element-call call-proxy lk-jwt-service livekit synapse' EXIT
         "${compose[@]}" --profile call up -d --wait --wait-timeout 90 synapse livekit lk-jwt-service element-call call-proxy
         "${compose[@]}" exec -T synapse python /bootstrap.py register-pair
-        MATRIX_TEST_CALL_CONTEXT="$matrix_context" cargo test --locked -p twayblade-core --all-features "${MATRIX_TEST_CALL_FILTER:-native_matrixrtc}" -- --ignored --nocapture --test-threads=1
+        MATRIX_TEST_CALL_CONTEXT="$matrix_context" scripts/cargo-pruned test --locked -p twayblade-core --all-features "${MATRIX_TEST_CALL_FILTER:-native_matrixrtc}" -- --ignored --nocapture --test-threads=1
         ;;
     presence)
         mkdir -p test-data/local/integration
@@ -36,7 +36,7 @@ case "${1:-test}" in
             "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py "$setting"
             "${compose[@]}" up -d --force-recreate --wait --wait-timeout 90 synapse
             "${compose[@]}" exec -T synapse python /bootstrap.py register-pair
-            MATRIX_TEST_PRESENCE="$mode" cargo test --locked -p twayblade-core --all-features presence_enabled_and_disabled_server_evidence -- --ignored --nocapture
+            MATRIX_TEST_PRESENCE="$mode" scripts/cargo-pruned test --locked -p twayblade-core --all-features presence_enabled_and_disabled_server_evidence -- --ignored --nocapture
             "${compose[@]}" stop synapse
         done
         # Leave the shared local fixture's normal default restored while stopped.
@@ -51,7 +51,7 @@ case "${1:-test}" in
         "${compose[@]}" --profile recovery up -d --force-recreate --wait --wait-timeout 90 synapse recovery-synapse
         "${compose[@]}" exec -T synapse python /bootstrap.py register
         "${compose[@]}" --profile recovery exec -T recovery-synapse python /bootstrap.py register
-        cargo test --locked -p twayblade-core --all-features revoked_device_and_soft_logout_recovery -- --ignored --nocapture
+        scripts/cargo-pruned test --locked -p twayblade-core --all-features revoked_device_and_soft_logout_recovery -- --ignored --nocapture
         ;;
     oauth|sso)
         mkdir -p test-data/local/oauth
@@ -65,10 +65,10 @@ case "${1:-test}" in
             "${compose[@]}" --profile sso run --rm --no-deps --entrypoint python sso-synapse /bootstrap.py generate
             "${compose[@]}" --profile sso run --rm --no-deps --entrypoint python sso-synapse /bootstrap.py sso-config
             "${compose[@]}" --profile sso up -d --force-recreate --wait --wait-timeout 90 sso-synapse
-            cargo test --locked -p twayblade-core --all-features sso_local_oidc_token_exchange_and_restore -- --ignored --nocapture
+            scripts/cargo-pruned test --locked -p twayblade-core --all-features sso_local_oidc_token_exchange_and_restore -- --ignored --nocapture
         else
-            cargo test --locked -p twayblade-core --all-features oauth_cancel_and_wrong_state_discard_checkpoint -- --ignored --nocapture
-            cargo test --locked -p twayblade-core --all-features oauth_keychain_lifecycle_across_processes -- --ignored --nocapture
+            scripts/cargo-pruned test --locked -p twayblade-core --all-features oauth_cancel_and_wrong_state_discard_checkpoint -- --ignored --nocapture
+            scripts/cargo-pruned test --locked -p twayblade-core --all-features oauth_keychain_lifecycle_across_processes -- --ignored --nocapture
         fi
         ;;
     up|test|keychain|services|security|media|threads|spaces|viewer|search|directory|notifications|notification-delivery|room-open)
@@ -87,38 +87,38 @@ case "${1:-test}" in
             trap '"${compose[@]}" stop' EXIT
             if [[ "${1:-test}" == room-open ]]; then
                 "${compose[@]}" exec -T synapse python /bootstrap.py register-security
-                cargo test --locked -p twayblade-core --all-features auth::room_open:: -- --ignored --nocapture --test-threads=1
+                scripts/cargo-pruned test --locked -p twayblade-core --all-features auth::room_open:: -- --ignored --nocapture --test-threads=1
             elif [[ "${1:-test}" == directory ]]; then
-                cargo test --locked -p twayblade-core --all-features public_directory_pagination_filter_links_preview_and_knock -- --ignored --nocapture
+                scripts/cargo-pruned test --locked -p twayblade-core --all-features public_directory_pagination_filter_links_preview_and_knock -- --ignored --nocapture
             elif [[ "${1:-test}" == search ]]; then
                 "${compose[@]}" exec -T synapse python /bootstrap.py register-security
-                cargo test --locked -p twayblade-core --all-features search_server_cached_encryption_pagination_and_event_context -- --ignored --nocapture
+                scripts/cargo-pruned test --locked -p twayblade-core --all-features search_server_cached_encryption_pagination_and_event_context -- --ignored --nocapture
             elif [[ "${1:-test}" == notification-delivery ]]; then
-                cargo test --locked -p twayblade-core --all-features encrypted_notification_delivery_and_private_preview -- --ignored --nocapture
+                scripts/cargo-pruned test --locked -p twayblade-core --all-features encrypted_notification_delivery_and_private_preview -- --ignored --nocapture
             elif [[ "${1:-test}" == notifications ]]; then
-                cargo test --locked -p twayblade-core --all-features notification_rules_round_trip_and_second_client_changes -- --ignored --nocapture
+                scripts/cargo-pruned test --locked -p twayblade-core --all-features notification_rules_round_trip_and_second_client_changes -- --ignored --nocapture
             elif [[ "${1:-test}" == viewer ]]; then
                 "${compose[@]}" exec -T synapse python /bootstrap.py register-security
-                cargo test --locked -p twayblade-core --all-features image_viewer_plain_encrypted_animation_limits_and_corrupt -- --ignored --nocapture
+                scripts/cargo-pruned test --locked -p twayblade-core --all-features image_viewer_plain_encrypted_animation_limits_and_corrupt -- --ignored --nocapture
             elif [[ "${1:-test}" == spaces ]]; then
                 "${compose[@]}" exec -T synapse python /bootstrap.py register-pair
-                cargo test --locked -p twayblade-core --all-features spaces_hierarchy_invites_creation_restricted_join_and_selective_leave -- --ignored --nocapture
+                scripts/cargo-pruned test --locked -p twayblade-core --all-features spaces_hierarchy_invites_creation_restricted_join_and_selective_leave -- --ignored --nocapture
             elif [[ "${1:-test}" == threads ]]; then
-                cargo test --locked -p twayblade-core --all-features threads_send_paginate_receipts_and_closed_unread -- --ignored --nocapture
+                scripts/cargo-pruned test --locked -p twayblade-core --all-features threads_send_paginate_receipts_and_closed_unread -- --ignored --nocapture
             elif [[ "${1:-test}" == media ]]; then
                 "${compose[@]}" exec -T synapse python /bootstrap.py register-security
-                cargo test --locked -p twayblade-core --all-features attachment_plain_encrypted_cancel_restart_round_trip -- --ignored --nocapture
+                scripts/cargo-pruned test --locked -p twayblade-core --all-features attachment_plain_encrypted_cancel_restart_round_trip -- --ignored --nocapture
             elif [[ "${1:-test}" == security ]]; then
                 "${compose[@]}" exec -T synapse python /bootstrap.py register-security
-                cargo test --locked -p twayblade-core --all-features secure_backup_fresh_store_recovery_and_sas -- --ignored --nocapture
+                scripts/cargo-pruned test --locked -p twayblade-core --all-features secure_backup_fresh_store_recovery_and_sas -- --ignored --nocapture
             elif [[ "${1:-test}" == keychain ]]; then
-                cargo test --locked --workspace --all-features keychain_session_lifecycle_across_processes -- --ignored --nocapture
+                scripts/cargo-pruned test --locked --workspace --all-features keychain_session_lifecycle_across_processes -- --ignored --nocapture
             elif [[ "${1:-test}" == services ]]; then
                 for test_name in encrypted_message_editing_sources_navigation_and_threads encrypted_delivery_profile_and_same_device_store_restore timeline_metadata_and_send_queue_actions members_typing_and_read_receipts pagination_preserves_message_identity room_list_service_tracks_recency_and_details; do
-                    cargo test --locked -p twayblade-core --all-features "$test_name" -- --ignored --nocapture
+                    scripts/cargo-pruned test --locked -p twayblade-core --all-features "$test_name" -- --ignored --nocapture
                 done
             else
-                cargo test --locked -p twayblade-core encrypted_delivery_profile_and_same_device_store_restore -- --ignored --nocapture
+                scripts/cargo-pruned test --locked -p twayblade-core encrypted_delivery_profile_and_same_device_store_restore -- --ignored --nocapture
             fi
         fi
         ;;

@@ -1,6 +1,6 @@
 # Twayblade — plan
 
-Updated 2026-11-12. Status: M0 in progress; no milestone exit claimed.
+Updated 2026-11-14. Status: M0 in progress; no milestone exit claimed.
 
 ## Goal
 
@@ -305,6 +305,39 @@ Linux and Windows CI passed on `36f850a`; macOS CI was switched to `macos-15`
 7. **M6 release.** Accessibility pass, packaging, signing, updates.
 
 ## Progress
+
+Updater groundwork (2026-11-14, Codex):
+- Platform service checks public GitHub releases with a dedicated unauthenticated
+  client: launch and daily, stable by default, explicit pre-release opt-in,
+  bounded response/changelog and typed failures. Off switch cancels pending work
+  and rejects stale results. No account/client/credential data is supplied.
+- Persisted `Preferences.updates`, global `Snapshot.updater` (retained across
+  account changes), and `MatrixApp::set_update_preferences` expose the settings
+  action, changelog/version/release link and package-manager upgrade command.
+  No views or controls were implemented; Claude owns Settings/notice/What's New.
+- Read-only compile-time provenance, package-layout and executable-ownership
+  detection cover Homebrew, deb/rpm, AUR, Nix and winget; unknown ownership stays
+  unknown. AUR without a detected helper has no invented command; declarative
+  Nix installs need their normal configuration rebuild. Manager commands are
+  informational and package repositories may lag releases.
+- Signature/trust-root, key rotation, platform signing, atomic replacement,
+  call restart guard and session retention design: `docs/architecture/UPDATES.md`.
+  No asset download, signature implementation, self-install or restart yet.
+- Compilation/offline verification: fmt, strict locked all-target/all-feature
+  Clippy and workspace tests passed (213 passed; 31 isolated tests ignored).
+  Controlled-clock launch/daily scheduling, loopback HTTP request privacy,
+  channels/version precedence, body limits, off-switch cancellation, package
+  ownership parsing, settings persistence and account-reset retention are covered.
+- CI caught a no-op initial disabled-status publication advancing the shared
+  revision during an unauthenticated-action test. Unchanged updater snapshots
+  now publish nothing; the revision/no-notification regression test passes.
+  The local full suite was rerun after this fix; hosted CI is being rechecked.
+- Isolated Matrix regression: `run.sh services` passed 6/6, including encrypted
+  same-device restore. The integration runner now uses `scripts/cargo-pruned`
+  for every Cargo test invocation. This does not establish live GitHub or UI use.
+- Physical installed-package detection/upgrades, public-release operation and
+  signed/tampered upgrade acceptance on each OS remain open; no milestone exit
+  claimed.
 
 Done (macOS arm64, offline and isolated-server verification only):
 - Cargo workspace (`core`, `platform`, `app`), Nix shell, pinned dependencies.
