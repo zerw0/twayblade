@@ -159,6 +159,15 @@ impl MatrixApp {
         cx.notify();
     }
 
+    /// Full screen for the call: the whole window uses the macOS full-screen
+    /// space (or the platform's equivalent). Only while a call is live.
+    pub(crate) fn toggle_call_full_screen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.live_call().is_some() {
+            window.toggle_fullscreen();
+            cx.notify();
+        }
+    }
+
     fn fresh_call(&mut self) {
         self.call_end_dismissed = false;
         self.call_focus = None;
@@ -1180,6 +1189,18 @@ impl MatrixApp {
                         })),
                 )
                 .child(self.call_devices_menu(call, cx))
+                .child(
+                    Button::new("call-full-screen")
+                        .outline()
+                        .size(px(32.))
+                        .rounded(px(16.))
+                        .icon(Icon::new(IconName::Maximize).size(px(15.)))
+                        .accessibility_label("Full screen")
+                        .tooltip(hint("Full Screen", Action::ToggleCallFullScreen))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.toggle_call_full_screen(window, cx)
+                        })),
+                )
                 .child(
                     Button::new("call-leave")
                         .danger()

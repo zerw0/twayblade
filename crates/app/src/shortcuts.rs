@@ -17,6 +17,7 @@ gpui_kit::actions!(
         ToggleCamera,
         ToggleScreenShare,
         LeaveCall,
+        ToggleCallFullScreen,
         AnswerCall,
         DeclineCall
     ]
@@ -132,6 +133,7 @@ pub enum ShortcutAction {
     ToggleCamera,
     ToggleScreenShare,
     LeaveCall,
+    ToggleCallFullScreen,
     AnswerCall,
     DeclineCall,
 }
@@ -173,6 +175,7 @@ impl ShortcutAction {
             Self::ToggleCamera => KeyBinding::new(keys, ToggleCamera, context),
             Self::ToggleScreenShare => KeyBinding::new(keys, ToggleScreenShare, context),
             Self::LeaveCall => KeyBinding::new(keys, LeaveCall, context),
+            Self::ToggleCallFullScreen => KeyBinding::new(keys, ToggleCallFullScreen, context),
             Self::AnswerCall => KeyBinding::new(keys, AnswerCall, context),
             Self::DeclineCall => KeyBinding::new(keys, DeclineCall, context),
         }
@@ -234,6 +237,16 @@ pub const SHORTCUTS: &[Shortcut] = &[
             other: "ctrl-shift-h",
         },
         action: Some(ShortcutAction::LeaveCall),
+        context: Some("Twayblade"),
+    },
+    Shortcut {
+        area: Area::Calls,
+        label: "Full screen call",
+        keys: KeyChord {
+            mac: "ctrl-cmd-f",
+            other: "f11",
+        },
+        action: Some(ShortcutAction::ToggleCallFullScreen),
         context: Some("Twayblade"),
     },
     Shortcut {

@@ -399,7 +399,9 @@ impl Render for MatrixApp {
                 }),
             )
             .on_action(cx.listener(|this, _: &CloseProfile, window, cx| {
-                if this.call_focus.is_some() && this.live_call().is_some() {
+                if window.is_fullscreen() && this.live_call().is_some() {
+                    window.toggle_fullscreen();
+                } else if this.call_focus.is_some() && this.live_call().is_some() {
                     this.call_focus = None;
                     cx.notify();
                 } else if this.viewer.is_some() {
@@ -420,6 +422,11 @@ impl Render for MatrixApp {
                 }
             }))
             .on_action(cx.listener(|this, _: &ToggleDetails, _, cx| this.toggle_details(cx)))
+            .on_action(cx.listener(
+                |this, _: &crate::shortcuts::ToggleCallFullScreen, window, cx| {
+                    this.toggle_call_full_screen(window, cx)
+                },
+            ))
             .on_action(
                 cx.listener(|this, _: &crate::shortcuts::ToggleMute, _, cx| {
                     this.call_shortcut(calls::CallShortcut::Mute, None, cx)
