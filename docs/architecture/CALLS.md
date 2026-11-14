@@ -384,7 +384,7 @@ backend ticket; old generations cannot publish or control a replacement call.
 participant. It is not a ranked or debounced active-speaker selection. Unknown
 remote media yields `None`. Follow-the-speaker UI must track the stable `id`,
 require about one second of speech and hold focus for several seconds; manual
-focus takes priority. All focus/tile/menu rendering remains Claude's work.
+focus takes priority. No focus, tile or menu views use these fields yet.
 
 The pinned Rust SDK lacks gain controls; the narrowly modified Apache-2.0
 `libwebrtc` / `webrtc-sys` sources under `vendor/` expose remote WebRTC

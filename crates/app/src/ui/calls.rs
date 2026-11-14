@@ -1521,7 +1521,7 @@ impl MatrixApp {
                 user_id: user.into(),
                 device_id: "PREVIEW".into(),
                 display_name: name.map(Into::into),
-                // Contract fixture defaults; playback UI is owned by Claude.
+                // Preview participants use default playback state.
                 id: format!("{user}:PREVIEW"),
                 playback: Default::default(),
                 speaking,
