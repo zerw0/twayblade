@@ -54,6 +54,27 @@ pub enum SyncStatus {
     Stopped,
 }
 
+/// A direct chat usually has no picture of its own; show the other person's,
+/// as Element does. Heroes carry that avatar without a member-list fetch.
+fn direct_partner_avatar(room: &Room) -> Option<String> {
+    if room.direct_targets_length() == 0 {
+        return None;
+    }
+    let info = room.clone_info();
+    let heroes = info.heroes();
+    let targets = room.direct_targets();
+    heroes
+        .iter()
+        .find(|hero| {
+            targets
+                .iter()
+                .any(|target| target.as_str() == hero.user_id.as_str())
+        })
+        .or_else(|| (heroes.len() == 1).then(|| &heroes[0]))
+        .and_then(|hero| hero.avatar_url.as_ref())
+        .map(|url| url.to_string())
+}
+
 // Project only changed SDK entries; the service owns membership, recency and sorting.
 fn summary(room: Room) -> RoomSummary {
     RoomSummary {
@@ -81,7 +102,10 @@ fn summary(room: Room) -> RoomSummary {
             (targets.len() == 1).then(|| targets.into_iter().next().unwrap().to_string())
         },
         presence: None,
-        avatar: room.avatar_url().map(|url| url.to_string()),
+        avatar: room
+            .avatar_url()
+            .map(|url| url.to_string())
+            .or_else(|| direct_partner_avatar(&room)),
         mentions: room.unread_notification_counts().highlight_count,
         public: room.is_public().unwrap_or(false),
         favourite: room.is_favourite(),
