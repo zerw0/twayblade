@@ -327,6 +327,8 @@ pub(super) struct MatrixApp {
     selection_trace: Option<(bool, bool, u32)>,
     /// One video view per shown call track, keyed by track ID.
     pub(super) call_tiles: HashMap<String, Entity<crate::ui::calls::VideoTile>>,
+    /// The participant (user, device) shown large in the call; None shows the grid.
+    pub(super) call_focus: Option<(String, String)>,
     /// Repaints once a second during a call for its duration.
     pub(super) call_clock: Option<Task<()>>,
     /// Plays while an incoming call rings; dropping it stops the sound.
@@ -648,6 +650,7 @@ impl MatrixApp {
             selection_pending: 0,
             selection_trace: None,
             call_tiles: HashMap::new(),
+            call_focus: None,
             call_clock: None,
             ringtone: None,
             call_screen_focus: None,

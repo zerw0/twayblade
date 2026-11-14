@@ -2237,3 +2237,22 @@ fn failed_room_load_offers_try_again_instead_of_loading_text(cx: &mut TestAppCon
     .unwrap();
     cx.run_until_parked();
 }
+
+#[gpui_kit::test]
+fn call_focus_button_toggles_one_person_large(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update(|cx| app.update(cx, |app, _| app.preview_call("--preview-call-group")));
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("call-focus-@alex:preview.invalid-PREVIEW", cx);
+    })
+    .expect("focus a participant");
+    let key = ("@alex:preview.invalid".to_owned(), "PREVIEW".to_owned());
+    cx.update(|cx| assert_eq!(app.read(cx).call_focus.as_ref(), Some(&key)));
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("call-focus-@alex:preview.invalid-PREVIEW", cx);
+    })
+    .expect("release focus");
+    cx.update(|cx| assert!(app.read(cx).call_focus.is_none()));
+}

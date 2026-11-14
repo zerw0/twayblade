@@ -399,7 +399,10 @@ impl Render for MatrixApp {
                 }),
             )
             .on_action(cx.listener(|this, _: &CloseProfile, window, cx| {
-                if this.viewer.is_some() {
+                if this.call_focus.is_some() && this.live_call().is_some() {
+                    this.call_focus = None;
+                    cx.notify();
+                } else if this.viewer.is_some() {
                     this.close_viewer(window, cx);
                 } else if this.emoji_picker.is_some() {
                     this.close_emoji(window, cx);

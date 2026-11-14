@@ -161,6 +161,7 @@ impl MatrixApp {
 
     fn fresh_call(&mut self) {
         self.call_end_dismissed = false;
+        self.call_focus = None;
         self.call_event_seen = 0;
         self.status.clear();
     }
@@ -500,6 +501,42 @@ impl MatrixApp {
                 label.child(Icon::new(IconName::ScreenShare).size(px(11.)))
             })
             .child(div().truncate().child(name.clone()));
+        let key = (participant.user_id.clone(), participant.device_id.clone());
+        let focused = self.call_focus.as_ref() == Some(&key);
+        let ended_call = !live(call);
+        let focus_label = if focused {
+            format!("Show everyone, leave focus on {name}")
+        } else {
+            format!("Focus on {name}")
+        };
+        let focus_button = div().absolute().top(px(6.)).right(px(6.)).child(
+            Button::new(SharedString::from(format!(
+                "call-focus-{}-{}",
+                participant.user_id, participant.device_id
+            )))
+            .ghost()
+            .size(px(22.))
+            .rounded(px(5.))
+            .bg(gpui_kit::black().opacity(0.55))
+            .text_color(gpui_kit::white())
+            .icon(
+                Icon::new(if focused {
+                    IconName::Minimize
+                } else {
+                    IconName::Maximize
+                })
+                .size(px(12.)),
+            )
+            .accessibility_label(focus_label)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.call_focus = if this.call_focus.as_ref() == Some(&key) {
+                    None
+                } else {
+                    Some(key.clone())
+                };
+                cx.notify();
+            })),
+        );
         let mut spoken = name.clone();
         for (on, word) in [
             (speaking, "speaking"),
@@ -564,6 +601,7 @@ impl MatrixApp {
                 )
             })
             .child(label)
+            .when(!ended_call, |tile| tile.child(focus_button))
             .into_any_element()
     }
 
@@ -792,53 +830,89 @@ impl MatrixApp {
         };
         let ringing_direct =
             matches!(call.phase, CallPhase::Ringing { .. }) && call.kind == CallKind::Direct;
-        let tiles = (!ended && !people.is_empty()).then(|| {
-            if side {
-                v_flex().flex_none().gap(px(8.))
-            } else {
-                h_flex()
-                    .flex_wrap()
-                    .justify_center()
-                    .gap(px(8.))
-                    .px(px(16.))
-                    .pt(px(12.))
-            }
-            .when(call.phase == CallPhase::Reconnecting, |row| {
-                row.opacity(0.5)
-            })
-            .children(
+        let focused = (!ended && !side)
+            .then(|| {
+                let key = self.call_focus.as_ref()?;
                 people
                     .iter()
-                    .take(shown)
-                    .map(|p| self.call_tile(p, call, size, cx)),
-            )
-            // Beside someone else's screen, the status line says you share.
-            .children(
-                (!side)
-                    .then(|| self.own_screen_tile(call, size, cx))
-                    .flatten(),
-            )
-            .when(ringing_direct, |row| {
-                row.child(self.callee_tile(call, size, cx))
+                    .copied()
+                    .find(|p| (&p.user_id, &p.device_id) == (&key.0, &key.1))
             })
-            .when(overflow > 0, |row| {
-                row.child(
-                    v_flex()
-                        .id("call-tile-more")
-                        .role(Role::Group)
-                        .aria_label(format!("{} more people", overflow + 1))
-                        .flex_none()
-                        .w(px(size.0))
-                        .h(px(size.1))
-                        .rounded(px(10.))
-                        .bg(cx.theme().secondary)
-                        .items_center()
-                        .justify_center()
-                        .text_size(px(15.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(muted_fg)
-                        .child(format!("+{}", overflow + 1)),
+            .flatten();
+        let tiles = (!ended && !people.is_empty() && focused.is_some()).then(|| {
+            // One person large; everyone else in a strip beneath.
+            let focus = focused.expect("checked above");
+            v_flex()
+                .items_center()
+                .gap(px(8.))
+                .px(px(16.))
+                .pt(px(12.))
+                .when(call.phase == CallPhase::Reconnecting, |col| {
+                    col.opacity(0.5)
+                })
+                .child(self.call_tile(focus, call, (480., 300.), cx))
+                .child(
+                    h_flex().flex_wrap().justify_center().gap(px(8.)).children(
+                        people
+                            .iter()
+                            .filter(|p| {
+                                (&p.user_id, &p.device_id) != (&focus.user_id, &focus.device_id)
+                            })
+                            .take(MAX_TILES)
+                            .map(|p| self.call_tile(p, call, (112., 70.), cx)),
+                    ),
                 )
+        });
+        let tiles = tiles.map(IntoElement::into_any_element).or_else(|| {
+            (!ended && !people.is_empty()).then(|| {
+                if side {
+                    v_flex().flex_none().gap(px(8.))
+                } else {
+                    h_flex()
+                        .flex_wrap()
+                        .justify_center()
+                        .gap(px(8.))
+                        .px(px(16.))
+                        .pt(px(12.))
+                }
+                .when(call.phase == CallPhase::Reconnecting, |row| {
+                    row.opacity(0.5)
+                })
+                .children(
+                    people
+                        .iter()
+                        .take(shown)
+                        .map(|p| self.call_tile(p, call, size, cx)),
+                )
+                // Beside someone else's screen, the status line says you share.
+                .children(
+                    (!side)
+                        .then(|| self.own_screen_tile(call, size, cx))
+                        .flatten(),
+                )
+                .when(ringing_direct, |row| {
+                    row.child(self.callee_tile(call, size, cx))
+                })
+                .when(overflow > 0, |row| {
+                    row.child(
+                        v_flex()
+                            .id("call-tile-more")
+                            .role(Role::Group)
+                            .aria_label(format!("{} more people", overflow + 1))
+                            .flex_none()
+                            .w(px(size.0))
+                            .h(px(size.1))
+                            .rounded(px(10.))
+                            .bg(cx.theme().secondary)
+                            .items_center()
+                            .justify_center()
+                            .text_size(px(15.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(muted_fg)
+                            .child(format!("+{}", overflow + 1)),
+                    )
+                })
+                .into_any_element()
             })
         });
         let notice = (!ended)
