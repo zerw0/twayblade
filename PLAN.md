@@ -195,24 +195,40 @@ runtime spike (`call-host`) has been removed after native encrypted audio intero
 Element on each OS, including denied permissions, device removal, network change
 and screen sharing (Wayland and X11). Transport TLS is not media E2EE.
 
-Call view, next (requested 2026-11-13):
-- *Focus on a person.* Clicking a tile (or its "Focus" button, also from the
-  keyboard) makes that person the large view, with everyone else in a strip;
-  clicking again or Escape returns to the grid. A shared screen is focusable
-  the same way.
-- *Full screen.* The call stage can go full screen on its own (the focused
-  person or the grid), with the controls appearing on pointer movement and a
-  keyboard path out (Escape / ⌃⌘F). Works with the macOS full-screen space.
-- *Follow the speaker.* An option to focus whoever is talking automatically.
-  Switches only after someone has spoken for about a second and holds for a
-  few seconds, so the view doesn't flicker between people; a person you
-  focused yourself stays until you release them.
-- *Mute or turn people down for yourself.* Per participant, in their tile's
-  menu: Mute for me, and a volume slider (0–200%). Local playback only; it
-  never changes what others hear and is shown on the tile. Remembered for the
-  call only. Muting someone for everyone needs moderator permissions that
-  MatrixRTC/LiveKit don't standardise yet; out of scope until they do.
-- Each mode is announced to screen readers and follows Reduce Motion.
+Call view (requested 2026-11-13; implemented 2026-11-15, `feature/call-view-modes`):
+- *Layout.* The call stage grows like Discord's: a compact strip for voice or a
+  single camera; an expanded stage (about 56% of the window height) when
+  someone shares a screen or two or more cameras are on. A screen is large
+  with people in a strip beneath; cameras are fitted to the stage in a 16:9 grid.
+- *Focus on a person or a shared screen.* Each tile and the shared screen have
+  a focus button (also from the keyboard); everyone else moves to a strip, or
+  is hidden for a focused screen. Clicking again or Escape returns. A focus you
+  chose is never overridden.
+- *Full screen.* The full-screen button (or ⌃⌘F) makes the call fill the window
+  in the macOS full-screen space, with no sidebar or timeline. The controls
+  float at the bottom and fade out after 3 s without pointer or key activity
+  (they stay while hovered or a menu is open; instant under Reduce Motion).
+  Escape or ⌃⌘F leaves. Full screen from the window's own green button keeps
+  the chat layout.
+- *Follow the speaker.* A toggle in the call controls (shown with two or more
+  other people), remembered in preferences. The view moves to someone after
+  they have spoken for 1 s and holds 4 s before it can move again; silence keeps
+  the pick, and a person leaving clears it. It only reorders the strip while a
+  screen is shown.
+- *Mute or turn people down for yourself.* A "more" button on other people's
+  tiles opens Mute for me, a 0–200% slider and Reset to 100%. It uses the
+  existing local playback contract, never changes what others hear, and shows
+  as a badge on the tile. Reset at the end of the call. Muting someone for
+  everyone needs moderator permissions that MatrixRTC/LiveKit don't
+  standardise yet; out of scope.
+- Each mode is announced through the call status line (screen readers) and the
+  tile labels; transitions follow Reduce Motion.
+- Verified: compilation, strict Clippy, 142 offline app tests (including the
+  speaker-follow timing and grid-fit rules) and preview captures
+  (`--preview-call-video|-volume|-fullscreen|-screen`). Not verified: a live
+  call (speech detection, audible volume and mute effects), Element
+  interoperability, full-screen transitions and auto-hide on a physical Mac,
+  VoiceOver, Linux and Windows.
 
 **UI motion polish (with M5/M6, requested 2026-11-13).** Hover and press
 states animate instead of snapping: rows, buttons, rail tiles, message
@@ -318,7 +334,7 @@ and [compatibility status](docs/compatibility/STATUS.md).
 | M3 spaces, threads, viewer | Space navigation/join/leave, threads, image viewer; isolated SDK and offline UI checks | Element comparison, keyboard/trackpad use, real rooms and encrypted media across clients |
 | M4 settings | Appearance/chat styles, server push rules, notification adapters, account/security settings | OS permissions, delivery/click/badges, system appearance/accent transitions and Element comparison |
 | M4b chat polish | Search, gallery, presence, typing, formatting, history and keyboard UI | Physical keyboard layouts/IME, focus, long-history performance and public-server behavior |
-| M5 calls | Native MatrixRTC/LiveKit frame E2EE, ringing, devices, screen share, playback contracts, generated three-party interoperability | Playback controls and X11/Windows source-picker views; Linux/Windows webcam capture is unimplemented; physical media/permissions on all OSes |
+| M5 calls | Native MatrixRTC/LiveKit frame E2EE, ringing, devices, screen share, playback contracts, generated three-party interoperability | Live check of playback controls and speaker follow; X11/Windows source-picker views; Linux/Windows webcam capture is unimplemented; physical media/permissions on all OSes |
 | M6 release | AccessKit labels, binary CI, Nix package, update-check service/contracts | VoiceOver/AT-SPI/UIA, updater views, signed/tampered upgrade handling, signing/notarization and installed-package acceptance |
 
 Integration base (2026-11-14):
@@ -365,6 +381,18 @@ update switch, channel, status, plain-text What's New, displayed upgrade command
 and release-page button. Verified by compilation, strict Clippy and offline app
 tests only; no capture, Element comparison or physical Mac review. A launch-time
 notice outside Settings is not implemented.
+
+First live call (2026-11-13, operator-reported): a direct call between Twayblade
+on macOS and Element on macOS (another person, real accounts) worked in both
+directions for audio, camera video and screen sharing, using physical
+microphones, speakers, cameras and the macOS screen picker. No logs or captures
+were taken. Media E2EE is mandatory in the client (call buttons are disabled in
+unencrypted rooms; unencrypted publications are refused), but this call did not
+independently inspect key exchange or encryption. Still open: group calls live;
+who rang whom and whether the ringtone, incoming card and OS notification actions
+behaved; device removal, permission denial/revocation and network changes; call
+shortcuts pressed during a live call; Element Web and other Element versions;
+Linux (Wayland/X11) and Windows. No M5 exit claimed.
 
 Formatting toolbar (2026-11-15, `feature/formatting-toolbar`, issue #39): the
 composer's toolbar row has Bold, Italic, Code, Link and Quote buttons on its left
