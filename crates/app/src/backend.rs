@@ -405,6 +405,16 @@ fn profile_failure(error: ProfileError) -> ServiceError {
     })
 }
 
+/// Offline from the first failed sync until it reconnects (the "Connecting" and
+/// "Syncing" steps in between are still offline from the user's side).
+fn next_offline(was_offline: bool, status: SyncStatus) -> bool {
+    match status {
+        SyncStatus::Offline => true,
+        SyncStatus::Connected | SyncStatus::Failed | SyncStatus::Stopped => false,
+        SyncStatus::Connecting | SyncStatus::Syncing => was_offline,
+    }
+}
+
 fn sync_status_text(status: SyncStatus) -> &'static str {
     match status {
         SyncStatus::Connecting => "Connecting…",
@@ -1685,6 +1695,7 @@ impl Backend {
             // current, active one, a frozen list would keep saying "Connected":
             // log why and start the stream again after a growing pause.
             let mut failures = 0u32;
+            let mut offline = false;
             loop {
                 let stream = rooms_account.room_updates();
                 tokio::pin!(stream);
@@ -1699,6 +1710,7 @@ impl Backend {
                         return;
                     }
                     let text = sync_status_text(snapshot.status);
+                    offline = next_offline(offline, snapshot.status);
                     let code = match snapshot.status {
                         SyncStatus::Connecting => 0,
                         SyncStatus::Syncing => 1,
@@ -1713,6 +1725,7 @@ impl Backend {
                     }
                     publish(&updates, |view| {
                         view.sync_status = text.into();
+                        view.offline = offline;
                         view.unread_total = snapshot
                             .rooms
                             .iter()
@@ -1792,6 +1805,21 @@ fn release_in_runtime<T>(runtime: &Runtime, value: T) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn offline_lasts_until_the_connection_is_back() {
+        use super::{SyncStatus::*, next_offline};
+        let mut offline = false;
+        let mut seen = Vec::new();
+        for status in [
+            Syncing, Connected, Offline, Connecting, Syncing, Connected, Offline, Stopped,
+        ] {
+            offline = next_offline(offline, status);
+            seen.push(offline);
+        }
+        assert_eq!(seen, [false, false, true, true, true, false, true, false]);
+        // A start failure isn't "no internet".
+        assert!(!next_offline(true, Failed));
+    }
     #[test]
     fn unchanged_updater_state_does_not_publish_or_advance_the_revision() {
         let (sender, receiver) = tokio::sync::watch::channel(super::Snapshot::default());

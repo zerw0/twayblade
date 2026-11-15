@@ -321,7 +321,11 @@ impl Account {
                         status = match next {
                             Some(State::Running) => {
                                 tracing::info!(name: "sync_state_running", failures, rooms = rooms.len());
-                                failures = 0; restart = None; SyncStatus::Connected
+                                failures = 0; restart = None;
+                                // Back online: let the send queue resume whatever was
+                                // queued while offline (it disables itself on errors).
+                                account.client.send_queue().set_enabled(true).await;
+                                SyncStatus::Connected
                             }
                             Some(State::Offline) => {
                                 tracing::info!(name: "sync_state_offline", failures, rooms = rooms.len());

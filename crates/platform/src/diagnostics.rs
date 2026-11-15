@@ -192,6 +192,8 @@ impl SafeFields {
                 | "delay_ms"
                 | "epoch_current"
                 | "session_active"
+                | "cached"
+                | "offline"
         )
     }
 }
