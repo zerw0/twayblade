@@ -366,6 +366,18 @@ and release-page button. Verified by compilation, strict Clippy and offline app
 tests only; no capture, Element comparison or physical Mac review. A launch-time
 notice outside Settings is not implemented.
 
+First live call (2026-11-13, operator-reported): a direct call between Twayblade
+on macOS and Element on macOS (another person, real accounts) worked in both
+directions for audio, camera video and screen sharing, using physical
+microphones, speakers, cameras and the macOS screen picker. No logs or captures
+were taken. Media E2EE is mandatory in the client (call buttons are disabled in
+unencrypted rooms; unencrypted publications are refused), but this call did not
+independently inspect key exchange or encryption. Still open: group calls live;
+who rang whom and whether the ringtone, incoming card and OS notification actions
+behaved; device removal, permission denial/revocation and network changes; call
+shortcuts pressed during a live call; Element Web and other Element versions;
+Linux (Wayland/X11) and Windows. No M5 exit claimed.
+
 ## Workspace
 
 ```text
