@@ -261,6 +261,15 @@ impl Render for MatrixApp {
                 motion::slide_in(
                     // The window-relative width cap lives here, on the panel's direct row child.
                     h_flex()
+                        .id(SharedString::from(format!("{key}-region")))
+                        .role(Role::Complementary)
+                        .aria_label(match key {
+                            "panel-search" => "Message search",
+                            "panel-thread" => "Thread",
+                            "panel-profile" => "Profile",
+                            _ => "Room info",
+                        })
+                        .test_support()
                         .h_full()
                         .flex_none()
                         .max_w(relative(0.32))
@@ -330,6 +339,12 @@ impl Render for MatrixApp {
                                     .child(motion::rise(
                                         div()
                                             .id("management-dialog")
+                                            .role(Role::Dialog)
+                                            .aria_label(
+                                                self.management.as_ref().map_or("Dialog", |page| {
+                                                    Self::management_title(&page.kind)
+                                                }),
+                                            )
                                             .w(px(440.))
                                             .rounded(px(12.))
                                             .overflow_hidden()

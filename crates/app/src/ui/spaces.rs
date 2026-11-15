@@ -359,16 +359,21 @@ impl MatrixApp {
         section.into_any_element()
     }
 
-    pub fn management_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        let page = self.management.as_ref().expect("management page");
-        let title = match &page.kind {
+    /// The heading of a management page or dialog, also its accessible name.
+    pub fn management_title(kind: &ManageKind) -> &'static str {
+        match kind {
             ManageKind::Directory(_) => "Browse Rooms",
             ManageKind::Leave(_) => "Leave Space",
             ManageKind::Create => "Create Room",
             ManageKind::Dm => "Start a Direct Message",
             ManageKind::JoinSpace => "Join a Space",
             ManageKind::InviteMember(_) => "Invite People",
-        };
+        }
+    }
+
+    pub fn management_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        let page = self.management.as_ref().expect("management page");
+        let title = Self::management_title(&page.kind);
         let mut body = v_flex()
             .id("management-body")
             .flex_1()

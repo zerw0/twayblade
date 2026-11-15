@@ -1366,6 +1366,54 @@ fn viewer_keyboard_navigation_zoom_clipboard_and_focus_restore(cx: &mut TestAppC
 }
 
 #[gpui_kit::test]
+fn viewer_and_dialogs_are_named_for_screen_readers(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestQueryExt;
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| app.preview_viewer(window, cx));
+        window.render_frame(cx);
+    })
+    .expect("open the viewer");
+    let total = cx.update(|cx| app.read(cx).viewer.as_ref().expect("viewer").entries.len());
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        // The overlay says which image of how many; the position is a status.
+        assert!(
+            window
+                .find_by_label(&format!("Image viewer, Image 1 of {total}"))
+                .visible()
+        );
+        assert!(
+            window
+                .find_by_label(&format!("Image 1 of {total}"))
+                .visible()
+        );
+        window.click("viewer-close", cx);
+    })
+    .expect("viewer labels");
+    // The create-room sheet is a dialog with its heading as its name.
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_management(crate::ui::spaces::ManageKind::Create, window, cx)
+        });
+        window.render_frame(cx);
+        assert!(window.find_by_label("Create Room").visible());
+    })
+    .expect("dialog label");
+    // A side panel is a named region.
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.management = None;
+            app.search_open = true;
+            cx.notify();
+        });
+        window.render_frame(cx);
+        assert!(window.find_by_label("Message search").visible());
+    })
+    .expect("panel label");
+}
+
+#[gpui_kit::test]
 fn viewer_save_and_open_shortcuts_require_a_destination(cx: &mut TestAppContext) {
     use gpui_kit::test::TestEventExt;
     let (window, app) = preview_window(cx);

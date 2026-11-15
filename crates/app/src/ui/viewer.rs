@@ -430,6 +430,14 @@ impl MatrixApp {
         let v = self.viewer.as_ref().expect("viewer");
         let entry = &v.entries[v.index].message;
         let (viewport, rendered) = v.geometry(window);
+        // What a screen reader hears: which image, and who sent it.
+        let image_name = entry
+            .attachment
+            .as_ref()
+            .map(|a| a.filename.clone())
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| "Image".into());
+        let position = format!("Image {} of {}", v.index + 1, v.entries.len());
         let ready = matches!(v.load, ImageLoad::Ready { .. });
         let saveable = ready
             || (!self.preview
@@ -492,6 +500,8 @@ impl MatrixApp {
             ImageLoad::Ready { render, .. } => canvas.child(
                 div()
                     .id("viewer-image")
+                    .role(Role::Image)
+                    .aria_label(format!("{image_name}, sent by {}", entry.display_name))
                     .absolute()
                     .left((viewport.width - rendered.width) / 2. + v.pan.x)
                     .top((viewport.height - rendered.height) / 2. + v.pan.y)
@@ -569,6 +579,9 @@ impl MatrixApp {
             .unwrap_or_default();
         v_flex()
             .id("image-viewer")
+            .role(Role::Dialog)
+            .aria_label(format!("Image viewer, {position}"))
+            .test_support()
             .absolute()
             .inset_0()
             .size_full()
@@ -596,7 +609,14 @@ impl MatrixApp {
                             cx.listener(|this, _, window, cx| this.step_image(-1, window, cx)),
                         ),
                     )
-                    .child(div().child(format!("{} / {}", v.index + 1, v.entries.len())))
+                    .child(
+                        div()
+                            .id("viewer-position")
+                            .role(Role::Status)
+                            .aria_label(position.clone())
+                            .test_support()
+                            .child(format!("{} / {}", v.index + 1, v.entries.len())),
+                    )
                     .child(
                         button(
                             "viewer-next",
