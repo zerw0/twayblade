@@ -243,6 +243,25 @@ sync (long polling) or member fetching, retain their own limits. Unknown room
 encryption state is fetched through the SDK before timeline construction;
 a fetch failure leaves the room retrying, without assuming it is unencrypted.
 
+Sync lifecycle events (for a room list that stops updating after sleep, a
+network change, a token refresh or a restart). The event name carries the
+reason; only counts and flags are written (`rooms`, `failures`, `delay_ms`,
+`active`, `empty`, `status`: 0 connecting, 1 syncing, 2 connected, 3 offline,
+4 failed, 5 stopped):
+
+- `sync_state_running` / `sync_state_offline`: the SDK sync service changed state.
+- `sync_restart_scheduled_error|idle|terminated`, then `sync_restart`: the
+  service stopped and a restart is waiting out its backoff.
+- `session_state_active|soft_logged_out|hard_logged_out`: login state changes.
+- `room_stream_end_*` (`room_updates_closed`, `session_inactive`,
+  `selection_closed`, `subscriptions_closed`, `sync_state_closed`,
+  `room_list_closed`): why the room list stream ended. `room_stream_task_end`
+  and `room_stream_restart` show the backend noticing and starting it again.
+- `rooms_snapshot`: room count and status when either changes.
+- `ui_window_active`: the window gained or lost focus (a wake from sleep shows
+  up here) with the room count the UI holds; `ui_room_state` adds `rooms` and
+  `empty` (timeline has no items).
+
 Remove `TWAYBLADE_LOG` from the environment to disable logging. Log files are not
 automatically uploaded. Isolated reproduction commands and their limitations
 are in [the integration guide](tests/integration/README.md).
