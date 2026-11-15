@@ -123,6 +123,28 @@ jobs:
           Copy-Item target/release/twayblade.exe, README.md dist/twayblade/
           Copy-Item crates/media/licenses/libwebrtc-a545de4.md dist/twayblade/libwebrtc-LICENSE.md
           Compress-Archive -Path dist/twayblade -DestinationPath "dist/twayblade-${{ matrix.name }}.zip"
+          Remove-Item -Recurse dist/twayblade
+
+      # MSI installer (#54) with WiX 5 (v6+ needs a maintenance-fee EULA
+      # decision). Unsigned: signing needs the release certificate.
+      - name: Build Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $version = $env:GITHUB_REF_NAME.Substring(1)
+          } else {
+            $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
+              Where-Object name -eq 'twayblade' | Select-Object -ExpandProperty version
+          }
+          # MSI versions are numeric (major.minor.patch); "-rc.1" is dropped.
+          $msiVersion = ($version -split '[-+]')[0]
+          wix build packaging/windows/twayblade.wxs -arch x64 `
+            -d "Version=$msiVersion" -d "BinDir=target\release" -d "Root=$PWD" `
+            -o "dist/Twayblade-$version-x86_64.msi"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem dist
 
       - uses: actions/upload-artifact@v7
         with:
@@ -131,6 +153,7 @@ jobs:
             dist/*.zip
             dist/*.dmg
             dist/*.tar.gz
+            dist/*.msi
             dist/*.deb
             dist/*.rpm
             dist/*.AppImage

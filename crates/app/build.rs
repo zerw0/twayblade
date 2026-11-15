@@ -5,4 +5,11 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         println!("cargo:rustc-link-arg=-ObjC");
     }
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!("cargo:rerun-if-changed=twayblade.rc");
+        println!("cargo:rerun-if-changed=../../packaging/icons/twayblade.ico");
+        embed_resource::compile("twayblade.rc", embed_resource::NONE)
+            .manifest_optional()
+            .expect("Windows icon resource");
+    }
 }

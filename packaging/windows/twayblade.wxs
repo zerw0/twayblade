@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Windows installer (#54), built in CI with WiX 5:
+
+    wix build packaging/windows/twayblade.wxs -arch x64
+      -d Version=0.1.0 -d BinDir=target\release -d Root=.
+      -o dist\Twayblade-0.1.0-x86_64.msi
+
+  Per-machine install into Program Files with a Start menu shortcut. The
+  shortcut carries the AppUserModelID that the app's toast notifications use
+  (com.twayblade.desktop); Windows shows toasts from an unpackaged app only
+  when such a shortcut exists. Unsigned: signing needs the release
+  certificate and explicit authorization.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="Twayblade"
+      Manufacturer="Twayblade"
+      Version="$(var.Version)"
+      UpgradeCode="1C46C22B-3B89-45EA-9B63-0AAC518FF66D"
+      Scope="perMachine"
+      Language="1033">
+    <SummaryInformation Description="Twayblade installer" />
+    <!-- MSI compares only the first three version fields, so a final release
+         also replaces a pre-release of the same version. -->
+    <MajorUpgrade
+        AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of Twayblade is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="TwaybladeIcon" SourceFile="$(var.Root)\packaging\icons\twayblade.ico" />
+    <Property Id="ARPPRODUCTICON" Value="TwaybladeIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/zerw0/twayblade" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/zerw0/twayblade/issues" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Twayblade">
+        <Component Id="App" Bitness="always64">
+          <File Id="TwaybladeExe" Source="$(var.BinDir)\twayblade.exe" KeyPath="yes">
+            <Shortcut
+                Id="StartMenuShortcut"
+                Directory="ProgramMenuFolder"
+                Name="Twayblade"
+                Description="Native Matrix messaging and calls"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="TwaybladeIcon"
+                Advertise="yes">
+              <ShortcutProperty Key="System.AppUserModel.ID" Value="com.twayblade.desktop" />
+            </Shortcut>
+          </File>
+        </Component>
+        <!-- One file per component, so WiX can derive stable component GUIDs. -->
+        <Component Id="License" Bitness="always64">
+          <File Id="License" Source="$(var.Root)\LICENSE" Name="LICENSE.txt" KeyPath="yes" />
+        </Component>
+        <Component Id="WebrtcLicense" Bitness="always64">
+          <File Id="WebrtcLicense" Source="$(var.Root)\crates\media\licenses\libwebrtc-a545de4.md" Name="libwebrtc-LICENSE.md" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="Twayblade">
+      <ComponentRef Id="App" />
+      <ComponentRef Id="License" />
+      <ComponentRef Id="WebrtcLicense" />
+    </Feature>
+  </Package>
+</Wix>

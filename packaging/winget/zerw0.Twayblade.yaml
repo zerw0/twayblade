@@ -1,0 +1,7 @@
+# Template (#54): VERSION is filled from a published release. Submitting to
+# microsoft/winget-pkgs needs explicit authorization and a signed MSI.
+PackageIdentifier: zerw0.Twayblade
+PackageVersion: VERSION
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.9.0

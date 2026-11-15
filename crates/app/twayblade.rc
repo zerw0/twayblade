@@ -1,0 +1,3 @@
+// Windows executable resources: the icon Explorer, the taskbar and
+// Alt-Tab show for twayblade.exe.
+1 ICON "../../packaging/icons/twayblade.ico"

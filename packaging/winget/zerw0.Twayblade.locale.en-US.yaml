@@ -1,0 +1,21 @@
+# Template (#54): VERSION is filled from a published release.
+PackageIdentifier: zerw0.Twayblade
+PackageVersion: VERSION
+PackageLocale: en-US
+Publisher: zerw0
+PublisherUrl: https://github.com/zerw0
+PackageName: Twayblade
+PackageUrl: https://github.com/zerw0/twayblade
+License: MIT
+LicenseUrl: https://github.com/zerw0/twayblade/blob/main/LICENSE
+ShortDescription: Native Matrix client with encrypted messages and calls
+Description: A native desktop Matrix client with end-to-end encrypted rooms, spaces, threads and MatrixRTC voice and video calls.
+Moniker: twayblade
+Tags:
+  - matrix
+  - chat
+  - messaging
+  - e2ee
+ReleaseNotesUrl: https://github.com/zerw0/twayblade/releases/tag/vVERSION
+ManifestType: defaultLocale
+ManifestVersion: 1.9.0

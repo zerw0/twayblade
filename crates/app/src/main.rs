@@ -1,4 +1,7 @@
 #![recursion_limit = "512"]
+// Release builds start without a console window on Windows; diagnostics go to
+// the log file. Debug builds keep the console for development output.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 extern crate gpui_kit as gpui;
 
 mod app;

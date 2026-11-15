@@ -35,6 +35,9 @@ matrix-sdk.workspace = true
 [lints]
 workspace = true
 
+[build-dependencies]
+embed-resource = "=3.0.12"
+
 # Linux packages (#53), built in CI with `cargo deb` and `cargo generate-rpm`
 # after a release build. Shared libraries are detected from the binary.
 [package.metadata.deb]
