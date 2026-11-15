@@ -177,6 +177,18 @@ fn main() {
                         view.snapshot.updater = twayblade_platform::updates::Snapshot { phase: twayblade_platform::updates::Phase::Available, available: Some(twayblade_platform::updates::Available { version: "0.2.0".into(), prerelease: true, changelog: "Sample release notes.".into(), release_url: "https://github.com/zerw0/twayblade/releases/tag/v0.2.0".into(), upgrade_command: None, download: Some(twayblade_platform::updates::Download { file: "Twayblade-0.2.0-arm64.dmg".into(), size: 1, url: String::new(), sums_url: String::new() }) }), ..Default::default() };
                         view.snapshot.update_download = backend::UpdateDownload::Ready { version: "0.2.0".into(), path: "Twayblade-0.2.0-arm64.dmg".into() };
                     }
+                    if args.iter().any(|arg| arg == "--preview-selection") {
+                        view.composer.update(cx, |state, cx| {
+                            state.set_value("Let's ship the release notes today", window, cx);
+                            state.set_selected_range(10..23, cx);
+                            state.focus(window, cx);
+                        });
+                    }
+                    if args.iter().any(|arg| arg == "--preview-activity") {
+                        view.snapshot.invites = vec![twayblade_core::space_actions::Invite { id: "sample-room".into(), name: "Planning".into(), ..Default::default() }];
+                        for (room, mentions) in view.snapshot.rooms.iter_mut().zip([2u64, 0, 0, 1]) { room.mentions = mentions; room.unread = room.unread.max(mentions).max(1); }
+                        view.notifications_open = true;
+                    }
                     if args.iter().any(|arg| arg == "--preview-signed-out") {
                         view.snapshot.session_state = twayblade_core::auth::SessionState::HardLoggedOut;
                     }

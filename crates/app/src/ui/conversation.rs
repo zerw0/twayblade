@@ -339,6 +339,12 @@ impl MatrixApp {
                             .px(px(12.))
                             .pt(px(8.))
                             .pb(px(2.))
+                            .child({
+                                let composer = self.composer.clone();
+                                self.selection_bar
+                                    .update(cx, |bar, cx| bar.track(&composer, cx));
+                                self.selection_bar.clone()
+                            })
                             .child(
                                 Textarea::new(&self.composer)
                                     .context_menu(crate::ui::keyboard::composer_context_menu(

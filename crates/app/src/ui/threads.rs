@@ -568,6 +568,12 @@ impl MatrixApp {
                                     .flex_1()
                                     .min_w_0()
                                     .py(px(1.))
+                                    .child({
+                                        let composer = t.composer.clone();
+                                        self.thread_selection_bar
+                                            .update(cx, |bar, cx| bar.track(&composer, cx));
+                                        self.thread_selection_bar.clone()
+                                    })
                                     .child(
                                         Textarea::new(&t.composer)
                                             .context_menu(

@@ -1047,18 +1047,7 @@ impl MatrixApp {
                                 })
                         })
                     })
-                    .child(
-                        Button::new("open-notifications")
-                            .toolbar_control()
-                            .ghost()
-                            .size(px(26.))
-                            .icon(IconName::Bell)
-                            .accessibility_label("Notification settings")
-                            .tooltip("Notifications")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.open_settings(crate::ui::settings::Section::Notifications, cx)
-                            })),
-                    )
+                    .child(self.notifications_button(cx))
                     .child(
                         Button::new("open-settings")
                             .toolbar_control()

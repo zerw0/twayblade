@@ -2789,3 +2789,90 @@ fn direct_downloads_offer_a_checked_installer_and_package_installs_do_not(cx: &m
     })
     .expect("package manager");
 }
+
+#[gpui_kit::test]
+fn selecting_composer_text_shows_a_format_bar_that_keeps_focus(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        let composer = app.read(cx).composer.clone();
+        composer.update(cx, |state, cx| {
+            state.set_value("ship the notes", window, cx);
+            state.set_selected_range(5..8, cx);
+            state.focus(window, cx);
+        });
+        // The bar anchors to the laid-out selection, so it appears once the
+        // composer has been laid out.
+        window.render_frame(cx);
+        window.render_frame(cx);
+        assert!(window.find("selection-format-bar").visible());
+        window.click("selection-format-0", cx);
+        window.render_frame(cx);
+        let state = composer.read(cx);
+        assert_eq!(state.value().as_ref(), "ship **the** notes");
+        assert!(
+            gpui::Focusable::focus_handle(state, cx).is_focused(window),
+            "the composer keeps focus"
+        );
+        assert!(
+            !state.selected_range().is_empty(),
+            "the selection stays for another format"
+        );
+        // Collapsing the selection hides the bar.
+        composer.update(cx, |state, cx| state.set_selected_range(0..0, cx));
+        window.render_frame(cx);
+        assert!(window.try_find("selection-format-bar").is_none());
+    })
+    .expect("format bar");
+}
+
+#[gpui_kit::test]
+fn bell_opens_notifications_and_a_row_opens_its_room(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestEventExt;
+    let (window, app) = preview_window(cx);
+    cx.update(|cx| cx.bind_keys(crate::shortcuts::bindings()));
+    let target = cx.update(|cx| {
+        app.update(cx, |app, _| {
+            let room = app
+                .snapshot
+                .rooms
+                .iter_mut()
+                .find(|room| !room.is_space && room.id != app.snapshot.selected_room)
+                .expect("another room");
+            room.mentions = 1;
+            room.unread = 1;
+            room.id.clone()
+        })
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("notifications-popover").is_none());
+        window.click("open-notifications", cx);
+        window.render_frame(cx);
+        assert!(window.find("notifications-popover").visible());
+        // Escape closes it.
+        window.key_down("escape", false, cx);
+        window.render_frame(cx);
+        assert!(window.try_find("notifications-popover").is_none());
+    })
+    .expect("open and close");
+    let row = format!("activity-room-{target}");
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.notifications_closed_at = None;
+            app.toggle_notifications(window, cx)
+        });
+        window.render_frame(cx);
+        window.click(gpui_kit::SharedString::from(row.clone()), cx);
+        window.render_frame(cx);
+        assert!(window.try_find("notifications-popover").is_none());
+    })
+    .expect("open a room from the popover");
+    cx.update(|cx| {
+        let app = app.read(cx);
+        assert!(!app.notifications_open);
+        assert_eq!(
+            app.navigation.selected_room.as_deref(),
+            Some(target.as_str())
+        );
+    });
+}

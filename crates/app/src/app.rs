@@ -307,6 +307,9 @@ pub(super) struct MatrixApp {
     pub password: Entity<InputState>,
     pub search: Entity<InputState>,
     pub composer: Entity<TextareaState>,
+    /// Formatting bars over selected text in the room and thread composers.
+    pub(crate) selection_bar: Entity<crate::ui::selection_bar::SelectionBar>,
+    pub(crate) thread_selection_bar: Entity<crate::ui::selection_bar::SelectionBar>,
     composers: HashMap<String, (Entity<TextareaState>, Subscription)>,
     pub scroller: Entity<MessageScrollerState>,
     pub focus: FocusHandle,
@@ -315,6 +318,10 @@ pub(super) struct MatrixApp {
     pub(super) choosing_server: bool,
     pub status: String,
     pub busy: bool,
+    /// The title-bar notifications popover.
+    pub(crate) notifications_open: bool,
+    pub(crate) notifications_closed_at: Option<std::time::Instant>,
+    pub(crate) notifications_focus: FocusHandle,
     /// The room list column; the space rail stays visible (⌃⌘S).
     pub sidebar_open: bool,
     /// Room navigation history for Back/Forward (⌘[ / ⌘]).
@@ -692,6 +699,10 @@ impl MatrixApp {
             username,
             password,
             search,
+            selection_bar: cx
+                .new(|cx| crate::ui::selection_bar::SelectionBar::new(composer.clone(), cx)),
+            thread_selection_bar: cx
+                .new(|cx| crate::ui::selection_bar::SelectionBar::new(composer.clone(), cx)),
             composer,
             composers: HashMap::new(),
             scroller,
@@ -700,6 +711,9 @@ impl MatrixApp {
             choosing_server: false,
             status: String::new(),
             busy: !preview,
+            notifications_open: false,
+            notifications_closed_at: None,
+            notifications_focus: cx.focus_handle(),
             sidebar_open: true,
             history_back: Vec::new(),
             history_forward: Vec::new(),
