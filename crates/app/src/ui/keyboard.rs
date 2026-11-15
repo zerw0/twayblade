@@ -1,10 +1,10 @@
 //! Composer keyboard actions: Markdown formatting and sent-message history.
-use crate::app::MatrixApp;
+use super::*;
 use crate::composer_format::{self, Format};
 use crate::shortcuts::{
     FormatBold, FormatCode, FormatItalic, FormatLink, FormatQuote, HistoryNext, HistoryPrevious,
+    ShortcutAction, hint,
 };
-use gpui_kit::*;
 
 impl MatrixApp {
     /// Gives a composer panel the `Composer` key context and its actions.
@@ -39,6 +39,67 @@ impl MatrixApp {
             }))
     }
 
+    /// Quiet formatting buttons for the left of the composer's toolbar row. They
+    /// do what the shortcuts do (Markdown around the selection) and say so in
+    /// their tooltips; focus returns to the field so typing can continue.
+    pub(crate) fn format_buttons(&self, enabled: bool, cx: &mut Context<Self>) -> AnyElement {
+        let items = [
+            (
+                Format::Bold,
+                "format-bold",
+                IconName::Bold,
+                "Bold",
+                ShortcutAction::FormatBold,
+            ),
+            (
+                Format::Italic,
+                "format-italic",
+                IconName::Italic,
+                "Italic",
+                ShortcutAction::FormatItalic,
+            ),
+            (
+                Format::Code,
+                "format-code",
+                IconName::Code,
+                "Code",
+                ShortcutAction::FormatCode,
+            ),
+            (
+                Format::Link,
+                "format-link",
+                IconName::Link,
+                "Link",
+                ShortcutAction::FormatLink,
+            ),
+            (
+                Format::Quote,
+                "format-quote",
+                IconName::Quote,
+                "Quote",
+                ShortcutAction::FormatQuote,
+            ),
+        ];
+        h_flex()
+            .id("format-bar")
+            .role(Role::Toolbar)
+            .aria_label("Formatting")
+            .gap(px(2.))
+            .children(items.map(|(format, id, icon, label, action)| {
+                Button::new(id)
+                    .ghost()
+                    .size(px(26.))
+                    .icon(Icon::new(icon).size(px(14.)))
+                    .accessibility_label(label)
+                    .tooltip(hint(label, action))
+                    .disabled(!enabled)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.format_composer(format, false, window, cx)
+                    }))
+            }))
+            .into_any_element()
+    }
+
     fn format_composer(
         &mut self,
         format: Format,
@@ -48,7 +109,8 @@ impl MatrixApp {
     ) {
         if let Some(composer) = self.edit_composer(in_thread) {
             composer.update(cx, |state, cx| {
-                composer_format::apply(format, state, window, cx)
+                composer_format::apply(format, state, window, cx);
+                state.focus(window, cx);
             });
         }
     }

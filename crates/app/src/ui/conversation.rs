@@ -360,6 +360,7 @@ impl MatrixApp {
                             .h(px(34.))
                             .px(px(6.))
                             .gap(px(2.))
+                            .child(self.format_buttons(editable || self.preview, cx))
                             .child(div().flex_1())
                             .child(
                                 Button::new("attach-file")
