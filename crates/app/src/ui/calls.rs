@@ -87,7 +87,8 @@ fn live(call: &CallState) -> bool {
 /// User wording for call failures; core returns only typed errors.
 pub(crate) fn call_error_text(error: CallError) -> &'static str {
     match error {
-        // Typed media contract only; no source-picker view exists yet.
+        // Where the OS has no picker, Share opens our own chooser first, so this is
+        // only a fallback if a share starts without a choice.
         CallError::ScreenCapture(twayblade_core::calls::ScreenError::SelectionRequired) => {
             "Choose a screen or window before sharing."
         }
@@ -219,6 +220,7 @@ impl MatrixApp {
         self.call_focus = None;
         self.call_follow.reset();
         self.call_follow_timer = None;
+        self.screen_picker = None;
         self.call_volume.clear();
         self.call_menu = None;
         self.call_event_seen = 0;
@@ -289,6 +291,13 @@ impl MatrixApp {
         };
         if gone {
             self.call_focus = None;
+        }
+        if self.screen_picker.is_some()
+            && !self
+                .live_call()
+                .is_some_and(|call| call.local.screen == ScreenShare::Off)
+        {
+            self.screen_picker = None;
         }
         self.sync_full_screen(window);
         self.sync_speaker_follow(cx);
@@ -1489,6 +1498,9 @@ impl MatrixApp {
                     )
             });
         let reconnecting = call.phase == CallPhase::Reconnecting;
+        let picker = (!ended)
+            .then(|| self.screen_picker_view(call, cx))
+            .flatten();
         let status = v_flex()
             .id("call-status")
             .role(Role::Status)
@@ -1665,7 +1677,7 @@ impl MatrixApp {
                             })
                             .size(px(15.)),
                         )
-                        .selected(screen != ScreenShare::Off)
+                        .selected(screen != ScreenShare::Off || self.screen_picker.is_some())
                         .disabled(connecting)
                         .accessibility_label(match screen {
                             ScreenShare::Off => "Share screen",
@@ -1681,7 +1693,7 @@ impl MatrixApp {
                             Action::ToggleScreenShare,
                         ))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            let result = this.set_screen_share(screen == ScreenShare::Off);
+                            let result = this.toggle_screen(screen == ScreenShare::Off, cx);
                             this.call_result(result, cx)
                         })),
                 )
@@ -1835,6 +1847,7 @@ impl MatrixApp {
                         .pb(px(CONTROLS_ROOM))
                         .children(tiles),
                 )
+                .children(picker)
                 .children(notice)
                 .child(motion::fade_toggle(
                     floating,
@@ -1853,11 +1866,196 @@ impl MatrixApp {
                 .border_b_1()
                 .border_color(cx.theme().border)
                 .children(tiles)
+                .children(picker)
                 .children(notice)
                 .child(bar),
             "call-stage-motion",
             self.snapshot.reduce_motion,
         )
+    }
+
+    /// Whether sharing needs our own chooser: the OS has no picker of its own
+    /// (macOS and Wayland do; X11 and Windows don't).
+    fn needs_source_picker(&self) -> bool {
+        self.live_call()
+            .and_then(|call| call.screen_backend)
+            .is_some_and(|backend| !backend.uses_system_picker())
+    }
+
+    /// Starts or stops sharing. Where the OS can't ask which screen or window,
+    /// starting opens the chooser instead; clicking again closes it.
+    pub(crate) fn toggle_screen(
+        &mut self,
+        start: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<(), CallError> {
+        use twayblade_core::calls::SourceKind;
+        if start && self.needs_source_picker() {
+            if self.screen_picker.is_some() {
+                self.screen_picker = None;
+            } else {
+                self.screen_picker = Some(SourceKind::Screen);
+                if !self.preview {
+                    self.request_screen_sources(SourceKind::Screen)?;
+                }
+            }
+            cx.notify();
+            return Ok(());
+        }
+        self.screen_picker = None;
+        self.set_screen_share(start)
+    }
+
+    /// The screen and window chooser, above the call controls.
+    fn screen_picker_view(&self, call: &CallState, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use twayblade_core::calls::SourceKind;
+        let kind = self.screen_picker?;
+        let muted_fg = cx.theme().muted_foreground;
+        let sources: Vec<_> = call
+            .screen_sources
+            .iter()
+            .filter(|source| source.selection.kind == kind)
+            .collect();
+        let tab = |tab: SourceKind, label: &'static str, id: &'static str| {
+            Button::new(id)
+                .ghost()
+                .xsmall()
+                .flex_1()
+                .h(px(22.))
+                .rounded(px(5.))
+                .label(label)
+                .selected(kind == tab)
+                .when(kind == tab, |button| {
+                    button.bg(theme::palette(cx).pill).shadow_xs()
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.screen_picker = Some(tab);
+                    if !this.preview {
+                        let result = this.request_screen_sources(tab);
+                        this.call_result(result, cx);
+                    }
+                    cx.notify();
+                }))
+        };
+        let noun = match kind {
+            SourceKind::Screen => "screens",
+            SourceKind::Window => "windows",
+        };
+        let rows = sources.iter().enumerate().map(|(index, source)| {
+            let selection = source.selection;
+            let title = source.title.clone().filter(|t| !t.trim().is_empty());
+            let name = title.unwrap_or_else(|| match kind {
+                SourceKind::Screen => format!("Screen {}", index + 1),
+                SourceKind::Window => format!("Window {}", index + 1),
+            });
+            Button::new(SharedString::from(format!("share-source-{index}")))
+                .ghost()
+                .h(px(30.))
+                .w_full()
+                .justify_start()
+                .px(px(8.))
+                .accessibility_label(format!("Share {name}"))
+                .child(
+                    h_flex()
+                        .gap(px(8.))
+                        .w_full()
+                        .child(
+                            Icon::new(match kind {
+                                SourceKind::Screen => IconName::Monitor,
+                                SourceKind::Window => IconName::AppWindow,
+                            })
+                            .size(px(14.))
+                            .text_color(muted_fg),
+                        )
+                        .child(div().flex_1().min_w_0().truncate().text_left().child(name)),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.screen_picker = None;
+                    let result = this.share_screen_source(selection);
+                    this.call_result(result, cx);
+                }))
+        });
+        Some(motion::rise(
+            v_flex()
+                .id("screen-picker")
+                .role(Role::Group)
+                .aria_label("Choose what to share")
+                .mx(px(16.))
+                .mt(px(10.))
+                .p(px(10.))
+                .gap(px(8.))
+                .rounded(px(9.))
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().popover)
+                .child(
+                    h_flex()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child("Choose what to share"),
+                        )
+                        .child(
+                            Button::new("screen-picker-refresh")
+                                .ghost()
+                                .size(px(22.))
+                                .icon(Icon::new(IconName::RefreshCw).size(px(12.)))
+                                .accessibility_label(format!("Refresh {noun}"))
+                                .tooltip(format!("Refresh {noun}"))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if !this.preview
+                                        && let Some(kind) = this.screen_picker
+                                    {
+                                        let result = this.request_screen_sources(kind);
+                                        this.call_result(result, cx);
+                                    }
+                                })),
+                        )
+                        .child(
+                            Button::new("screen-picker-cancel")
+                                .ghost()
+                                .size(px(22.))
+                                .icon(Icon::new(IconName::Close).size(px(12.)))
+                                .accessibility_label("Cancel sharing")
+                                .tooltip("Cancel")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.screen_picker = None;
+                                    cx.notify();
+                                })),
+                        ),
+                )
+                .child(
+                    h_flex()
+                        .p(px(2.))
+                        .gap(px(2.))
+                        .rounded(px(7.))
+                        .bg(cx.theme().secondary)
+                        .child(tab(SourceKind::Screen, "Screens", "screen-picker-screens"))
+                        .child(tab(SourceKind::Window, "Windows", "screen-picker-windows")),
+                )
+                .child(
+                    v_flex()
+                        .id("screen-picker-list")
+                        .max_h(px(180.))
+                        .overflow_y_scroll()
+                        .children(rows)
+                        .when(sources.is_empty(), |list| {
+                            list.child(
+                                div()
+                                    .py(px(8.))
+                                    .px(px(8.))
+                                    .text_size(px(12.))
+                                    .text_color(muted_fg)
+                                    .child(format!("No {noun} found.")),
+                            )
+                        }),
+                ),
+            "screen-picker-motion",
+            self.snapshot.reduce_motion,
+        ))
     }
 
     /// Shows the full-screen controls and restarts their hide timer. `force`
@@ -2029,7 +2227,7 @@ impl MatrixApp {
             (CallShortcut::Mute, Some((muted, ..)), _) => self.set_muted(!muted),
             (CallShortcut::Camera, Some((_, video, ..)), _) => self.set_video(!video),
             (CallShortcut::Screen, Some((_, _, screen, _)), _) => {
-                self.set_screen_share(screen == ScreenShare::Off)
+                self.toggle_screen(screen == ScreenShare::Off, cx)
             }
             (CallShortcut::Leave, Some(_), _) => self.leave_call(),
             _ => return,
@@ -2356,6 +2554,9 @@ impl MatrixApp {
         if flag == "--preview-call-fullscreen" {
             self.call_full_screen = true;
         }
+        if flag == "--preview-call-picker" {
+            self.screen_picker = Some(twayblade_core::calls::SourceKind::Screen);
+        }
         let device = |id: &str, name: &str| CallDevice {
             id: id.into(),
             name: name.into(),
@@ -2422,9 +2623,24 @@ impl MatrixApp {
         }
         self.snapshot.call = Some(CallState {
             ticket: None,
-            // Preview defaults; no source picker is rendered here.
-            screen_backend: None,
-            screen_sources: Vec::new(),
+            screen_backend: (flag == "--preview-call-picker")
+                .then_some(twayblade_core::calls::ScreenBackend::X11),
+            screen_sources: if flag == "--preview-call-picker" {
+                use twayblade_core::calls::{ScreenSelection, ScreenSource, SourceKind};
+                [
+                    (SourceKind::Screen, 1, Some("DP-1 · 2560 × 1440")),
+                    (SourceKind::Screen, 2, Some("HDMI-1 · 1920 × 1080")),
+                    (SourceKind::Window, 3, Some("Design review · Firefox")),
+                    (SourceKind::Window, 4, Some("Terminal")),
+                ]
+                .map(|(kind, id, title)| ScreenSource {
+                    selection: ScreenSelection { kind, id },
+                    title: title.map(Into::into),
+                })
+                .to_vec()
+            } else {
+                Vec::new()
+            },
             events,
             local: LocalCallState {
                 muted: false,

@@ -202,6 +202,33 @@ impl MatrixApp {
             .ok_or(twayblade_core::calls::CallError::StaleRequest)?
             .set_participant_muted_locally(ticket, id, muted)
     }
+    /// Asks for the list of screens or windows to share (read-only).
+    pub fn request_screen_sources(
+        &self,
+        kind: twayblade_core::calls::SourceKind,
+    ) -> Result<(), twayblade_core::calls::CallError> {
+        self.backend
+            .as_ref()
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?
+            .request_screen_sources(self.snapshot.account_instance, kind)
+            .map(|_| ())
+    }
+    /// Shares the chosen source, using the ticket of the call being shown.
+    pub fn share_screen_source(
+        &self,
+        selection: twayblade_core::calls::ScreenSelection,
+    ) -> Result<(), twayblade_core::calls::CallError> {
+        let ticket = self
+            .snapshot
+            .call
+            .as_ref()
+            .and_then(|call| call.ticket)
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?;
+        self.backend
+            .as_ref()
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?
+            .share_screen_source(ticket, selection)
+    }
     pub fn set_screen_share(&self, share: bool) -> Result<(), twayblade_core::calls::CallError> {
         self.backend
             .as_ref()
@@ -363,6 +390,9 @@ pub(super) struct MatrixApp {
     /// What the user chose to show large in the call; None shows the grid.
     pub(super) call_focus: Option<crate::ui::call_layout::CallFocus>,
     /// Debounced "follow the speaker" pick, used when the preference is on.
+    /// The in-app screen/window chooser, open on this tab. Only where the OS has
+    /// no picker of its own (X11, Windows).
+    pub(super) screen_picker: Option<twayblade_core::calls::SourceKind>,
     pub(super) call_follow: crate::ui::call_layout::SpeakerFollow,
     /// Wakes the view when the follow pick may change.
     pub(super) call_follow_timer: Option<Task<()>>,
@@ -711,6 +741,7 @@ impl MatrixApp {
             selection_trace: None,
             call_tiles: HashMap::new(),
             call_focus: None,
+            screen_picker: None,
             call_follow: Default::default(),
             call_follow_timer: None,
             call_full_screen: false,

@@ -2361,6 +2361,38 @@ fn call_full_screen_shows_only_the_call(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn screen_picker_lists_sources_and_opens_from_the_share_button(cx: &mut TestAppContext) {
+    use twayblade_core::calls::SourceKind;
+    let (window, app) = preview_window(cx);
+    cx.update(|cx| app.update(cx, |app, _| app.preview_call("--preview-call-picker")));
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("screen-picker-cancel").visible());
+        assert!(window.find("share-source-1").visible());
+        window.click("screen-picker-windows", cx);
+    })
+    .expect("switch to windows");
+    cx.update(|cx| assert_eq!(app.read(cx).screen_picker, Some(SourceKind::Window)));
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("screen-picker-cancel", cx);
+    })
+    .expect("cancel");
+    cx.update(|cx| assert!(app.read(cx).screen_picker.is_none()));
+    // Where the OS has no picker, Share opens ours instead of failing.
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find_all("screen-picker-cancel").is_empty());
+        window.click("call-screen-share", cx);
+    })
+    .expect("open from the share button");
+    cx.update(|cx| {
+        assert_eq!(app.read(cx).screen_picker, Some(SourceKind::Screen));
+        assert!(app.read(cx).status.is_empty());
+    });
+}
+
+#[gpui_kit::test]
 fn invite_tile_opens_the_invite_dialog_for_the_selected_room(cx: &mut TestAppContext) {
     let (window, app) = preview_window(cx);
     cx.update_window(window, |_, window, cx| {
