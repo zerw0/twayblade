@@ -421,6 +421,8 @@ pub enum RoomError {
     Unavailable,
     #[error("room_tag_failed")]
     Tag,
+    #[error("room_receipt_failed")]
+    Receipt,
 }
 
 #[cfg(test)]

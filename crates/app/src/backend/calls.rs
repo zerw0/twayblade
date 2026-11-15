@@ -139,16 +139,23 @@ impl Backend {
         expected: u128,
         action: twayblade_core::calls::IncomingAction,
     ) -> Result<(), CallError> {
-        let state = self.state.lock().map_err(|_| CallError::StaleRequest)?;
+        let mut state = self.state.lock().map_err(|_| CallError::StaleRequest)?;
         if state.account.as_ref().map(Account::instance_id) != Some(expected) {
             return Err(CallError::StaleRequest);
         }
+        // Declined or dismissed here: when this ring ends it was not missed.
+        let room = match &action {
+            twayblade_core::calls::IncomingAction::Dismiss(room)
+            | twayblade_core::calls::IncomingAction::Decline(room) => room.clone(),
+        };
         state
             .incoming_control
             .as_ref()
             .ok_or(CallError::ControlUnavailable)?
             .try_send(action)
-            .map_err(|_| CallError::ControlUnavailable)
+            .map_err(|_| CallError::ControlUnavailable)?;
+        state.handled_rings.insert(room);
+        Ok(())
     }
     pub(crate) fn call_control(&self, expected: u128, control: Control) -> Result<(), CallError> {
         let state = self.state.lock().map_err(|_| CallError::StaleRequest)?;
@@ -336,6 +343,7 @@ pub(super) fn observe(backend: &Backend, state: &mut State, account: Account) {
             if room_left {
                 state.cancel_call();
             }
+            let handled = std::mem::take(&mut state.handled_rings);
             publish(&updates, |v| {
                 if let Some(call) = &mut v.call
                     && room_left
@@ -344,9 +352,28 @@ pub(super) fn observe(backend: &Backend, state: &mut State, account: Account) {
                     call.phase = CallPhase::Ended(EndReason::RoomLeft);
                     call.screen_sources.clear();
                 }
+                let in_call = v.call.as_ref().map(|call| call.room_id.as_str());
+                let missed = missed_calls(
+                    &v.incoming_calls,
+                    &activity.incoming_calls,
+                    in_call,
+                    &handled,
+                );
+                remember_missed(&mut v.missed_calls, missed);
                 v.room_calls = activity.room_calls;
                 v.incoming_calls = activity.incoming_calls;
             });
+            // Keep the marks of rings that are still ringing.
+            state.handled_rings = handled
+                .into_iter()
+                .filter(|room| {
+                    updates
+                        .borrow()
+                        .incoming_calls
+                        .iter()
+                        .any(|call| &call.room_id == room)
+                })
+                .collect();
         }
     }));
 }
@@ -662,5 +689,125 @@ mod tests {
             .await
             .unwrap();
         });
+    }
+}
+
+/// A ring that ended without being answered, declined or dismissed here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MissedCall {
+    pub room: String,
+    pub room_name: String,
+    pub caller: String,
+    pub caller_name: String,
+    pub video: bool,
+    /// Unix milliseconds the ring started.
+    pub at: u64,
+}
+
+/// Missed calls kept for the popover, newest first.
+const MISSED_LIMIT: usize = 20;
+
+/// Rings in `previous` that are gone from `current`: missed unless their
+/// room is in the call now or the ring was declined or dismissed here.
+pub(super) fn missed_calls(
+    previous: &[twayblade_core::calls::IncomingCall],
+    current: &[twayblade_core::calls::IncomingCall],
+    in_call: Option<&str>,
+    handled: &std::collections::HashSet<String>,
+) -> Vec<MissedCall> {
+    use twayblade_core::calls::ringing::{CallIntent, NotifyType};
+    previous
+        .iter()
+        .filter(|call| call.notify_type == NotifyType::Ring)
+        .filter(|call| !current.iter().any(|now| now.event_id == call.event_id))
+        .filter(|call| in_call != Some(call.room_id.as_str()) && !handled.contains(&call.room_id))
+        .map(|call| MissedCall {
+            room: call.room_id.clone(),
+            room_name: call.room_name.clone(),
+            caller: call.caller_user.clone(),
+            caller_name: call.caller_name.clone(),
+            video: call.kind == CallIntent::Video,
+            at: call.since,
+        })
+        .collect()
+}
+
+pub(super) fn remember_missed(list: &mut Vec<MissedCall>, missed: Vec<MissedCall>) {
+    for call in missed {
+        list.retain(|known| !(known.room == call.room && known.at == call.at));
+        list.insert(0, call);
+    }
+    list.sort_by_key(|call| std::cmp::Reverse(call.at));
+    list.truncate(MISSED_LIMIT);
+}
+
+#[cfg(test)]
+mod missed_tests {
+    use super::{MissedCall, missed_calls, remember_missed};
+    use std::collections::HashSet;
+    use twayblade_core::calls::IncomingCall;
+    use twayblade_core::calls::ringing::{CallIntent, NotifyType};
+
+    fn ring(room: &str, event: &str, since: u64) -> IncomingCall {
+        IncomingCall {
+            room_id: room.into(),
+            room_name: format!("Room {room}"),
+            caller_user: "@alex:example.org".into(),
+            caller_device: None,
+            caller_name: "Alex".into(),
+            kind: CallIntent::Video,
+            notify_type: NotifyType::Ring,
+            event_id: event.into(),
+            since,
+            expires: since + 30_000,
+            verified: true,
+            ringing: true,
+        }
+    }
+
+    #[test]
+    fn only_unanswered_rings_are_missed() {
+        let previous = [
+            ring("!a", "$1", 10),
+            ring("!b", "$2", 20),
+            ring("!c", "$3", 30),
+            ring("!d", "$4", 40),
+            IncomingCall {
+                notify_type: NotifyType::Notification,
+                ..ring("!e", "$5", 50)
+            },
+        ];
+        // !a still rings, !b was answered, !c declined; !d timed out; !e only
+        // announced a group call.
+        let current = [ring("!a", "$1", 10)];
+        let handled: HashSet<String> = ["!c".to_owned()].into();
+        let missed = missed_calls(&previous, &current, Some("!b"), &handled);
+        assert_eq!(missed.len(), 1);
+        assert_eq!(
+            (missed[0].room.as_str(), missed[0].video, missed[0].at),
+            ("!d", true, 40)
+        );
+    }
+
+    #[test]
+    fn missed_list_is_newest_first_bounded_and_deduplicated() {
+        let call = |room: &str, at| MissedCall {
+            room: room.into(),
+            room_name: String::new(),
+            caller: String::new(),
+            caller_name: String::new(),
+            video: false,
+            at,
+        };
+        let mut list = Vec::new();
+        remember_missed(&mut list, vec![call("!a", 1), call("!b", 3)]);
+        remember_missed(&mut list, vec![call("!a", 1), call("!c", 2)]);
+        assert_eq!(
+            list.iter().map(|c| c.room.as_str()).collect::<Vec<_>>(),
+            ["!b", "!c", "!a"]
+        );
+        remember_missed(&mut list, (0..30).map(|at| call("!x", 100 + at)).collect());
+        assert_eq!(list.len(), super::MISSED_LIMIT);
+        assert_eq!(list[0].at, 129);
     }
 }

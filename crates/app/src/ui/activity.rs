@@ -1,6 +1,6 @@
-//! The notifications popover under the title-bar bell: invitations, rooms with
-//! mentions, then other unread conversations. Built from the room list the
-//! snapshot already carries; nothing here reaches the network.
+//! The notifications popover under the title-bar bell: invitations, missed
+//! calls, rooms with mentions, then other unread conversations, each room with
+//! its latest message (#99).
 use super::*;
 use crate::ui::chrome::ToolbarControl;
 
@@ -12,6 +12,7 @@ const REOPEN_GUARD: std::time::Duration = std::time::Duration::from_millis(250);
 
 pub(crate) struct Activity<'a> {
     pub invites: &'a [twayblade_core::space_actions::Invite],
+    pub missed: &'a [crate::backend::MissedCall],
     pub mentions: Vec<&'a crate::backend::Room>,
     pub unread: Vec<&'a crate::backend::Room>,
 }
@@ -20,6 +21,7 @@ impl Activity<'_> {
     /// What the bell's badge counts: things addressed to you.
     pub fn attention(&self) -> u64 {
         self.invites.len() as u64
+            + self.missed.len() as u64
             + self
                 .mentions
                 .iter()
@@ -27,13 +29,31 @@ impl Activity<'_> {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.invites.is_empty() && self.mentions.is_empty() && self.unread.is_empty()
+        self.invites.is_empty()
+            && self.missed.is_empty()
+            && self.mentions.is_empty()
+            && self.unread.is_empty()
+    }
+
+    /// Something Mark All as Read would clear.
+    pub fn has_unread(&self) -> bool {
+        !(self.missed.is_empty() && self.mentions.is_empty() && self.unread.is_empty())
+    }
+
+    /// The rooms listed, for previews and Mark All as Read.
+    pub fn room_ids(&self) -> Vec<String> {
+        self.mentions
+            .iter()
+            .chain(&self.unread)
+            .map(|room| room.id.clone())
+            .collect()
     }
 }
 
 pub(crate) fn activity<'a>(
     rooms: &'a [crate::backend::Room],
     invites: &'a [twayblade_core::space_actions::Invite],
+    missed: &'a [crate::backend::MissedCall],
 ) -> Activity<'a> {
     let listed = |room: &&crate::backend::Room| !room.is_space && !room.archived;
     let mut mentions: Vec<_> = rooms
@@ -51,8 +71,57 @@ pub(crate) fn activity<'a>(
     unread.truncate(UNREAD_LIMIT);
     Activity {
         invites,
+        missed,
         mentions,
         unread,
+    }
+}
+
+/// One line under a room: who wrote what, or only the room's count when
+/// notification previews are off.
+pub(crate) fn preview_line(
+    preview: &twayblade_core::activity::RoomPreview,
+    direct: bool,
+) -> String {
+    use twayblade_core::activity::PreviewBody;
+    let what = match &preview.body {
+        PreviewBody::Text(text) => return prefix(preview, direct, text),
+        PreviewBody::Image => "Image",
+        PreviewBody::Video => "Video",
+        PreviewBody::Audio => "Audio",
+        PreviewBody::File => "File",
+        PreviewBody::Location => "Location",
+        PreviewBody::Sticker => "Sticker",
+        PreviewBody::Poll => "Poll",
+        PreviewBody::Encrypted => "Encrypted message",
+        PreviewBody::Deleted => "Message deleted",
+    };
+    prefix(preview, direct, what)
+}
+
+/// "You: …" for your own message; the sender's name in a room; nothing in a
+/// direct chat, where the room name is already the sender.
+fn prefix(preview: &twayblade_core::activity::RoomPreview, direct: bool, text: &str) -> String {
+    if preview.own {
+        format!("You: {text}")
+    } else if direct {
+        text.to_owned()
+    } else {
+        format!("{}: {text}", preview.sender_name)
+    }
+}
+
+/// "Missed video call" or "Missed call", with the room unless it is the caller's DM.
+fn missed_label(call: &crate::backend::MissedCall) -> String {
+    let kind = if call.video {
+        "Missed video call"
+    } else {
+        "Missed call"
+    };
+    if call.room_name == call.caller_name || call.room_name.is_empty() {
+        kind.to_owned()
+    } else {
+        format!("{kind} · {}", call.room_name)
     }
 }
 
@@ -80,6 +149,8 @@ impl MatrixApp {
         }
         self.notifications_open = true;
         self.notifications_focus.focus(window, cx);
+        self.activity_previews_key.clear();
+        self.sync_activity_previews();
         cx.notify();
     }
 
@@ -94,9 +165,58 @@ impl MatrixApp {
         }
     }
 
+    /// While the popover is open: ask for previews of the rooms it lists
+    /// whenever that list or a room's latest activity changes.
+    pub(crate) fn sync_activity_previews(&mut self) {
+        if !self.notifications_open || self.preview {
+            return;
+        }
+        let list = activity(&self.snapshot.rooms, &self.snapshot.invites, &[]);
+        let key: Vec<(String, u64)> = list
+            .mentions
+            .iter()
+            .chain(&list.unread)
+            .map(|room| (room.id.clone(), room.recency))
+            .collect();
+        if key == self.activity_previews_key {
+            return;
+        }
+        let rooms = list.room_ids();
+        self.activity_previews_key = key;
+        if let Some(backend) = &self.backend {
+            backend.request_previews(rooms);
+        }
+    }
+
+    fn mark_all_read(&mut self, rooms: Vec<String>, window: &mut Window, cx: &mut Context<Self>) {
+        if self.preview {
+            self.snapshot.missed_calls.clear();
+            for room in &mut self.snapshot.rooms {
+                room.unread = 0;
+                room.mentions = 0;
+            }
+            cx.notify();
+            return;
+        }
+        self.job(
+            window,
+            cx,
+            move |backend| backend.mark_all_read(rooms),
+            |this, result, _, _| {
+                if let Err(error) = result {
+                    this.status = error.to_string();
+                }
+            },
+        );
+    }
+
     /// The bell with its badge, and the popover anchored under it when open.
     pub(crate) fn notifications_button(&self, cx: &mut Context<Self>) -> AnyElement {
-        let activity = activity(&self.snapshot.rooms, &self.snapshot.invites);
+        let activity = activity(
+            &self.snapshot.rooms,
+            &self.snapshot.invites,
+            &self.snapshot.missed_calls,
+        );
         let attention = activity.attention();
         let label = match attention {
             0 => "Notifications".to_owned(),
@@ -188,7 +308,9 @@ impl MatrixApp {
                             .text_center()
                             .text_size(px(12.))
                             .text_color(muted)
-                            .child("Invitations, mentions and unread conversations appear here."),
+                            .child(
+                                "Invitations, missed calls, mentions and unread conversations appear here.",
+                            ),
                     ),
             );
         }
@@ -196,6 +318,12 @@ impl MatrixApp {
             list = list.child(section("Invitations"));
             for invite in activity.invites {
                 list = list.child(self.invite_row(invite, cx));
+            }
+        }
+        if !activity.missed.is_empty() {
+            list = list.child(section("Missed calls"));
+            for call in activity.missed {
+                list = list.child(self.missed_call_row(call, cx));
             }
         }
         if !activity.mentions.is_empty() {
@@ -243,16 +371,37 @@ impl MatrixApp {
                             .child("Notifications"),
                     )
                     .child(
-                        Button::new("notifications-settings")
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::Settings)
-                            .accessibility_label("Notification Settings")
-                            .tooltip("Notification Settings")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.close_notifications(window, cx);
-                                this.open_settings(crate::ui::settings::Section::Notifications, cx)
-                            })),
+                        h_flex()
+                            .gap(px(2.))
+                            .when(activity.has_unread(), |header| {
+                                let rooms = activity.room_ids();
+                                header.child(
+                                    Button::new("notifications-mark-read")
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(IconName::CheckCheck)
+                                        .accessibility_label("Mark All as Read")
+                                        .tooltip("Mark All as Read")
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.mark_all_read(rooms.clone(), window, cx)
+                                        })),
+                                )
+                            })
+                            .child(
+                                Button::new("notifications-settings")
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::Settings)
+                                    .accessibility_label("Notification Settings")
+                                    .tooltip("Notification Settings")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.close_notifications(window, cx);
+                                        this.open_settings(
+                                            crate::ui::settings::Section::Notifications,
+                                            cx,
+                                        )
+                                    })),
+                            ),
                     ),
             )
             .child(list);
@@ -277,6 +426,17 @@ impl MatrixApp {
             (false, n) => format!("{n} unread messages"),
         };
         let id = room.id.clone();
+        let preview = self
+            .preferences
+            .notifications
+            .preview
+            .then(|| self.snapshot.activity_previews.get(&room.id))
+            .flatten()
+            .map(|preview| preview_line(preview, room.direct));
+        let label = match &preview {
+            Some(line) => format!("{}, {what}, {line}", room.name),
+            None => format!("{}, {what}", room.name),
+        };
         let palette_badge = if mention {
             (cx.theme().primary, cx.theme().primary_foreground)
         } else {
@@ -285,10 +445,10 @@ impl MatrixApp {
         Button::new(SharedString::from(format!("activity-room-{}", room.id)))
             .ghost()
             .w_full()
-            .h(px(40.))
+            .h(px(if preview.is_some() { 48. } else { 40. }))
             .px(px(10.))
             .rounded(px(0.))
-            .accessibility_label(format!("{}, {what}", room.name))
+            .accessibility_label(label)
             .child(
                 h_flex()
                     .w_full()
@@ -302,17 +462,28 @@ impl MatrixApp {
                         cx,
                     ))
                     .child(
-                        div()
+                        v_flex()
                             .flex_1()
                             .min_w_0()
-                            .truncate()
-                            .text_left()
-                            .font_weight(if mention {
-                                FontWeight::SEMIBOLD
-                            } else {
-                                FontWeight::NORMAL
-                            })
-                            .child(room.name.clone()),
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_left()
+                                    .font_weight(if mention {
+                                        FontWeight::SEMIBOLD
+                                    } else {
+                                        FontWeight::NORMAL
+                                    })
+                                    .child(room.name.clone()),
+                            )
+                            .children(preview.map(|line| {
+                                div()
+                                    .truncate()
+                                    .text_left()
+                                    .text_size(px(11.5))
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(line)
+                            })),
                     )
                     .child(
                         div()
@@ -336,6 +507,62 @@ impl MatrixApp {
                 this.select_room(id.clone(), window, cx);
             }))
             .into_any_element()
+    }
+
+    fn missed_call_row(
+        &self,
+        call: &crate::backend::MissedCall,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let room = call.room.clone();
+        let detail = missed_label(call);
+        let when = chrono::Local
+            .timestamp_millis_opt(call.at as i64)
+            .single()
+            .map(|time| time.format("%H:%M").to_string())
+            .unwrap_or_default();
+        Button::new(SharedString::from(format!(
+            "activity-missed-{}-{}",
+            call.room, call.at
+        )))
+        .ghost()
+        .w_full()
+        .h(px(48.))
+        .px(px(10.))
+        .rounded(px(0.))
+        .accessibility_label(format!("{}, {detail}, {when}", call.caller_name))
+        .child(
+            h_flex()
+                .w_full()
+                .gap(px(10.))
+                .child(self.avatar_image(None, &call.caller, &call.caller_name, 26., 13., cx))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .child(div().truncate().text_left().child(call.caller_name.clone()))
+                        .child(
+                            h_flex()
+                                .gap(px(4.))
+                                .text_size(px(11.5))
+                                .text_color(theme::palette(cx).error)
+                                .child(Icon::new(IconName::PhoneMissed).size(px(12.)))
+                                .child(div().truncate().child(detail)),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(11.))
+                        .text_color(cx.theme().muted_foreground)
+                        .child(when),
+                ),
+        )
+        .on_click(cx.listener(move |this, _, window, cx| {
+            this.close_notifications(window, cx);
+            this.select_room(room.clone(), window, cx);
+        }))
+        .into_any_element()
     }
 
     fn invite_row(
@@ -409,8 +636,60 @@ impl MatrixApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{activity, count_label};
-    use crate::backend::Room;
+    use super::{activity, count_label, missed_label, preview_line};
+    use crate::backend::{MissedCall, Room};
+    use twayblade_core::activity::{PreviewBody, RoomPreview};
+
+    #[test]
+    fn previews_name_the_sender_only_where_it_helps() {
+        let preview = |own, body| RoomPreview {
+            room: "!r".into(),
+            sender: "@sam:example.org".into(),
+            sender_name: "Sam".into(),
+            own,
+            body,
+            timestamp_ms: 0,
+        };
+        let text = || PreviewBody::Text("On my way".into());
+        assert_eq!(
+            preview_line(&preview(false, text()), false),
+            "Sam: On my way"
+        );
+        assert_eq!(preview_line(&preview(false, text()), true), "On my way");
+        assert_eq!(preview_line(&preview(true, text()), true), "You: On my way");
+        assert_eq!(
+            preview_line(&preview(false, PreviewBody::Image), false),
+            "Sam: Image"
+        );
+        assert_eq!(
+            preview_line(&preview(false, PreviewBody::Encrypted), true),
+            "Encrypted message"
+        );
+    }
+
+    #[test]
+    fn missed_calls_count_and_can_be_cleared() {
+        let call = MissedCall {
+            room: "!dm".into(),
+            room_name: "Alex".into(),
+            caller: "@alex:example.org".into(),
+            caller_name: "Alex".into(),
+            video: true,
+            at: 0,
+        };
+        assert_eq!(missed_label(&call), "Missed video call");
+        let group = MissedCall {
+            room_name: "Design".into(),
+            video: false,
+            ..call.clone()
+        };
+        assert_eq!(missed_label(&group), "Missed call · Design");
+        let missed = [call];
+        let list = activity(&[], &[], &missed);
+        assert_eq!(list.attention(), 1, "a missed call counts on the bell");
+        assert!(!list.is_empty() && list.has_unread());
+        assert!(list.room_ids().is_empty());
+    }
 
     fn room(id: &str, unread: u64, mentions: u64, recency: u64) -> Room {
         Room {
@@ -441,7 +720,7 @@ mod tests {
             archived,
             space,
         ];
-        let activity = activity(&rooms, &[]);
+        let activity = activity(&rooms, &[], &[]);
         let ids = |rooms: &[&Room]| rooms.iter().map(|r| r.id.clone()).collect::<Vec<_>>();
         assert_eq!(ids(&activity.mentions), ["new-mention", "old-mention"]);
         assert_eq!(ids(&activity.unread), ["new-unread", "old-unread"]);
@@ -456,9 +735,9 @@ mod tests {
     fn badge_counts_invites_and_caps_at_99() {
         let invites = vec![twayblade_core::space_actions::Invite::default(); 2];
         let rooms = vec![room("busy", 500, 120, 1)];
-        let busy = activity(&rooms, &invites);
+        let busy = activity(&rooms, &invites, &[]);
         assert_eq!(busy.attention(), 122);
         assert_eq!(count_label(busy.attention()), "99+");
-        assert!(activity(&[], &[]).is_empty());
+        assert!(activity(&[], &[], &[]).is_empty());
     }
 }

@@ -1,6 +1,7 @@
 //! Matrix integration. UI code must not own protocol state or credentials.
 #![recursion_limit = "256"]
 
+pub mod activity;
 pub mod auth;
 pub mod avatars;
 pub mod calls;

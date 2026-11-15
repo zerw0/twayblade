@@ -327,6 +327,8 @@ pub(super) struct MatrixApp {
     pub(super) add_account_focus: FocusHandle,
     /// The title-bar notifications popover.
     pub(crate) notifications_open: bool,
+    /// The rooms (and their recency) whose previews were last requested.
+    pub(crate) activity_previews_key: Vec<(String, u64)>,
     pub(crate) notifications_closed_at: Option<std::time::Instant>,
     pub(crate) notifications_focus: FocusHandle,
     /// The room list column; the space rail stays visible (⌃⌘S).
@@ -734,6 +736,7 @@ impl MatrixApp {
             adding_account: false,
             add_account_focus: cx.focus_handle(),
             notifications_open: false,
+            activity_previews_key: Vec::new(),
             notifications_closed_at: None,
             notifications_focus: cx.focus_handle(),
             sidebar_open: true,
@@ -1195,6 +1198,7 @@ impl MatrixApp {
         }
         self.sync_edit(window, cx);
         self.notification_config();
+        self.sync_activity_previews();
         if let Some((serial, target)) = self.snapshot.notification_click.clone()
             && serial != self.last_notification_click
         {
@@ -1533,6 +1537,16 @@ impl MatrixApp {
     }
 
     pub fn select_room(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        // Opening the room answers its missed calls.
+        if let Some(backend) = &self.backend
+            && self
+                .snapshot
+                .missed_calls
+                .iter()
+                .any(|call| call.room == id)
+        {
+            backend.clear_missed_calls(Some(&id));
+        }
         self.select_room_target(id, None, window, cx);
     }
     fn select_room_target(

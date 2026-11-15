@@ -3218,3 +3218,76 @@ fn a_notification_from_another_account_switches_and_then_opens_the_room(cx: &mut
     })
     .expect("cross-account notification");
 }
+
+#[gpui_kit::test]
+fn the_popover_lists_missed_calls_previews_and_marks_all_read(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    let target = cx.update(|cx| {
+        app.update(cx, |app, _| {
+            let room = app
+                .snapshot
+                .rooms
+                .iter_mut()
+                .find(|room| !room.is_space && room.id != app.snapshot.selected_room)
+                .expect("another room");
+            room.unread = 2;
+            let id = room.id.clone();
+            app.snapshot.missed_calls = vec![crate::backend::MissedCall {
+                room: id.clone(),
+                room_name: "Sample".into(),
+                caller: "@alex:example.org".into(),
+                caller_name: "Alex".into(),
+                video: false,
+                at: 1,
+            }];
+            app.snapshot.activity_previews.insert(
+                id.clone(),
+                twayblade_core::activity::RoomPreview {
+                    room: id.clone(),
+                    sender: "@alex:example.org".into(),
+                    sender_name: "Alex".into(),
+                    own: false,
+                    body: twayblade_core::activity::PreviewBody::Text("Sample text".into()),
+                    timestamp_ms: 1,
+                },
+            );
+            id
+        })
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("open-notifications", cx);
+        window.render_frame(cx);
+        assert!(
+            window
+                .find(gpui_kit::SharedString::from(format!(
+                    "activity-missed-{target}-1"
+                )))
+                .visible()
+        );
+        assert!(
+            window
+                .find(gpui_kit::SharedString::from(format!(
+                    "activity-room-{target}"
+                )))
+                .visible()
+        );
+        window.click("notifications-mark-read", cx);
+        window.render_frame(cx);
+        // With nothing left the popover says so and offers no Mark All.
+        assert!(
+            window
+                .try_find(gpui_kit::SharedString::from(format!(
+                    "activity-room-{target}"
+                )))
+                .is_none()
+        );
+        assert!(window.try_find("notifications-mark-read").is_none());
+    })
+    .expect("mark all read");
+    cx.update(|cx| {
+        let app = app.read(cx);
+        assert!(app.snapshot.missed_calls.is_empty());
+        assert!(app.snapshot.rooms.iter().all(|room| room.unread == 0));
+    });
+}

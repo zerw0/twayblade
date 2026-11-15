@@ -71,7 +71,7 @@ case "${1:-test}" in
             scripts/cargo-pruned test --locked -p twayblade-core --all-features oauth_keychain_lifecycle_across_processes -- --ignored --nocapture
         fi
         ;;
-    up|test|keychain|services|archive|security|media|threads|spaces|viewer|search|directory|notifications|notification-delivery|inactive-accounts|room-open)
+    up|test|keychain|services|archive|security|media|threads|spaces|viewer|search|directory|notifications|notification-delivery|inactive-accounts|activity|room-open)
         mkdir -p test-data/local/integration
         "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py generate
         if [[ "${1:-test}" == spaces ]]; then
@@ -93,6 +93,8 @@ case "${1:-test}" in
             elif [[ "${1:-test}" == search ]]; then
                 "${compose[@]}" exec -T synapse python /bootstrap.py register-security
                 scripts/cargo-pruned test --locked -p twayblade-core --all-features search_server_cached_encryption_pagination_and_event_context -- --ignored --nocapture
+            elif [[ "${1:-test}" == activity ]]; then
+                scripts/cargo-pruned test --locked -p twayblade-core --all-features activity_previews_and_mark_all_read -- --ignored --nocapture
             elif [[ "${1:-test}" == notification-delivery ]]; then
                 scripts/cargo-pruned test --locked -p twayblade-core --all-features encrypted_notification_delivery_and_private_preview -- --ignored --nocapture
             elif [[ "${1:-test}" == inactive-accounts ]]; then
@@ -129,5 +131,5 @@ case "${1:-test}" in
         ;;
     down) "${compose[@]}" down ;;
     status) "${compose[@]}" ps ;;
-    *) printf 'Usage: bash tests/integration/run.sh [call|up|test|keychain|services|presence|oauth|sso|recovery|security|media|threads|spaces|viewer|search|notifications|notification-delivery|inactive-accounts|room-open|down|status]\n' >&2; exit 1 ;;
+    *) printf 'Usage: bash tests/integration/run.sh [call|up|test|keychain|services|presence|oauth|sso|recovery|security|media|threads|spaces|viewer|search|notifications|notification-delivery|inactive-accounts|activity|room-open|down|status]\n' >&2; exit 1 ;;
 esac

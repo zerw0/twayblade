@@ -2851,6 +2851,112 @@ async fn inactive_account_counts_notifies_and_reopens_on_the_same_client() {
 
 #[tokio::test]
 #[ignore = "requires isolated Synapse fixture"]
+async fn activity_previews_and_mark_all_read() {
+    // The notifications popover's data (#99): latest-message previews for
+    // listed rooms, and marking them read up to their latest event.
+    use crate::activity::PreviewBody;
+    use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-data/local/integration");
+    let fixture: Fixture = checked(
+        serde_json::from_slice(&checked(
+            tokio::fs::read(root.join("fixture.json")).await,
+            "fixture",
+        )),
+        "parse fixture",
+    );
+    assert!(fixture.homeserver == "https://127.0.0.1:18448");
+    let cert = checked(
+        Certificate::from_pem(&checked(tokio::fs::read(root.join("ca.crt")).await, "CA")),
+        "parse CA",
+    );
+    let run = root.join(format!("activity-{}", Uuid::new_v4()));
+    let mut accounts = Vec::new();
+    for (name, password) in [("alice", &fixture.alice), ("bob", &fixture.bob)] {
+        let client = test_client(&run, name, &Uuid::new_v4().to_string(), &cert).await;
+        checked(
+            client.matrix_auth().login_username(name, password).await,
+            "isolated login",
+        );
+        accounts.push(Account::new(
+            client,
+            run.join(name),
+            secrets::SessionStore::new("twayblade.integration.unused"),
+            Arc::new(Mutex::new(())),
+        ));
+    }
+    let alice = accounts[0].clone();
+    let bob = accounts[1].clone();
+    let alice_sync = sync(&alice);
+    let bob_sync = sync(&bob);
+    let mut request = create_room::v3::Request::new();
+    request.name = Some("Activity room".into());
+    request.invite = vec![bob.client.user_id().expect("test user").to_owned()];
+    let room = checked(alice.client.create_room(request).await, "room");
+    checked(bob.client.join_room_by_id(room.room_id()).await, "join");
+    wait_for_room(&bob, room.room_id()).await;
+    wait_for_room(&alice, room.room_id()).await;
+    let body = format!("activity preview {}", Uuid::new_v4());
+    checked(
+        room.send(RoomMessageEventContent::text_plain(format!(
+            "{body}\nsecond line"
+        )))
+        .await,
+        "send",
+    );
+    let id = room.room_id().to_string();
+    let preview = checked(
+        tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                let previews = bob.room_previews(std::slice::from_ref(&id)).await;
+                if let Some(preview) = previews
+                    .into_iter()
+                    .find(|preview| preview.body == PreviewBody::Text(body.clone()))
+                {
+                    break preview;
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        })
+        .await,
+        "latest message preview",
+    );
+    assert!(preview.sender == alice.user_id() && !preview.own && preview.room == id);
+    let bob_room = bob.client.get_room(room.room_id()).expect("bob's room");
+    checked(
+        tokio::time::timeout(Duration::from_secs(60), async {
+            while bob_room.num_unread_messages() == 0 {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        })
+        .await,
+        "unread before marking",
+    );
+    checked(
+        bob.mark_rooms_read(std::slice::from_ref(&id)).await,
+        "mark read",
+    );
+    checked(
+        tokio::time::timeout(Duration::from_secs(60), async {
+            while bob_room.num_unread_messages() > 0 {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        })
+        .await,
+        "unread cleared",
+    );
+    assert!(
+        bob.mark_rooms_read(&["!missing:127.0.0.1".into()])
+            .await
+            .is_err(),
+        "an unknown room is reported"
+    );
+    alice_sync.abort();
+    bob_sync.abort();
+    eprintln!("PASS: latest-message preview and mark all read");
+}
+
+#[tokio::test]
+#[ignore = "requires isolated Synapse fixture"]
 async fn encrypted_message_editing_sources_navigation_and_threads() {
     use crate::conversation::{DeliveryState, EditError};
     use matrix_sdk::ruma::events::{

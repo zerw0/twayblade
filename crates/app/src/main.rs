@@ -204,6 +204,14 @@ fn main() {
                         view.snapshot.invites = vec![twayblade_core::space_actions::Invite { id: "sample-room".into(), name: "Planning".into(), ..Default::default() }];
                         for (room, mentions) in view.snapshot.rooms.iter_mut().zip([2u64, 0, 0, 1]) { room.mentions = mentions; room.unread = room.unread.max(mentions).max(1); }
                         view.notifications_open = true;
+                        // Sample data only: a missed call and latest-message previews.
+                        let now = chrono::Utc::now().timestamp_millis() as u64;
+                        view.snapshot.missed_calls = vec![backend::MissedCall { room: "alex".into(), room_name: "Alex".into(), caller: "@alex:example.org".into(), caller_name: "Alex".into(), video: true, at: now - 12 * 60_000 }];
+                        let samples = [("Alex", "Can you check the new mockups before standup?"), ("Sam", "Pushed the release notes draft"), ("Alex", ""), ("Robin", "Thanks, looks good")];
+                        for (room, (sender, text)) in view.snapshot.rooms.iter().zip(samples) {
+                            let body = if text.is_empty() { twayblade_core::activity::PreviewBody::Image } else { twayblade_core::activity::PreviewBody::Text(text.into()) };
+                            view.snapshot.activity_previews.insert(room.id.clone(), twayblade_core::activity::RoomPreview { room: room.id.clone(), sender: format!("@{}:example.org", sender.to_lowercase()), sender_name: sender.into(), own: false, body, timestamp_ms: now });
+                        }
                     }
                     if args.iter().any(|arg| arg == "--preview-signed-out") {
                         view.snapshot.session_state = twayblade_core::auth::SessionState::HardLoggedOut;

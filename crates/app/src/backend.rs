@@ -29,6 +29,7 @@ pub(super) use search::SearchState;
 mod background;
 mod notifications;
 mod presence;
+pub(crate) use calls::MissedCall;
 pub(super) use notifications::NotificationConfig;
 
 use twayblade_core::{DiscoveryError, auth::AuthError, profile::ProfileError, rooms::SyncStatus};
@@ -46,6 +47,11 @@ pub(super) struct Snapshot {
     pub(super) edit_saving: bool,
     pub(super) call: Option<twayblade_core::calls::CallState>,
     pub(super) incoming_calls: Vec<twayblade_core::calls::IncomingCall>,
+    /// Rings that ended unanswered this session, newest first (#99).
+    pub(super) missed_calls: Vec<calls::MissedCall>,
+    /// Latest-message previews for the rooms the notifications popover lists.
+    pub(super) activity_previews:
+        std::collections::HashMap<String, twayblade_core::activity::RoomPreview>,
     pub(super) room_calls: std::collections::HashMap<String, twayblade_core::calls::ActiveCall>,
     pub(super) preview_size: previews::PreviewSize,
     pub(super) revision: u64,
@@ -204,6 +210,9 @@ struct State {
     leave_request: u64,
     leave_plan: Option<(String, Arc<twayblade_core::space_actions::LeavePlan>)>,
     typing_intent: Option<watch::Sender<Option<(String, bool)>>>,
+    /// Rooms whose ring was declined or dismissed here, until it ends.
+    handled_rings: std::collections::HashSet<String>,
+    activity_task: Option<JoinHandle<()>>,
 }
 
 impl State {
@@ -232,6 +241,10 @@ impl State {
         self.thread_conversation = None;
         self.conversation = None;
         self.typing_intent = None;
+        self.handled_rings.clear();
+        if let Some(task) = self.activity_task.take() {
+            task.abort();
+        }
         self.epoch = self.epoch.wrapping_add(1);
         self.selection = self.selection.wrapping_add(1);
     }
@@ -929,6 +942,75 @@ impl Backend {
                 .map_err(auth_failure)?,
         };
         self.connect(account)
+    }
+
+    /// Loads latest-message previews for the rooms the notifications popover
+    /// lists; a newer request replaces an unfinished one.
+    pub(super) fn request_previews(&self, rooms: Vec<String>) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        let Some(account) = state.account.clone() else {
+            return;
+        };
+        let epoch = state.epoch;
+        if let Some(task) = state.activity_task.take() {
+            task.abort();
+        }
+        let shared = self.state.clone();
+        let updates = self.updates.clone();
+        state.activity_task = Some(self.runtime.spawn(async move {
+            let previews = account.room_previews(&rooms).await;
+            let Ok(state) = shared.lock() else {
+                return;
+            };
+            if state.epoch != epoch {
+                return;
+            }
+            let previews: std::collections::HashMap<_, _> = previews
+                .into_iter()
+                .map(|preview| (preview.room.clone(), preview))
+                .collect();
+            if updates.borrow().activity_previews != previews {
+                publish(&updates, |view| view.activity_previews = previews);
+            }
+        }));
+    }
+
+    /// Marks the listed rooms read and clears the missed calls (the
+    /// popover's Mark All as Read).
+    pub(super) fn mark_all_read(&self, rooms: Vec<String>) -> Result<(), ServiceError> {
+        let account = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?
+            .account
+            .clone()
+            .ok_or_else(|| failure("No saved session."))?;
+        let instance = account.instance_id();
+        let result = self.runtime.block_on(account.mark_rooms_read(&rooms));
+        publish(&self.updates, |view| {
+            if view.account_instance == instance {
+                view.missed_calls.clear();
+            }
+        });
+        result.map_err(|_| failure("Some conversations could not be marked as read. Try again."))
+    }
+
+    /// Forgets the missed calls of `room` (it was opened), or all of them.
+    pub(super) fn clear_missed_calls(&self, room: Option<&str>) {
+        let present = self
+            .updates
+            .borrow()
+            .missed_calls
+            .iter()
+            .any(|call| room.is_none_or(|room| call.room == room));
+        if present {
+            publish(&self.updates, |view| {
+                view.missed_calls
+                    .retain(|call| room.is_some_and(|room| call.room != room));
+            });
+        }
     }
 
     pub(super) fn security_action(
