@@ -416,7 +416,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires isolated MAS + Synapse and unlocked macOS Keychain"]
     async fn oauth_cancel_and_wrong_state_discard_checkpoint() {
-        use tokio::io::AsyncWriteExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
         for wrong_state in [false, true] {
             let scope = Uuid::new_v4();
             let pending =
@@ -428,6 +428,9 @@ mod tests {
             let (cancel, receiver) = watch::channel(false);
             let waiting = tokio::spawn(pending.finish(receiver));
             if wrong_state {
+                // A callback with the wrong state is refused with an error
+                // page, and sign-in keeps waiting: a stray request must not
+                // abort it.
                 let address = format!("127.0.0.1:{}", redirect.port().expect("callback port"));
                 let mut socket = tokio::net::TcpStream::connect(&address)
                     .await
@@ -441,17 +444,27 @@ mod tests {
                     )
                     .await
                     .expect("wrong-state callback");
-            } else {
-                cancel.send_replace(true);
+                let mut response = Vec::new();
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    socket.read_to_end(&mut response),
+                )
+                .await
+                .expect("callback answered")
+                .expect("callback response");
+                assert!(
+                    response.starts_with(b"HTTP/1.1 400 "),
+                    "a wrong state is rejected"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                assert!(!waiting.is_finished(), "sign-in keeps waiting");
             }
+            cancel.send_replace(true);
             let error = waiting
                 .await
                 .expect("callback task")
                 .expect_err("invalid authorization accepted");
-            assert!(matches!(
-                (wrong_state, error),
-                (false, AuthError::Cancelled) | (true, AuthError::Callback)
-            ));
+            assert!(matches!(error, AuthError::Cancelled));
             assert!(
                 context(scope)
                     .await
