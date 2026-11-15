@@ -8,4 +8,3 @@ Icon=com.twayblade.desktop
 Terminal=false
 Categories=Network;InstantMessaging;Chat;
 Keywords=matrix;chat;messaging;calls;
-StartupWMClass=twayblade

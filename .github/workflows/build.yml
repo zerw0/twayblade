@@ -47,6 +47,7 @@ jobs:
           libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl1-mesa-dev
           libfontconfig1-dev libfreetype6-dev libssl-dev libxcb1-dev libxkbfile-dev
           libxkbcommon-x11-dev libvulkan-dev libglib2.0-dev libpulse-dev
+          desktop-file-utils appstream
       # libwebrtc's bundled libc++ needs clang 21+; Ubuntu 24.04 ships 18.
       - name: Install clang 21
         if: runner.os == 'Linux'
@@ -81,10 +82,37 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           cargo build --locked --release -p twayblade
+          strip target/release/twayblade
           mkdir -p dist/twayblade
-          cp target/release/twayblade README.md dist/twayblade/
+          # The tarball also feeds the AUR package (packaging/aur/PKGBUILD).
+          cp target/release/twayblade README.md LICENSE \
+            packaging/linux/com.twayblade.desktop.desktop \
+            packaging/linux/com.twayblade.desktop.metainfo.xml \
+            packaging/icons/com.twayblade.desktop.svg \
+            packaging/icons/com.twayblade.desktop.png dist/twayblade/
           cp crates/media/licenses/libwebrtc-a545de4.md dist/twayblade/libwebrtc-LICENSE.md
           tar -C dist -czf "dist/twayblade-${{ matrix.name }}.tar.gz" twayblade
+          rm -rf dist/twayblade
+
+      # deb, rpm and AppImage from the same binary (#53). Unsigned.
+      - name: Build Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          desktop-file-validate packaging/linux/com.twayblade.desktop.desktop
+          appstreamcli validate --no-net --explain packaging/linux/com.twayblade.desktop.metainfo.xml
+          cargo install --locked cargo-deb@3.8.0 cargo-generate-rpm@0.21.1
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(cargo metadata --no-deps --format-version 1 \
+              | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "twayblade"))')+git${GITHUB_SHA::7}"
+          fi
+          # Package managers order "0.1.0-rc.1" after "0.1.0"; "~" sorts before.
+          pkgversion="${version//-/\~}"
+          cargo deb -p twayblade --no-build --deb-version "$pkgversion" -o dist/
+          cargo generate-rpm -p crates/app -s "version = \"$pkgversion\"" -o dist/
+          bash packaging/linux/build-appimage.sh target/release/twayblade "$version" dist
+          ls -l dist
 
       - name: Build Windows binary
         if: runner.os == 'Windows'
@@ -103,6 +131,9 @@ jobs:
             dist/*.zip
             dist/*.dmg
             dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+            dist/*.AppImage
           if-no-files-found: error
 
   release:

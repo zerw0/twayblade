@@ -498,6 +498,7 @@ impl MatrixApp {
         }
         let result = gpui_kit::open_window(
             WindowOptions {
+                app_id: Some(crate::APP_ID.into()),
                 window_bounds: Some(WindowBounds::centered(size(px(880.), px(700.)), cx)),
                 window_min_size: Some(size(px(760.), px(540.))),
                 titlebar: Some(TitlebarOptions {

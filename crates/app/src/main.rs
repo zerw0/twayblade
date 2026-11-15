@@ -19,6 +19,9 @@ use app::{
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
 
+/// The reverse-DNS ID shared by the desktop entry, AppStream data and icons.
+pub(crate) const APP_ID: &str = "com.twayblade.desktop";
+
 fn main() {
     if twayblade_platform::diagnostics::init().is_err() {
         eprintln!("Diagnostics could not start; logging is disabled.");
@@ -115,6 +118,8 @@ fn main() {
             })
             .detach();
             let options = WindowOptions {
+                // Linux desktops match the window to its desktop entry and icon by this ID.
+                app_id: Some(APP_ID.into()),
                 window_bounds: Some(WindowBounds::centered(size(px(1120.), px(760.)), cx)),
                 window_min_size: Some(size(px(820.), px(540.))),
                 // macOS: unified toolbar. The sidebar runs under the traffic lights and

@@ -8,6 +8,9 @@
   <description>
     <p>Twayblade is a native Matrix client for desktop. It supports end-to-end encrypted rooms, spaces, threads and MatrixRTC voice and video calls.</p>
   </description>
+  <developer id="io.github.zerw0">
+    <name>zerw0</name>
+  </developer>
   <launchable type="desktop-id">com.twayblade.desktop.desktop</launchable>
   <url type="homepage">https://github.com/zerw0/twayblade</url>
   <url type="bugtracker">https://github.com/zerw0/twayblade/issues</url>

@@ -3,10 +3,24 @@
 Unsigned, unpublished inputs for distribution packages (#52–#56). Nothing here
 signs, uploads or publishes.
 
+- `icons/com.twayblade.desktop.svg`: the app icon (source). `icons/render.sh`
+  regenerates the 512 px PNG and the Windows `twayblade.ico` from it.
 - `linux/com.twayblade.desktop.desktop` and `linux/com.twayblade.desktop.metainfo.xml`:
-  desktop entry and AppStream data for the deb, rpm, AUR and AppImage packages.
-  The icon (`com.twayblade.desktop`) is not drawn yet, and the `matrix:` URI
-  handler is left out until the app accepts a URI on launch.
+  desktop entry and AppStream data, validated in CI. The window's Wayland
+  `app_id` is the same ID, so docks match it to the entry and icon. The
+  `matrix:` URI handler is left out until the app accepts a URI on launch.
+- Linux packages (#53), built by the Linux job in `build.yml` from the same
+  stripped release binary, unsigned:
+  - `.deb` with `cargo deb` and `.rpm` with `cargo generate-rpm`, configured
+    in `crates/app/Cargo.toml`. Library dependencies are detected from the
+    binary; a Secret Service provider and `xdg-desktop-portal` are recommended.
+  - AppImage with `linux/build-appimage.sh` (linuxdeploy pinned by tag and
+    SHA-256).
+  - `aur/PKGBUILD`: template for `twayblade-bin` from the release tarball,
+    which now carries the desktop entry, AppStream data and icons. Pushing to
+    the AUR needs explicit authorization.
+  - Versions: a `v*` tag's version, otherwise `<Cargo version>+git<sha>`;
+    `-` becomes `~` so pre-releases sort before the final release.
 - The Nix package (`nix/package.nix`) writes its own desktop entry; align it
   with these files when the first native package is built.
 - The macOS bundle comes from `macos/Info.plist` and `macos/build.sh`;
@@ -23,7 +37,7 @@ signs, uploads or publishes.
   person reviews and rewords the notes, then publishes; stable is a separate
   promotion. Pushing a tag needs explicit authorization.
 
-Still open: deb/rpm/AppImage build jobs, MSI/MSIX and winget, the tap
+Still open: MSI/MSIX and winget, the tap
 repository, signing and notarisation (needs credentials and explicit
 authorization), promotion from pre-release to stable, and the in-app updater
 download path.

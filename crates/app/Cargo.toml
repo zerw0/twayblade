@@ -1,6 +1,8 @@
 [package]
 name = "twayblade"
 version.workspace = true
+description = "Native Matrix client with encrypted messages and calls"
+homepage = "https://github.com/zerw0/twayblade"
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
@@ -32,3 +34,46 @@ matrix-sdk.workspace = true
 
 [lints]
 workspace = true
+
+# Linux packages (#53), built in CI with `cargo deb` and `cargo generate-rpm`
+# after a release build. Shared libraries are detected from the binary.
+[package.metadata.deb]
+name = "twayblade"
+maintainer = "hdjenkov <me@zerw.xyz>"
+copyright = "Twayblade contributors"
+license-file = ["../../LICENSE", "0"]
+section = "net"
+priority = "optional"
+extended-description = """\
+A native Matrix client with end-to-end encrypted messages, spaces, threads \
+and MatrixRTC voice and video calls."""
+depends = "$auto"
+# A Secret Service provider keeps the session; the portal enables screen sharing on Wayland.
+recommends = "gnome-keyring | kwalletmanager | keepassxc, xdg-desktop-portal"
+assets = [
+  ["target/release/twayblade", "usr/bin/", "755"],
+  ["../../packaging/linux/com.twayblade.desktop.desktop", "usr/share/applications/", "644"],
+  ["../../packaging/linux/com.twayblade.desktop.metainfo.xml", "usr/share/metainfo/", "644"],
+  ["../../packaging/icons/com.twayblade.desktop.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+  ["../../packaging/icons/com.twayblade.desktop.png", "usr/share/icons/hicolor/512x512/apps/", "644"],
+  ["../../crates/media/licenses/libwebrtc-a545de4.md", "usr/share/doc/twayblade/libwebrtc-LICENSE.md", "644"],
+]
+
+[package.metadata.generate-rpm]
+name = "twayblade"
+summary = "Native Matrix client with encrypted messages and calls"
+license = "MIT"
+url = "https://github.com/zerw0/twayblade"
+assets = [
+  { source = "target/release/twayblade", dest = "/usr/bin/twayblade", mode = "755" },
+  { source = "../../packaging/linux/com.twayblade.desktop.desktop", dest = "/usr/share/applications/com.twayblade.desktop.desktop", mode = "644" },
+  { source = "../../packaging/linux/com.twayblade.desktop.metainfo.xml", dest = "/usr/share/metainfo/com.twayblade.desktop.metainfo.xml", mode = "644" },
+  { source = "../../packaging/icons/com.twayblade.desktop.svg", dest = "/usr/share/icons/hicolor/scalable/apps/com.twayblade.desktop.svg", mode = "644" },
+  { source = "../../packaging/icons/com.twayblade.desktop.png", dest = "/usr/share/icons/hicolor/512x512/apps/com.twayblade.desktop.png", mode = "644" },
+  { source = "../../LICENSE", dest = "/usr/share/licenses/twayblade/LICENSE", mode = "644", doc = true },
+  { source = "../../crates/media/licenses/libwebrtc-a545de4.md", dest = "/usr/share/licenses/twayblade/libwebrtc-LICENSE.md", mode = "644", doc = true },
+]
+auto-req = "auto"
+
+[package.metadata.generate-rpm.recommends]
+xdg-desktop-portal = "*"
