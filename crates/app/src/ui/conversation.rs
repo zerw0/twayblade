@@ -341,6 +341,9 @@ impl MatrixApp {
                             .pb(px(2.))
                             .child(
                                 Textarea::new(&self.composer)
+                                    .context_menu(crate::ui::keyboard::composer_context_menu(
+                                        self.composer.clone(),
+                                    ))
                                     .accessibility_id("composer")
                                     .appearance(false)
                                     .w_full()
@@ -360,7 +363,6 @@ impl MatrixApp {
                             .h(px(34.))
                             .px(px(6.))
                             .gap(px(2.))
-                            .child(self.format_buttons(editable || self.preview, cx))
                             .child(div().flex_1())
                             .child(
                                 Button::new("attach-file")

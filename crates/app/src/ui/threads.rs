@@ -570,6 +570,11 @@ impl MatrixApp {
                                     .py(px(1.))
                                     .child(
                                         Textarea::new(&t.composer)
+                                            .context_menu(
+                                                crate::ui::keyboard::composer_context_menu(
+                                                    t.composer.clone(),
+                                                ),
+                                            )
                                             .accessibility_id("thread-composer")
                                             .aria_label("Reply in thread")
                                             .appearance(false)

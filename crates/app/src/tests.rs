@@ -2258,25 +2258,6 @@ fn formatting_adapter_uses_byte_selection_and_preserves_undo(cx: &mut TestAppCon
 
 /// ⌘B / ⌘I go through the real bindings to whichever composer has focus.
 #[gpui_kit::test]
-fn formatting_toolbar_applies_markdown_to_the_composer(cx: &mut TestAppContext) {
-    let (window, _app) = preview_window(cx);
-    cx.update_window(window, |_, window, cx| {
-        window.render_frame(cx);
-        window.within("composer-panel").click("input-state", cx);
-        window.input("hi", cx);
-        window.click("format-bold", cx);
-        assert_eq!(
-            window
-                .within("composer-panel")
-                .find_by_label("Message")
-                .value(),
-            Some("hi****")
-        );
-    })
-    .expect("bold from the toolbar");
-}
-
-#[gpui_kit::test]
 fn formatting_shortcuts_reach_main_and_thread_composers(cx: &mut TestAppContext) {
     use gpui_kit::test::TestEventExt;
     let (window, app) = preview_window(cx);

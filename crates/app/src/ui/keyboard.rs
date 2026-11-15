@@ -3,8 +3,34 @@ use super::*;
 use crate::composer_format::{self, Format};
 use crate::shortcuts::{
     FormatBold, FormatCode, FormatItalic, FormatLink, FormatQuote, HistoryNext, HistoryPrevious,
-    ShortcutAction, hint,
 };
+use gpui_kit::component::native_menu::NativeMenu;
+
+/// The composer's right-click menu: the usual edit items, then a Format submenu.
+/// Items dispatch the same actions as the shortcuts, so the shortcuts show beside
+/// them and everything goes through one path. The text field's own menu is
+/// replaced by this one, so Cut, Copy, Paste and Select All are rebuilt here.
+pub(crate) fn composer_context_menu(
+    composer: Entity<gpui_kit::component::input::TextareaState>,
+) -> impl Fn(NativeMenu, &mut Window, &mut App) -> NativeMenu + 'static {
+    use gpui_kit::component::input::{Copy, Cut, Paste, SelectAll};
+    move |menu, _, cx| {
+        let selected = !composer.read(cx).selected_range().is_empty();
+        let format = NativeMenu::new()
+            .menu("Bold", Box::new(FormatBold))
+            .menu("Italic", Box::new(FormatItalic))
+            .menu("Code", Box::new(FormatCode))
+            .menu("Link", Box::new(FormatLink))
+            .menu("Quote", Box::new(FormatQuote));
+        menu.menu_with_disabled("Cut", !selected, Box::new(Cut))
+            .menu_with_disabled("Copy", !selected, Box::new(Copy))
+            .menu("Paste", Box::new(Paste))
+            .separator()
+            .menu("Select All", Box::new(SelectAll))
+            .separator()
+            .submenu("Format", format)
+    }
+}
 
 impl MatrixApp {
     /// Gives a composer panel the `Composer` key context and its actions.
@@ -37,67 +63,6 @@ impl MatrixApp {
             .on_action(cx.listener(move |this, _: &HistoryNext, window, cx| {
                 this.composer_history(false, in_thread, window, cx)
             }))
-    }
-
-    /// Quiet formatting buttons for the left of the composer's toolbar row. They
-    /// do what the shortcuts do (Markdown around the selection) and say so in
-    /// their tooltips; focus returns to the field so typing can continue.
-    pub(crate) fn format_buttons(&self, enabled: bool, cx: &mut Context<Self>) -> AnyElement {
-        let items = [
-            (
-                Format::Bold,
-                "format-bold",
-                IconName::Bold,
-                "Bold",
-                ShortcutAction::FormatBold,
-            ),
-            (
-                Format::Italic,
-                "format-italic",
-                IconName::Italic,
-                "Italic",
-                ShortcutAction::FormatItalic,
-            ),
-            (
-                Format::Code,
-                "format-code",
-                IconName::Code,
-                "Code",
-                ShortcutAction::FormatCode,
-            ),
-            (
-                Format::Link,
-                "format-link",
-                IconName::Link,
-                "Link",
-                ShortcutAction::FormatLink,
-            ),
-            (
-                Format::Quote,
-                "format-quote",
-                IconName::Quote,
-                "Quote",
-                ShortcutAction::FormatQuote,
-            ),
-        ];
-        h_flex()
-            .id("format-bar")
-            .role(Role::Toolbar)
-            .aria_label("Formatting")
-            .gap(px(2.))
-            .children(items.map(|(format, id, icon, label, action)| {
-                Button::new(id)
-                    .ghost()
-                    .size(px(26.))
-                    .icon(Icon::new(icon).size(px(14.)))
-                    .accessibility_label(label)
-                    .tooltip(hint(label, action))
-                    .disabled(!enabled)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.format_composer(format, false, window, cx)
-                    }))
-            }))
-            .into_any_element()
     }
 
     fn format_composer(
