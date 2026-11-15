@@ -38,11 +38,13 @@ signs, uploads or publishes.
 - The macOS bundle comes from `macos/Info.plist` and `macos/build.sh`;
   `macos/make-dmg.sh` packs it into a compressed disk image with an
   Applications shortcut (`dist/Twayblade-<version>-<arch>.dmg`).
-- `homebrew/twayblade.rb`: cask template for our own tap. `VERSION` and
-  `SHA256` come from a release's DMG and `SHA256SUMS`. It assumes the release
-  bundle identifier `com.twayblade.desktop` (development builds use
-  `com.twayblade.desktop.development`) and can only ship once the DMG is
-  Developer ID signed and notarised.
+- `homebrew/twayblade.rb`: cask for our own tap (#52). The app is ad hoc
+  signed, so it stays out of homebrew/cask, which requires notarisation. Its
+  caveat explains Open Anyway on first launch, and it does not strip
+  quarantine. `scripts/homebrew-cask.py --version X --sums SHA256SUMS` fills
+  the version and the DMG's SHA-256 (tests: `python3
+  scripts/test_homebrew_cask.py`). Creating and pushing the tap repository
+  (`zerw0/homebrew-twayblade`) needs explicit authorization.
 - Release flow: pushing a `v*` tag builds every platform and creates a **draft
   pre-release** with the zips, tarball, DMG, `SHA256SUMS` and notes drafted by
   `scripts/release-notes.py` from the PRs merged since the previous tag. A

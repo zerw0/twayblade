@@ -94,6 +94,11 @@ jobs:
       - name: Test
         if: env.CODE == 'true'
         run: cargo test --locked --workspace --all-features
+      - name: Release script tests
+        if: env.CODE == 'true' && runner.os == 'Linux'
+        run: |
+          python3 scripts/test_release_notes.py
+          python3 scripts/test_homebrew_cask.py
       - name: Build native desktop
         if: env.CODE == 'true'
         run: cargo build --locked -p twayblade
