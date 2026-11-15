@@ -26,6 +26,7 @@ use directory::{DirectoryState, PreviewState};
 pub(super) use media::MediaState;
 mod search;
 pub(super) use search::SearchState;
+mod background;
 mod notifications;
 mod presence;
 pub(super) use notifications::NotificationConfig;
@@ -98,17 +99,30 @@ pub(super) struct AccountEntry {
     pub(super) user_id: String,
     pub(super) homeserver: String,
     pub(super) active: bool,
+    /// The open client's `instance_id` once it has synced; notification
+    /// clicks name accounts by it. 0 until known.
+    pub(super) instance: u128,
+    /// Unread messages outside muted rooms, and mentions (#97).
+    pub(super) unread: u64,
+    pub(super) mentions: u64,
 }
 
-fn account_entries(active: Option<&str>) -> Vec<AccountEntry> {
+/// The saved accounts, keeping the counts already known for each.
+fn account_entries(active: Option<&str>, known: &[AccountEntry]) -> Vec<AccountEntry> {
     auth::saved_accounts()
         .unwrap_or_default()
         .into_iter()
-        .map(|saved| AccountEntry {
-            active: active == Some(saved.id.as_str()),
-            id: saved.id,
-            user_id: saved.user_id,
-            homeserver: saved.homeserver,
+        .map(|saved| {
+            let previous = known.iter().find(|entry| entry.id == saved.id);
+            AccountEntry {
+                active: active == Some(saved.id.as_str()),
+                instance: previous.map_or(0, |entry| entry.instance),
+                unread: previous.map_or(0, |entry| entry.unread),
+                mentions: previous.map_or(0, |entry| entry.mentions),
+                id: saved.id,
+                user_id: saved.user_id,
+                homeserver: saved.homeserver,
+            }
         })
         .collect()
 }
@@ -245,7 +259,13 @@ impl BrowserLogin {
 impl Snapshot {
     /// Account lifecycle resets retain only global application state.
     fn clear_account(&mut self, preview_size: previews::PreviewSize) {
+        // The other saved accounts keep their counts across a switch.
+        let mut accounts = std::mem::take(&mut self.accounts);
+        for account in &mut accounts {
+            account.active = false;
+        }
         *self = Self {
+            accounts,
             updater: self.updater.clone(),
             update_download: self.update_download.clone(),
             revision: self.revision,
@@ -269,6 +289,8 @@ pub(super) struct Backend {
     lifecycle: Mutex<()>,
     oauth: Mutex<Option<BrowserLogin>>,
     update_download: Mutex<Option<JoinHandle<()>>>,
+    /// Saved accounts other than the open one, syncing in the background.
+    inactive: background::Inactive,
 }
 
 pub(super) fn render_viewer_image(
@@ -557,6 +579,7 @@ impl Backend {
             lifecycle: Mutex::new(()),
             oauth: Mutex::new(None),
             update_download: Mutex::new(None),
+            inactive: Default::default(),
         }))
     }
 
@@ -856,19 +879,27 @@ impl Backend {
         }
         // Stop the open account first so its sync, notifications and calls end
         // before the other store is opened.
-        {
+        let previous = {
             let mut state = self
                 .state
                 .lock()
                 .map_err(|_| failure("Session is unavailable."))?;
             state.stop();
-            state.account = None;
-        }
+            state.account.take()
+        };
         twayblade_platform::notifications::clear_launch_activation();
-        let account = self
-            .runtime
-            .block_on(auth::restore_account(&id))
-            .map_err(auth_failure);
+        // The background client becomes the open one; the previous one keeps
+        // syncing in its place.
+        let account = match self.take_inactive(&id) {
+            Some(account) => Ok(account),
+            None => self
+                .runtime
+                .block_on(auth::restore_account(&id))
+                .map_err(auth_failure),
+        };
+        if let Some(previous) = previous {
+            self.demote(previous);
+        }
         match account {
             Ok(account) => self.connect(account),
             Err(error) => {
@@ -887,12 +918,16 @@ impl Backend {
             .into_iter()
             .next()
         else {
+            publish(&self.updates, |snapshot| snapshot.accounts.clear());
             return Ok(());
         };
-        let account = self
-            .runtime
-            .block_on(auth::restore_account(&next.id))
-            .map_err(auth_failure)?;
+        let account = match self.take_inactive(&next.id) {
+            Some(account) => account,
+            None => self
+                .runtime
+                .block_on(auth::restore_account(&next.id))
+                .map_err(auth_failure)?,
+        };
         self.connect(account)
     }
 
@@ -1849,7 +1884,14 @@ impl Backend {
                 .map_err(|_| failure("Notification settings could not be saved. Try again."))
         })
     }
+    /// Opens `account` and then the other saved accounts in the background.
     fn connect(&self, account: Account) -> Result<(), ServiceError> {
+        let result = self.connect_open(account);
+        self.sync_inactive();
+        result
+    }
+
+    fn connect_open(&self, account: Account) -> Result<(), ServiceError> {
         let _runtime = self.runtime.enter();
         let security = twayblade_core::security::Security::new(&account);
         let mut security_updates = security.subscribe();
@@ -1865,7 +1907,7 @@ impl Backend {
             snapshot.clear_account(state.previews.size);
             snapshot.user_id = account.user_id();
             snapshot.account_instance = account.instance_id();
-            snapshot.accounts = account_entries(Some(&account.id()));
+            snapshot.accounts = account_entries(Some(&account.id()), &snapshot.accounts);
             snapshot.sync_status = "Connecting…".into();
         });
         calls::observe(self, &mut state, account.clone());
@@ -1974,7 +2016,11 @@ impl Backend {
                         last = Some((snapshot.rooms.len(), code));
                         tracing::debug!(name: "rooms_snapshot", rooms = snapshot.rooms.len(), status = code);
                     }
+                    let counts = background::totals(&snapshot.rooms);
+                    let open = rooms_account.id();
+                    let instance = rooms_account.instance_id();
                     publish(&updates, |view| {
+                        background::set_counts(&mut view.accounts, &open, instance, counts);
                         view.sync_status = text.into();
                         view.offline = offline;
                         view.unread_total = snapshot
@@ -2042,6 +2088,12 @@ impl Drop for Backend {
         // The fields drop the runtime before anything else, so release the
         // account (and its SDK stores) now, while the runtime is still up.
         release_in_runtime(&self.runtime, state);
+        let inactive = self
+            .inactive
+            .try_lock()
+            .map(|mut accounts| std::mem::take(&mut *accounts))
+            .unwrap_or_default();
+        release_in_runtime(&self.runtime, inactive);
     }
 }
 

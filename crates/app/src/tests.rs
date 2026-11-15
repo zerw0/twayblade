@@ -2708,12 +2708,14 @@ fn two_accounts(app: &mut MatrixApp) {
             user_id: me,
             homeserver: "https://matrix.example.org/".into(),
             active: true,
+            ..Default::default()
         },
         crate::backend::AccountEntry {
             id: "two".into(),
             user_id: "@sam:example.com".into(),
             homeserver: "https://example.com/".into(),
             active: false,
+            ..Default::default()
         },
     ];
 }
@@ -3130,4 +3132,89 @@ fn opening_the_archive_scrolls_a_long_sidebar_to_it(cx: &mut TestAppContext) {
         );
     })
     .expect("archive scroll");
+}
+
+#[gpui_kit::test]
+fn a_notification_from_another_account_switches_and_then_opens_the_room(cx: &mut TestAppContext) {
+    use twayblade_platform::notifications::Activation;
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let (room, open) = app.update(cx, |app, _| {
+            let open = app.snapshot.account_instance;
+            app.snapshot.accounts = vec![
+                crate::backend::AccountEntry {
+                    id: "open".into(),
+                    active: true,
+                    instance: open,
+                    ..Default::default()
+                },
+                crate::backend::AccountEntry {
+                    id: "other".into(),
+                    instance: open.wrapping_add(1),
+                    unread: 2,
+                    ..Default::default()
+                },
+            ];
+            let room = app
+                .snapshot
+                .rooms
+                .iter()
+                .find(|room| {
+                    !room.is_space && Some(&room.id) != app.navigation.selected_room.as_ref()
+                })
+                .expect("another room")
+                .id
+                .clone();
+            (room, open)
+        });
+        let target = Activation {
+            account: open.wrapping_add(1),
+            room: room.clone(),
+            thread: None,
+        };
+        app.update(cx, |app, cx| {
+            app.activate_notification(target.clone(), window, cx)
+        });
+        assert_eq!(
+            app.read(cx)
+                .pending_activation
+                .as_ref()
+                .map(|t| t.room.clone()),
+            Some(room.clone()),
+            "the click waits for the switch"
+        );
+        assert_ne!(app.read(cx).navigation.selected_room.as_ref(), Some(&room));
+        // The switch lands: this window now shows the other account.
+        app.update(cx, |app, cx| {
+            app.busy = false;
+            app.snapshot.account_instance = open.wrapping_add(1);
+            app.resolve_pending_activation(window, cx);
+        });
+        assert_eq!(app.read(cx).navigation.selected_room.as_ref(), Some(&room));
+        assert!(app.read(cx).pending_activation.is_none());
+
+        // A click for an account that is not signed in does nothing.
+        app.update(cx, |app, cx| {
+            app.activate_notification(
+                Activation {
+                    account: 12345,
+                    room: room.clone(),
+                    thread: None,
+                },
+                window,
+                cx,
+            )
+        });
+        assert!(app.read(cx).pending_activation.is_none());
+        // A switch that ends on another account forgets the click.
+        app.update(cx, |app, cx| {
+            app.pending_activation = Some(target.clone());
+            app.snapshot.account_instance = open;
+            app.busy = false;
+            app.resolve_pending_activation(window, cx);
+        });
+        assert!(app.read(cx).pending_activation.is_none());
+    })
+    .expect("cross-account notification");
 }

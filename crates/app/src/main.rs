@@ -184,11 +184,11 @@ fn main() {
                             state.focus(window, cx);
                         });
                     }
-                    if args.iter().any(|arg| arg.starts_with("--preview-add-account") || arg == "--preview-sign-out") {
+                    if args.iter().any(|arg| arg.starts_with("--preview-add-account") || arg == "--preview-sign-out" || arg == "--preview-accounts-menu") {
                         let me = view.snapshot.user_id.clone();
                         view.snapshot.accounts = vec![
-                            backend::AccountEntry { id: "sample-1".into(), user_id: me, homeserver: "https://matrix.example.org/".into(), active: true },
-                            backend::AccountEntry { id: "sample-2".into(), user_id: "@sam.work:example.com".into(), homeserver: "https://example.com/".into(), active: false },
+                            backend::AccountEntry { id: "sample-1".into(), user_id: me, homeserver: "https://matrix.example.org/".into(), active: true, ..Default::default() },
+                            backend::AccountEntry { id: "sample-2".into(), user_id: "@sam.work:example.com".into(), homeserver: "https://example.com/".into(), active: false , instance: 2, unread: 4, mentions: 1 },
                         ];
                     }
                     if args.iter().any(|arg| arg == "--preview-add-account") {
@@ -297,9 +297,20 @@ fn main() {
             #[cfg(feature = "capture")]
             if let Some(path) = capture {
                 let weak = view.downgrade();
+                let open_account_menu = args.iter().any(|arg| arg == "--preview-accounts-menu");
                 cx.spawn(async move |cx| {
+                    if open_account_menu {
+                        // Open the avatar menu the way a click would.
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_secs(2))
+                            .await;
+                        let _ = main_window.update(cx, |_, window, cx| {
+                            use gpui_kit::test::TestWindowExt;
+                            window.click("my-profile", cx);
+                        });
+                    }
                     cx.background_executor()
-                        .timer(std::time::Duration::from_secs(3))
+                        .timer(std::time::Duration::from_secs(if open_account_menu { 1 } else { 3 }))
                         .await;
                     let settings = cx.update(|cx| weak.upgrade().and_then(|main| main.read(cx).settings.as_ref().map(|entry| entry.0)));
                     let result = settings.unwrap_or(main_window).update(cx, |_, window, cx| { window.refresh(); window.draw(cx).clear(cx); window.render_to_image() });

@@ -94,7 +94,14 @@ impl MatrixApp {
                     active: self.notification_window_active,
                     focused_room: self.navigation.selected_room.clone(),
                 },
-                unread: self.snapshot.unread_total,
+                // The Dock badge counts every signed-in account.
+                unread: self.snapshot.unread_total.saturating_add(
+                    self.snapshot
+                        .accounts
+                        .iter()
+                        .filter(|account| !account.active)
+                        .fold(0u64, |sum, account| sum.saturating_add(account.unread)),
+                ),
             });
         }
     }

@@ -296,6 +296,9 @@ pub(super) struct MatrixApp {
     pub notification_sample: bool,
     pub notification_window_active: bool,
     pub last_notification_click: u64,
+    /// A notification click from another signed-in account, opened once the
+    /// switch to it has landed (#97).
+    pub pending_activation: Option<twayblade_platform::notifications::Activation>,
     pub notification_thread: Option<(String, String)>,
     pub account_name: Option<Entity<InputState>>,
     pub account_edit_busy: bool,
@@ -701,6 +704,7 @@ impl MatrixApp {
             notification_sample: false,
             notification_window_active: window.is_window_active(),
             last_notification_click: 0,
+            pending_activation: None,
             notification_thread: None,
             notification_keyword: cx.new(|cx| InputState::new(window, cx).placeholder("Keyword")),
             account_edit_busy: false,
@@ -1197,6 +1201,7 @@ impl MatrixApp {
             self.last_notification_click = serial;
             self.activate_notification(target, window, cx);
         }
+        self.resolve_pending_activation(window, cx);
         self.open_pending_notification_thread(window, cx);
         self.refresh_viewer(window, cx);
         cx.notify();
@@ -1447,18 +1452,58 @@ impl MatrixApp {
         cx.notify();
     }
 
+    /// Opens a notification from another account once the switch has landed
+    /// and its room is listed; forgets it if the switch ended elsewhere.
+    pub(crate) fn resolve_pending_activation(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(target) = self.pending_activation.take() else {
+            return;
+        };
+        let here = target.account == self.snapshot.account_instance;
+        if here
+            && self
+                .snapshot
+                .rooms
+                .iter()
+                .any(|room| room.id == target.room)
+        {
+            self.activate_notification(target, window, cx);
+        } else if here || self.busy {
+            // Still switching, or its rooms are still loading.
+            self.pending_activation = Some(target);
+        }
+    }
+
     pub(super) fn activate_notification(
         &mut self,
         target: twayblade_platform::notifications::Activation,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if target.account != self.snapshot.account_instance
-            || !self
+        if target.account != self.snapshot.account_instance {
+            // Another signed-in account: switch to it, then open the room.
+            if let Some(id) = self
                 .snapshot
-                .rooms
+                .accounts
                 .iter()
-                .any(|room| room.id == target.room)
+                .find(|account| !account.active && account.instance == target.account)
+                .map(|account| account.id.clone())
+            {
+                self.pending_activation = Some(target);
+                cx.activate(true);
+                window.activate_window();
+                self.switch_account(id, window, cx);
+            }
+            return;
+        }
+        if !self
+            .snapshot
+            .rooms
+            .iter()
+            .any(|room| room.id == target.room)
         {
             return;
         }
@@ -2086,7 +2131,10 @@ impl MatrixApp {
                 this.busy = false;
                 match result {
                     Ok(()) => this.status.clear(),
-                    Err(error) => this.status = error.to_string(),
+                    Err(error) => {
+                        this.pending_activation = None;
+                        this.status = error.to_string();
+                    }
                 }
             },
         );

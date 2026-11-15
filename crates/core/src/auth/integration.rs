@@ -2677,6 +2677,180 @@ async fn encrypted_notification_delivery_and_private_preview() {
 
 #[tokio::test]
 #[ignore = "requires isolated Synapse fixture"]
+async fn inactive_account_counts_notifies_and_reopens_on_the_same_client() {
+    // What the app does for a signed-in account that is not open (#97): only
+    // its room list syncs, with no room selected, alongside another account.
+    use crate::notifications::{NotificationContext, RoomMode, RuleChange};
+    use crate::rooms::{RoomSnapshot, SyncStatus};
+    use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-data/local/integration");
+    let fixture: Fixture = checked(
+        serde_json::from_slice(&checked(
+            tokio::fs::read(root.join("fixture.json")).await,
+            "fixture",
+        )),
+        "parse fixture",
+    );
+    assert!(fixture.homeserver == "https://127.0.0.1:18448");
+    let cert = checked(
+        Certificate::from_pem(&checked(tokio::fs::read(root.join("ca.crt")).await, "CA")),
+        "parse CA",
+    );
+    let run = root.join(format!("inactive-account-{}", Uuid::new_v4()));
+    let mut accounts = Vec::new();
+    for (name, password) in [("alice", &fixture.alice), ("bob", &fixture.bob)] {
+        let client = test_client(&run, name, &Uuid::new_v4().to_string(), &cert).await;
+        checked(
+            client.matrix_auth().login_username(name, password).await,
+            "isolated login",
+        );
+        accounts.push(Account::new(
+            client,
+            run.join(name),
+            secrets::SessionStore::new("twayblade.integration.unused"),
+            Arc::new(Mutex::new(())),
+        ));
+    }
+    let alice = accounts[0].clone();
+    let bob = accounts[1].clone();
+    let alice_sync = sync(&alice);
+    // Bob is the inactive account: its room list and notifications only.
+    let watch_rooms = |account: Account| {
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<RoomSnapshot>();
+        let task = tokio::spawn(async move {
+            let stream = account.room_updates();
+            tokio::pin!(stream);
+            while let Some(snapshot) = stream.next().await {
+                if sender.send(snapshot).is_err() {
+                    break;
+                }
+            }
+        });
+        (task, receiver)
+    };
+    let (bob_rooms, mut bob_snapshots) = watch_rooms(bob.clone());
+    let (_context, receiver) = tokio::sync::watch::channel(NotificationContext {
+        enabled: true,
+        active: false,
+        focused_room: None,
+    });
+    let (items, mut received) = tokio::sync::mpsc::channel(8);
+    let bob_notifications = bob.clone();
+    let notifications = tokio::spawn(async move {
+        let stream = bob_notifications.notification_updates(receiver);
+        tokio::pin!(stream);
+        while let Some(item) = stream.next().await {
+            if items.send(item).await.is_err() {
+                break;
+            }
+        }
+    });
+    let mut request = create_room::v3::Request::new();
+    request.name = Some("Inactive account room".into());
+    request.invite = vec![bob.client.user_id().expect("test user").to_owned()];
+    let room = checked(alice.client.create_room(request).await, "room");
+    checked(bob.client.join_room_by_id(room.room_id()).await, "join");
+    wait_for_room(&bob, room.room_id()).await;
+    wait_for_room(&alice, room.room_id()).await;
+    let rules = checked(bob.notification_rules().await, "notification rules");
+    checked(
+        rules
+            .change(RuleChange::Room(room.room_id().to_string(), RoomMode::All))
+            .await,
+        "room notifications",
+    );
+    async fn unread_at_least(
+        snapshots: &mut tokio::sync::mpsc::UnboundedReceiver<RoomSnapshot>,
+        id: &str,
+        count: u64,
+    ) {
+        checked(
+            tokio::time::timeout(Duration::from_secs(60), async {
+                loop {
+                    let snapshot = snapshots.recv().await.expect("room stream");
+                    if snapshot
+                        .rooms
+                        .iter()
+                        .any(|room| room.id == id && room.unread >= count)
+                    {
+                        break;
+                    }
+                }
+            })
+            .await,
+            "unread count",
+        );
+    }
+    let room_id = room.room_id().to_string();
+    let event = checked(
+        room.send(RoomMessageEventContent::text_plain(
+            "for the inactive account",
+        ))
+        .await,
+        "send",
+    )
+    .response
+    .event_id;
+    unread_at_least(&mut bob_snapshots, &room_id, 1).await;
+    let item = checked(
+        tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                let item = received.recv().await.expect("notification stream");
+                if item.event == event.as_str() {
+                    break item;
+                }
+            }
+        })
+        .await,
+        "notification without a selected room",
+    );
+    assert!(item.room == room.room_id().as_str() && item.sender == alice.user_id());
+
+    // Switching to Bob reuses this client: its room list stops and starts
+    // again, and it keeps following new messages.
+    bob_rooms.abort();
+    drop(bob_snapshots);
+    let (reopened, mut bob_snapshots) = watch_rooms(bob.clone());
+    checked(
+        tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                let snapshot = bob_snapshots.recv().await.expect("reopened stream");
+                if snapshot.status == SyncStatus::Connected
+                    && snapshot
+                        .rooms
+                        .iter()
+                        .any(|r| r.id == room.room_id().as_str())
+                {
+                    break;
+                }
+            }
+        })
+        .await,
+        "reopened room list",
+    );
+    checked(
+        room.send(RoomMessageEventContent::text_plain("after the switch"))
+            .await,
+        "second send",
+    );
+    unread_at_least(&mut bob_snapshots, &room_id, 2).await;
+    checked(
+        rules
+            .change(RuleChange::Room(
+                room.room_id().to_string(),
+                RoomMode::Default,
+            ))
+            .await,
+        "reset room override",
+    );
+    reopened.abort();
+    notifications.abort();
+    alice_sync.abort();
+    eprintln!("PASS: inactive account unread counts, notification and reopen on the same client");
+}
+
+#[tokio::test]
+#[ignore = "requires isolated Synapse fixture"]
 async fn encrypted_message_editing_sources_navigation_and_threads() {
     use crate::conversation::{DeliveryState, EditError};
     use matrix_sdk::ruma::events::{
