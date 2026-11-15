@@ -29,14 +29,22 @@ implemented but has not been tried on real hardware, and calls there still need
 physical checks. Old-style `m.call.*` calls are not planned for 1.0. See the
 [compatibility status](docs/compatibility/STATUS.md) for what has been verified.
 
-Coming next: installers and signed packages, and in-app updates.
+Coming next: installers for each platform and in-app updates.
 
 ## Install
 
 Grab the latest build from [Releases](../../releases).
 
-Builds are not signed yet. On macOS, right-click **Twayblade.app** › **Open** the
-first time; on Windows, choose **More info** › **Run anyway**.
+Builds are not signed with a paid certificate, so each system asks once before
+the first launch:
+
+- **macOS:** open Twayblade, close the warning, then go to **System Settings ›
+  Privacy & Security** and choose **Open Anyway**. Or, in Terminal:
+  `xattr -dr com.apple.quarantine /Applications/Twayblade.app`.
+- **Windows:** when SmartScreen says "Windows protected your PC", choose
+  **More info › Run anyway**.
+- **Linux:** packages are not signed; install the `.deb`, `.rpm` or AppImage
+  from the release page you downloaded them from.
 
 Your homeserver needs native sliding sync, as in current Synapse releases.
 

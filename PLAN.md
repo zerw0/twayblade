@@ -23,6 +23,7 @@ Element Call.
 | Calls | Native (decision 2026-11-11, replacing the Element Call web runtime): MatrixRTC signalling in `core` through the Matrix SDK (call membership, call-key exchange over encrypted to-device messages), media through the LiveKit Rust SDK with end-to-end frame encryption, and a GPUI call interface. Interoperates with Element Call. Legacy `m.call.*` is out of scope for 1.0. |
 | Appearance | Default: system light/dark and system accent, neutral surfaces, contrasting foregrounds. Users can override scheme, accent, fonts, scale and chat style in Settings (M4). |
 | Settings | A native-style Settings window (⌘,) with sections. Preferences are stored locally as plain JSON, never with credentials. Notification rules are Matrix push rules on the server, so they sync with other clients. |
+| Signing | No paid signing (decision 2026-11-15): no Apple Developer Program, no paid Windows certificate. macOS builds stay ad hoc signed and Windows/Linux packages unsigned, with first-launch instructions on the download page. Free OSS signing for Windows (SignPath Foundation) may be applied for once an unsigned release exists. |
 | Toolchain | Rust minimum = the version actually built and tested (1.99). Nix shell is optional. |
 
 ## 1.0 scope
@@ -239,14 +240,14 @@ physical Mac at 60 and 120 Hz.
 
 **M6 — release (3–5 weeks).** Accessibility pass, migrations,
 packaging, signing, updates. Exit: clean-machine install, upgrade with session
-retained, uninstall, notification activation. Signed artifacts need release
-credentials and explicit authorization.
+retained, uninstall, notification activation. Packages are unsigned (see
+Decisions: Signing).
 
 Packaging targets (requested 2026-11-13); each needs its own install, upgrade
 and uninstall check on a clean machine, and publishing needs authorization:
-- *macOS:* signed, notarised `.app` in a DMG, plus a Homebrew cask
-  (`brew install --cask twayblade`) in our own tap first, homebrew/cask once
-  eligible. The cask tracks GitHub releases and checksums.
+- *macOS:* ad hoc signed `.app` in a DMG, plus a Homebrew cask
+  (`brew install --cask twayblade`) in our own tap; homebrew/cask needs a
+  notarised app, so it waits for paid signing. The cask tracks GitHub releases and checksums.
 - *Linux, all major distributions:* native `.deb` (Debian, Ubuntu and
   derivatives) and `.rpm` (Fedora, openSUSE) built in CI with correct
   dependencies (libsecret, PipeWire, glib, GPU/Vulkan stack); an AUR package
@@ -257,7 +258,7 @@ and uninstall check on a clean machine, and publishing needs authorization:
   reproducibly from `Cargo.lock`), `apps.default`, and an overlay; NixOS and
   nix-darwin users can install it from the flake, and nixpkgs submission comes
   after 1.0. The flake keeps its development shell.
-- *Windows:* signed MSI or MSIX, plus winget.
+- *Windows:* unsigned MSI (no MSIX: it cannot be installed unsigned), plus winget if its validation accepts an unsigned installer.
 
 Release flow (requested 2026-11-13): every packaged build is published as a
 GitHub **pre-release** with its artifacts, checksums and a changelog generated
