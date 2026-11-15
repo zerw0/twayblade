@@ -79,6 +79,9 @@ pub(super) struct Snapshot {
     pub(super) typing_others: usize,
     pub(super) reduce_motion: bool,
     pub(super) sync_status: String,
+    /// The homeserver can't be reached: shown as "no internet connection" while the
+    /// saved conversations stay readable.
+    pub(super) offline: bool,
     pub(super) timeline_status: String,
     /// Main timeline state behind `timeline_status`, for the view's layout.
     pub(super) timeline_phase: TimelineStatus,

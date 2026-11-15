@@ -467,6 +467,7 @@ impl MatrixApp {
             .bg(cx.theme().background)
             .child(header)
             .children(call_banner)
+            .children(self.offline_banner(cx))
             .when(self.show_security_notice(), |view| {
                 view.child(self.security_notice(cx))
             })
@@ -476,6 +477,46 @@ impl MatrixApp {
                 this.add_attachments(paths.0.iter().cloned(), window, cx);
             }))
             .into_any_element()
+    }
+
+    /// A slim strip under the header while there is no connection. The messages
+    /// below are the saved ones; anything you send is queued and goes out when
+    /// the connection returns.
+    fn offline_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.snapshot.offline {
+            return None;
+        }
+        let palette = theme::palette(cx);
+        let text = "No internet connection. Showing saved messages.";
+        Some(motion::rise(
+            h_flex()
+                .id("offline-banner")
+                .role(Role::Status)
+                .aria_label(text)
+                .test_support()
+                .h(px(28.))
+                .flex_none()
+                .px(px(16.))
+                .gap(px(8.))
+                .border_b_1()
+                .border_color(cx.theme().border)
+                .bg(palette.warning_background)
+                .text_size(px(12.))
+                .child(
+                    Icon::new(IconName::WifiOff)
+                        .size(px(13.))
+                        .text_color(palette.warning),
+                )
+                .child(div().flex_1().min_w_0().truncate().child(text)),
+            "offline-banner-motion",
+            self.snapshot.reduce_motion,
+        ))
+    }
+
+    /// Sample for `--preview-offline`. Never shown with a live account.
+    pub(crate) fn preview_offline(&mut self) {
+        self.snapshot.offline = true;
+        self.snapshot.sync_status = "Offline · reconnecting…".into();
     }
 
     /// The shown room's loading state, as the view presents it.

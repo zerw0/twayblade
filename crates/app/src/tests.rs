@@ -2392,6 +2392,27 @@ fn call_full_screen_shows_only_the_call(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn offline_banner_shows_only_without_a_connection(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestQueryExt;
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find_all("offline-banner").is_empty());
+    })
+    .expect("online");
+    cx.update(|cx| app.update(cx, |app, _| app.preview_offline()));
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window
+                .find_by_label("No internet connection. Showing saved messages.")
+                .visible()
+        );
+    })
+    .expect("offline");
+}
+
+#[gpui_kit::test]
 fn invite_tile_opens_the_invite_dialog_for_the_selected_room(cx: &mut TestAppContext) {
     let (window, app) = preview_window(cx);
     cx.update_window(window, |_, window, cx| {

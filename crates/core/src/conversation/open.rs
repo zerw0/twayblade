@@ -110,7 +110,7 @@ pub(super) async fn timeline(
     )
     .await
     .map_err(OpenError::cache)?;
-    step(
+    let fetched = step(
         tracing::info_span!(
             "encryption_state_fetch",
             elapsed_ms = tracing::field::Empty,
@@ -118,8 +118,18 @@ pub(super) async fn timeline(
         ),
         Box::pin(room.latest_encryption_state()),
     )
-    .await
-    .map_err(OpenError::sdk)?;
+    .await;
+    if let Err(error) = fetched {
+        let error = OpenError::sdk(error);
+        // No connection: the request failed, but the room's state may already be
+        // stored from an earlier sync. Then open from the local store so saved
+        // messages show. If it is not known locally, keep retrying: an unknown
+        // state is never treated as unencrypted.
+        if !matches!(error, OpenError::Retry(_)) || room.encryption_state().is_unknown() {
+            return Err(error);
+        }
+        tracing::info!(name: "room_open_from_cache", cached = true);
+    }
     step(
         tracing::info_span!(
             "timeline_build",

@@ -173,6 +173,9 @@ fn main() {
                             view.snapshot.security.verification = Some(twayblade_core::security::VerificationView { flow: "sample".into(), device: "Sample second device".into(), incoming: false, phase: twayblade_core::security::VerificationPhase::Emojis([("🐶", "Dog"), ("🌳", "Tree"), ("🚀", "Rocket"), ("🎸", "Guitar"), ("🍎", "Apple"), ("🔔", "Bell"), ("🦋", "Butterfly")].into_iter().map(|(symbol, name)| (symbol.into(), name.into())).collect()) });
                         } else { view.security_restore = true; }
                     }
+                    if args.iter().any(|arg| arg == "--preview-offline") {
+                        view.preview_offline();
+                    }
                     if args.iter().any(|arg| arg == "--preview-search") {
                         view.search_open = true;
                     }
