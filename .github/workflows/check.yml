@@ -7,6 +7,14 @@ on:
 permissions:
   contents: read
 
+# A newer push to a branch cancels that branch's older run, so superseded runs
+# don't queue up on the (scarce) macOS runners. The event name is part of the
+# group: the push run and the pull-request run of a branch still both run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
+  # Never cancel runs on main: a failure on an intermediate commit must stay visible.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   check:
     strategy:

@@ -944,6 +944,30 @@ fn member_actions_follow_power_levels_and_confirm_destructive_steps(cx: &mut Tes
 }
 
 #[gpui_kit::test]
+fn message_search_can_be_limited_to_one_sender(cx: &mut TestAppContext) {
+    use gpui_kit::test::{TestEventExt, TestQueryExt};
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.within("title-search").click("input-state", cx);
+        window.input("rust", cx);
+        window.render_frame(cx);
+        window.key_down("enter", false, cx);
+    })
+    .expect("open message search");
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("search-from").visible());
+        window.click("search-from", cx);
+        window.render_frame(cx);
+        assert!(window.find_by_label("Anyone").visible());
+    })
+    .expect("sender menu");
+    cx.update(|cx| assert!(app.read(cx).search_sender.is_none()));
+}
+
+#[gpui_kit::test]
 fn title_search_offers_message_search_and_opens_the_panel(cx: &mut TestAppContext) {
     use gpui_kit::test::TestEventExt;
     let (window, app) = preview_window(cx);
@@ -1394,6 +1418,54 @@ fn viewer_keyboard_navigation_zoom_clipboard_and_focus_restore(cx: &mut TestAppC
         app.update(cx, |app, _| assert!(app.viewer.is_none()));
     })
     .expect("viewer returns focus to revealed image");
+}
+
+#[gpui_kit::test]
+fn viewer_and_dialogs_are_named_for_screen_readers(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestQueryExt;
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| app.preview_viewer(window, cx));
+        window.render_frame(cx);
+    })
+    .expect("open the viewer");
+    let total = cx.update(|cx| app.read(cx).viewer.as_ref().expect("viewer").entries.len());
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        // The overlay says which image of how many; the position is a status.
+        assert!(
+            window
+                .find_by_label(&format!("Image viewer, Image 1 of {total}"))
+                .visible()
+        );
+        assert!(
+            window
+                .find_by_label(&format!("Image 1 of {total}"))
+                .visible()
+        );
+        window.click("viewer-close", cx);
+    })
+    .expect("viewer labels");
+    // The create-room sheet is a dialog with its heading as its name.
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_management(crate::ui::spaces::ManageKind::Create, window, cx)
+        });
+        window.render_frame(cx);
+        assert!(window.find_by_label("Create Room").visible());
+    })
+    .expect("dialog label");
+    // A side panel is a named region.
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.management = None;
+            app.search_open = true;
+            cx.notify();
+        });
+        window.render_frame(cx);
+        assert!(window.find_by_label("Message search").visible());
+    })
+    .expect("panel label");
 }
 
 #[gpui_kit::test]
@@ -2186,6 +2258,25 @@ fn formatting_adapter_uses_byte_selection_and_preserves_undo(cx: &mut TestAppCon
 
 /// ⌘B / ⌘I go through the real bindings to whichever composer has focus.
 #[gpui_kit::test]
+fn formatting_toolbar_applies_markdown_to_the_composer(cx: &mut TestAppContext) {
+    let (window, _app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.within("composer-panel").click("input-state", cx);
+        window.input("hi", cx);
+        window.click("format-bold", cx);
+        assert_eq!(
+            window
+                .within("composer-panel")
+                .find_by_label("Message")
+                .value(),
+            Some("hi****")
+        );
+    })
+    .expect("bold from the toolbar");
+}
+
+#[gpui_kit::test]
 fn formatting_shortcuts_reach_main_and_thread_composers(cx: &mut TestAppContext) {
     use gpui_kit::test::TestEventExt;
     let (window, app) = preview_window(cx);
@@ -2410,6 +2501,38 @@ fn offline_banner_shows_only_without_a_connection(cx: &mut TestAppContext) {
         );
     })
     .expect("offline");
+}
+
+#[gpui_kit::test]
+fn screen_picker_lists_sources_and_opens_from_the_share_button(cx: &mut TestAppContext) {
+    use twayblade_core::calls::SourceKind;
+    let (window, app) = preview_window(cx);
+    cx.update(|cx| app.update(cx, |app, _| app.preview_call("--preview-call-picker")));
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("screen-picker-cancel").visible());
+        assert!(window.find("share-source-1").visible());
+        window.click("screen-picker-windows", cx);
+    })
+    .expect("switch to windows");
+    cx.update(|cx| assert_eq!(app.read(cx).screen_picker, Some(SourceKind::Window)));
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("screen-picker-cancel", cx);
+    })
+    .expect("cancel");
+    cx.update(|cx| assert!(app.read(cx).screen_picker.is_none()));
+    // Where the OS has no picker, Share opens ours instead of failing.
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find_all("screen-picker-cancel").is_empty());
+        window.click("call-screen-share", cx);
+    })
+    .expect("open from the share button");
+    cx.update(|cx| {
+        assert_eq!(app.read(cx).screen_picker, Some(SourceKind::Screen));
+        assert!(app.read(cx).status.is_empty());
+    });
 }
 
 #[gpui_kit::test]

@@ -45,7 +45,7 @@
 - Base new feature branches on `main` unless the task specifies another base. Keep each branch focused on one feature, including its related tests and documentation.
 - Inspect Git status before switching or editing. Preserve existing work; never reset, discard or stash someone else's changes to make room for your task. Use a separate worktree when unrelated work or another contributor occupies the current checkout.
 - Share changes through feature branches and reviewable pull requests. Follow the session's authorization for publishing and merging; branch creation alone does not authorize a push or merge.
-- When finishing a feature, update `PLAN.md` with the actual implemented behavior, verification performed and remaining acceptance gaps. Keep compilation, offline UI tests, live integration and physical platform checks distinct.
+- When finishing a feature, record the actual implemented behavior, verification performed and remaining acceptance gaps in a new `docs/progress/YYYY-MM-DD-name.md` (see its README), not in `PLAN.md`'s Progress section, which conflicts across open pull requests. Update `PLAN.md` only for decisions and milestone-table rows. Keep compilation, offline UI tests, live integration and physical platform checks distinct.
 
 ## UI design guidance
 - Apply the user-requested UI/UX Pro Max skill for UI design, implementation and review: `.agents/skills/ui-ux-pro-max/SKILL.md` when installed locally. Upstream: https://github.com/nextlevelbuilder/ui-ux-pro-max-skill (selected revision `9b675f0b13c9c28dec445e8ce4633c18c39b6467`). Its canonical skill path is `.claude/skills/ui-ux-pro-max/SKILL.md` upstream.
