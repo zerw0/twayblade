@@ -1,7 +1,19 @@
 name: Rust checks
+# Documentation-only changes (Markdown, docs/, licences) start no pipeline.
+# Such a pull request has no required checks reporting, so it is merged by an
+# admin (`gh pr merge --admin`); a pull request that also touches code runs
+# everything as usual.
 on:
   push:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE*'
   pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE*'
   workflow_dispatch:
 
 permissions:

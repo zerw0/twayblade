@@ -5,6 +5,11 @@ name: Build binaries
 on:
   push:
     branches: [main]
+    # Documentation-only pushes to main don't need new binaries (tags always build).
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE*'
     tags: ['v*']
   workflow_dispatch:
 
