@@ -2,6 +2,7 @@
 //! timeline, the in-another-room strip, the incoming-call card and device
 //! notices. Call state comes from the backend snapshot; video from bounded
 //! latest-frame handles, each drawn by its own small view so only it repaints.
+use super::call_layout::{self as layout, CONTROLS_IDLE, CallFocus};
 use super::*;
 use crate::shortcuts::{ShortcutAction as Action, hint};
 use std::sync::Arc;
@@ -21,12 +22,10 @@ pub(crate) enum CallShortcut {
     Decline,
 }
 
+/// Height kept free under the tiles in full screen for the floating controls.
+const CONTROLS_ROOM: f32 = 84.;
 /// More than this many people share one "+N" tile.
 const MAX_TILES: usize = 8;
-/// Height of a shared screen shown large above the tiles.
-const SCREEN_HEIGHT: f32 = 300.;
-/// Tiles in the column beside a shared screen, the last one "+N" past that.
-const SIDE_TILES: usize = 3;
 
 /// One video track's latest frame.
 /// Cameras fill their tile; shared screens fit inside it uncropped.
@@ -125,6 +124,16 @@ fn device_word(kind: DeviceKind) -> &'static str {
     }
 }
 
+/// Whether you muted this person for yourself.
+fn playback_muted(participant: &Participant) -> bool {
+    participant.playback.muted
+}
+
+/// Your playback volume for this person, as a whole percent.
+fn volume_percent(participant: &Participant) -> i32 {
+    (participant.playback.volume() * 100.).round() as i32
+}
+
 fn duration_text(started_ms: u64) -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -138,7 +147,27 @@ fn duration_text(started_ms: u64) -> String {
     }
 }
 
+/// What the call stage shows large.
+enum Main<'a> {
+    Grid,
+    /// A person; true when the follow-the-speaker mode picked them.
+    Person(&'a Participant, bool),
+    /// Someone's shared screen; true when it was focused (nobody else shown).
+    Screen(&'a CallVideoTrack, bool),
+}
+
 impl MatrixApp {
+    fn person_name(&self, participant: &Participant) -> String {
+        if self.is_local(participant) {
+            "you".into()
+        } else {
+            participant
+                .display_name
+                .clone()
+                .unwrap_or_else(|| participant.user_id.clone())
+        }
+    }
+
     pub(crate) fn live_call(&self) -> Option<&CallState> {
         self.snapshot.call.as_ref().filter(|call| live(call))
     }
@@ -159,18 +188,39 @@ impl MatrixApp {
         cx.notify();
     }
 
-    /// Full screen for the call: the whole window uses the macOS full-screen
-    /// space (or the platform's equivalent). Only while a call is live.
+    /// Full screen for the call: the call fills the whole window, in the macOS
+    /// full-screen space (or the platform's equivalent). Only while a call is live.
     pub(crate) fn toggle_call_full_screen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.live_call().is_some() {
-            window.toggle_fullscreen();
-            cx.notify();
+        if self.live_call().is_none() {
+            return;
         }
+        if self.call_full_screen || window.is_fullscreen() {
+            self.call_full_screen = false;
+            self.call_full_screen_entered = false;
+            if window.is_fullscreen() {
+                window.toggle_fullscreen();
+            }
+        } else {
+            self.call_full_screen = true;
+            self.call_full_screen_entered = false;
+            self.call_controls.activity(std::time::Instant::now(), true);
+            window.toggle_fullscreen();
+        }
+        cx.notify();
+    }
+
+    /// Whether the call is filling the window right now.
+    pub(crate) fn call_fills_window(&self) -> bool {
+        self.call_full_screen && self.live_call().is_some()
     }
 
     fn fresh_call(&mut self) {
         self.call_end_dismissed = false;
         self.call_focus = None;
+        self.call_follow.reset();
+        self.call_follow_timer = None;
+        self.call_volume.clear();
+        self.call_menu = None;
         self.call_event_seen = 0;
         self.status.clear();
     }
@@ -196,8 +246,10 @@ impl MatrixApp {
         self.call_result(result, cx);
     }
 
-    /// Keeps one video view per shown track and a 1 s clock while in a call.
-    pub(crate) fn sync_call_views(&mut self, cx: &mut Context<Self>) {
+    /// Keeps one video view per shown track, the speaker-follow pick, the
+    /// volume sliders and a 1 s clock while in a call.
+    pub(crate) fn sync_call_views(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.call_stage_size.set(window.viewport_size());
         let tracks: Vec<(String, VideoSource)> = self
             .live_call()
             .map(|call| {
@@ -225,6 +277,22 @@ impl MatrixApp {
         {
             self.call_screen_focus = None;
         }
+        // A focus on someone who left, or a screen that stopped, is released.
+        let gone = match &self.call_focus {
+            Some(CallFocus::Screen(id)) => !self.call_tiles.contains_key(id),
+            Some(CallFocus::Person(user, device)) => !self.live_call().is_some_and(|call| {
+                call.participants
+                    .iter()
+                    .any(|p| &p.user_id == user && &p.device_id == device)
+            }),
+            None => false,
+        };
+        if gone {
+            self.call_focus = None;
+        }
+        self.sync_full_screen(window);
+        self.sync_speaker_follow(cx);
+        self.sync_volume_sliders(cx);
         if self.live_call().is_none() {
             self.call_clock = None;
         } else if self.call_clock.is_none() {
@@ -239,6 +307,120 @@ impl MatrixApp {
                 }
             }));
         }
+    }
+
+    /// The call fills the window only while the window really is full screen
+    /// and the call is live; it follows the window out of full screen.
+    fn sync_full_screen(&mut self, window: &mut Window) {
+        if !self.call_full_screen {
+            return;
+        }
+        if self.live_call().is_none() {
+            self.call_full_screen = false;
+            self.call_full_screen_entered = false;
+            if window.is_fullscreen() {
+                window.toggle_fullscreen();
+            }
+        } else if window.is_fullscreen() {
+            self.call_full_screen_entered = true;
+        } else if self.call_full_screen_entered {
+            self.call_full_screen = false;
+            self.call_full_screen_entered = false;
+        }
+    }
+
+    /// Feeds voice activity to the debouncer and wakes the view when the pick
+    /// may change.
+    fn sync_speaker_follow(&mut self, cx: &mut Context<Self>) {
+        if !self.preferences.calls.follow_speaker || self.live_call().is_none() {
+            self.call_follow.reset();
+            self.call_follow_timer = None;
+            return;
+        }
+        let now = std::time::Instant::now();
+        let people: Vec<(String, bool)> = self
+            .live_call()
+            .map(|call| {
+                call.participants
+                    .iter()
+                    .filter(|p| !self.is_local(p))
+                    .map(|p| {
+                        (
+                            p.id.clone(),
+                            p.speaking == Some(true) && p.muted != Some(true),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let flags: Vec<(&str, bool)> = people.iter().map(|(id, on)| (id.as_str(), *on)).collect();
+        self.call_follow.update(now, &flags);
+        if self.call_follow_timer.is_none()
+            && let Some(at) = self.call_follow.next_deadline(now)
+        {
+            self.call_follow_timer = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(at.saturating_duration_since(std::time::Instant::now()))
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    this.call_follow_timer = None;
+                    cx.notify();
+                });
+            }));
+        }
+    }
+
+    /// One 0–200% slider per other participant, kept for the call.
+    fn sync_volume_sliders(&mut self, cx: &mut Context<Self>) {
+        use gpui_kit::component::slider::{SliderEvent, SliderState};
+        let remote: Vec<(String, f32)> = self
+            .live_call()
+            .map(|call| {
+                call.participants
+                    .iter()
+                    .filter(|p| !self.is_local(p))
+                    .map(|p| (p.id.clone(), p.playback.volume()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.call_volume
+            .retain(|id, _| remote.iter().any(|(person, _)| person == id));
+        for (id, volume) in remote {
+            if self.call_volume.contains_key(&id) {
+                continue;
+            }
+            let state = cx.new(|_| {
+                SliderState::new()
+                    .min(0.)
+                    .max(200.)
+                    .step(5.)
+                    .default_value(volume * 100.)
+            });
+            let target = id.clone();
+            let subscription = cx.subscribe(
+                &state,
+                move |this: &mut Self, _, event: &SliderEvent, _| match event {
+                    SliderEvent::Change(value) => this.send_volume(&target, value.end(), false),
+                    SliderEvent::Release(value) => this.send_volume(&target, value.end(), true),
+                },
+            );
+            self.call_volume.insert(id, (state, subscription));
+        }
+    }
+
+    /// Sends a playback volume (percent). While dragging, sends are spaced out so
+    /// the bounded control queue never fills; the release always sends.
+    pub(crate) fn send_volume(&mut self, id: &str, percent: f32, force: bool) {
+        let now = std::time::Instant::now();
+        if !force
+            && self
+                .call_volume_sent
+                .is_some_and(|at| now.duration_since(at) < std::time::Duration::from_millis(60))
+        {
+            return;
+        }
+        self.call_volume_sent = Some(now);
+        let _ = self.set_participant_volume(id.to_owned(), percent / 100.);
     }
 
     /// Start/join buttons for the conversation header.
@@ -509,8 +691,15 @@ impl MatrixApp {
             .when(participant.screen, |label| {
                 label.child(Icon::new(IconName::ScreenShare).size(px(11.)))
             })
-            .child(div().truncate().child(name.clone()));
-        let key = (participant.user_id.clone(), participant.device_id.clone());
+            .child(div().truncate().child(name.clone()))
+            .when(!local && playback_muted(participant), |label| {
+                label.child(Icon::new(IconName::VolumeOff).size(px(11.)))
+            })
+            .when(
+                !local && !playback_muted(participant) && volume_percent(participant) != 100,
+                |label| label.child(format!("{}%", volume_percent(participant))),
+            );
+        let key = CallFocus::Person(participant.user_id.clone(), participant.device_id.clone());
         let focused = self.call_focus.as_ref() == Some(&key);
         let ended_call = !live(call);
         let focus_label = if focused {
@@ -518,34 +707,43 @@ impl MatrixApp {
         } else {
             format!("Focus on {name}")
         };
-        let focus_button = div().absolute().top(px(6.)).right(px(6.)).child(
-            Button::new(SharedString::from(format!(
-                "call-focus-{}-{}",
-                participant.user_id, participant.device_id
-            )))
-            .ghost()
-            .size(px(22.))
-            .rounded(px(5.))
-            .bg(gpui_kit::black().opacity(0.55))
-            .text_color(gpui_kit::white())
-            .icon(
-                Icon::new(if focused {
-                    IconName::Minimize
-                } else {
-                    IconName::Maximize
-                })
-                .size(px(12.)),
-            )
-            .accessibility_label(focus_label)
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.call_focus = if this.call_focus.as_ref() == Some(&key) {
-                    None
-                } else {
-                    Some(key.clone())
-                };
-                cx.notify();
-            })),
-        );
+        let focus_button = Button::new(SharedString::from(format!(
+            "call-focus-{}-{}",
+            participant.user_id, participant.device_id
+        )))
+        .ghost()
+        .size(px(22.))
+        .rounded(px(5.))
+        .bg(gpui_kit::black().opacity(0.55))
+        .text_color(gpui_kit::white())
+        .icon(
+            Icon::new(if focused {
+                IconName::Minimize
+            } else {
+                IconName::Maximize
+            })
+            .size(px(12.)),
+        )
+        .accessibility_label(focus_label)
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.call_focus = if this.call_focus.as_ref() == Some(&key) {
+                None
+            } else {
+                Some(key.clone())
+            };
+            cx.notify();
+        }));
+        let tile_buttons = h_flex()
+            .absolute()
+            .top(px(6.))
+            .right(px(6.))
+            .gap(px(4.))
+            .when(!local, |row| {
+                row.child(self.tile_menu(participant, &name, cx))
+            })
+            .child(focus_button);
+        let playback = participant.playback;
+        let heard_less = !local && (playback.muted || (playback.volume() - 1.0).abs() > 0.004);
         let mut spoken = name.clone();
         for (on, word) in [
             (speaking, "speaking"),
@@ -557,6 +755,16 @@ impl MatrixApp {
             if on {
                 spoken.push_str(", ");
                 spoken.push_str(word);
+            }
+        }
+        if heard_less {
+            if playback.muted {
+                spoken.push_str(", muted for you");
+            } else {
+                spoken.push_str(&format!(
+                    ", volume {}% for you",
+                    volume_percent(participant)
+                ));
             }
         }
         div()
@@ -610,7 +818,122 @@ impl MatrixApp {
                 )
             })
             .child(label)
-            .when(!ended_call, |tile| tile.child(focus_button))
+            .when(!ended_call, |tile| tile.child(tile_buttons))
+            .into_any_element()
+    }
+
+    /// The tile's "more" menu: mute this person for yourself and set how loud
+    /// they are. Local playback only; nobody else hears a change.
+    fn tile_menu(
+        &self,
+        participant: &Participant,
+        name: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use gpui_kit::component::{popover::Popover, slider::Slider};
+        let id = participant.id.clone();
+        let slider = self.call_volume.get(&id).map(|(state, _)| state.clone());
+        let weak = cx.entity().downgrade();
+        let open = self.call_menu.as_deref() == Some(id.as_str());
+        let muted = playback_muted(participant);
+        let name = name.to_owned();
+        let trigger = Button::new(SharedString::from(format!("call-more-{id}")))
+            .ghost()
+            .size(px(22.))
+            .rounded(px(5.))
+            .bg(gpui_kit::black().opacity(0.55))
+            .text_color(gpui_kit::white())
+            .icon(Icon::new(IconName::Ellipsis).size(px(12.)))
+            .accessibility_label(format!("Volume and mute for {name}"));
+        let (change_weak, change_id) = (weak.clone(), id.clone());
+        Popover::new(SharedString::from(format!("call-menu-{id}")))
+            .anchor(Anchor::TopRight)
+            .open(open)
+            .on_open_change(move |open, _, cx| {
+                let (id, open) = (change_id.clone(), *open);
+                let _ = change_weak.update(cx, |this, cx| {
+                    this.call_menu = open.then_some(id);
+                    this.poke_controls(true, cx);
+                    cx.notify();
+                });
+            })
+            .trigger(trigger)
+            .content(move |_, _, cx| {
+                let percent = slider
+                    .as_ref()
+                    .map_or(100, |state| state.read(cx).value().end().round() as i32);
+                let (mute_weak, mute_id) = (weak.clone(), id.clone());
+                let (reset_weak, reset_id, reset_slider) =
+                    (weak.clone(), id.clone(), slider.clone());
+                v_flex()
+                    .w(px(232.))
+                    .p(px(10.))
+                    .gap(px(10.))
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(name.clone()),
+                    )
+                    .child(
+                        h_flex()
+                            .justify_between()
+                            .text_size(px(12.))
+                            .child("Mute for me")
+                            .child(
+                                switch::Switch::new(SharedString::from(format!(
+                                    "call-mute-for-me-{id}"
+                                )))
+                                .accessibility_label(format!("Mute {name} for me"))
+                                .checked(muted)
+                                .on_click(
+                                    move |checked: &bool, _, cx| {
+                                        let (id, checked) = (mute_id.clone(), *checked);
+                                        let _ = mute_weak.update(cx, |this, cx| {
+                                            let result =
+                                                this.set_participant_muted_locally(id, checked);
+                                            this.call_result(result, cx)
+                                        });
+                                    },
+                                ),
+                            ),
+                    )
+                    .children(slider.as_ref().map(|state| {
+                        h_flex()
+                            .gap(px(8.))
+                            .child(Icon::new(IconName::Volume2).size(px(14.)))
+                            .child(
+                                Slider::new(state)
+                                    .horizontal()
+                                    .accessibility_label(format!("Volume for {name}"))
+                                    .flex_1(),
+                            )
+                            .child(
+                                div()
+                                    .w(px(38.))
+                                    .text_right()
+                                    .text_size(px(12.))
+                                    .child(format!("{percent}%")),
+                            )
+                    }))
+                    .child(
+                        Button::new(SharedString::from(format!("call-volume-reset-{id}")))
+                            .outline()
+                            .h(px(24.))
+                            .label("Reset to 100%")
+                            .on_click(move |_, window, cx| {
+                                if let Some(state) = &reset_slider {
+                                    state.update(cx, |state, cx| state.set_value(100., window, cx));
+                                }
+                                let id = reset_id.clone();
+                                let _ = reset_weak.update(cx, |this, cx| {
+                                    this.send_volume(&id, 100., true);
+                                    cx.notify();
+                                });
+                            }),
+                    )
+            })
             .into_any_element()
     }
 
@@ -622,9 +945,33 @@ impl MatrixApp {
             .unwrap_or_else(|| track.user_id.clone())
     }
 
-    /// Someone else's shared screen, large above the tiles. With several,
-    /// the chosen one (or the first) is shown and the others can be picked.
-    fn screen_presentation(&self, call: &CallState, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// The remote screen to show large: the focused one, the one picked from the
+    /// switcher, or the first. None when nobody else shares.
+    fn shown_screen<'a>(&self, call: &'a CallState) -> Option<&'a CallVideoTrack> {
+        let screens = || {
+            call.video_tracks.iter().filter(|t| {
+                t.source == VideoSource::Screen && !t.local && self.call_tiles.contains_key(&t.id)
+            })
+        };
+        let wanted = match &self.call_focus {
+            Some(CallFocus::Screen(id)) => Some(id),
+            _ => self.call_screen_focus.as_ref(),
+        };
+        wanted
+            .and_then(|id| screens().find(|t| &t.id == id))
+            .or_else(|| screens().next())
+    }
+
+    /// Someone else's shared screen, large. With several, the shown one can be
+    /// switched; the focus button hides everyone else.
+    fn screen_presentation(
+        &self,
+        call: &CallState,
+        shown: &CallVideoTrack,
+        height: f32,
+        focused: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let screens: Vec<&CallVideoTrack> = call
             .video_tracks
             .iter()
@@ -632,17 +979,13 @@ impl MatrixApp {
                 t.source == VideoSource::Screen && !t.local && self.call_tiles.contains_key(&t.id)
             })
             .collect();
-        let shown = screens
-            .iter()
-            .find(|t| self.call_screen_focus.as_ref() == Some(&t.id))
-            .or(screens.first())?;
         let view = self.call_tiles.get(&shown.id)?.clone();
         let owner = self.track_owner(call, shown);
         let switcher = (screens.len() > 1).then(|| {
             h_flex()
                 .absolute()
                 .top(px(8.))
-                .right(px(8.))
+                .right(px(40.))
                 .gap(px(4.))
                 .children(screens.iter().map(|track| {
                     let id = track.id.clone();
@@ -659,19 +1002,51 @@ impl MatrixApp {
                         ))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.call_screen_focus = Some(id.clone());
+                            if matches!(this.call_focus, Some(CallFocus::Screen(_))) {
+                                this.call_focus = Some(CallFocus::Screen(id.clone()));
+                            }
                             cx.notify();
                         }))
                 }))
         });
+        let id = shown.id.clone();
+        let focus_button = Button::new("call-screen-focus")
+            .ghost()
+            .size(px(22.))
+            .rounded(px(5.))
+            .bg(gpui_kit::black().opacity(0.55))
+            .text_color(gpui_kit::white())
+            .icon(
+                Icon::new(if focused {
+                    IconName::Minimize
+                } else {
+                    IconName::Maximize
+                })
+                .size(px(12.)),
+            )
+            .accessibility_label(if focused {
+                format!("Show everyone, leave focus on {owner}'s screen")
+            } else {
+                format!("Focus on {owner}'s screen")
+            })
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let key = CallFocus::Screen(id.clone());
+                this.call_focus = if this.call_focus.as_ref() == Some(&key) {
+                    None
+                } else {
+                    Some(key)
+                };
+                cx.notify();
+            }));
         Some(
             div()
                 .id("call-screen")
                 .role(Role::Group)
                 .aria_label(format!("{owner}'s screen"))
                 .relative()
-                .flex_1()
+                .w_full()
                 .min_w_0()
-                .h(px(SCREEN_HEIGHT))
+                .h(px(height))
                 .rounded(px(10.))
                 .overflow_hidden()
                 .bg(gpui_kit::black())
@@ -692,6 +1067,13 @@ impl MatrixApp {
                         .child(div().truncate().child(format!("{owner}'s screen"))),
                 )
                 .children(switcher)
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(8.))
+                        .right(px(8.))
+                        .child(focus_button),
+                )
                 .into_any_element(),
         )
     }
@@ -809,121 +1191,226 @@ impl MatrixApp {
                 ScreenShare::Off => {}
             }
         }
-        let presentation = if ended {
-            None
+        let full = !ended && self.call_fills_window();
+        // Layout is in design points, so divide the window by the UI scale.
+        let scale = f32::from(self.preferences.appearance.scale.clamp(85, 150)) / 100.;
+        let view = self.call_stage_size.get();
+        let (view_w, view_h) = (
+            f32::from(view.width) / scale,
+            f32::from(view.height) / scale,
+        );
+        let avail_w = if full {
+            (view_w - 32.).max(320.)
         } else {
-            self.screen_presentation(call, cx)
+            // Rail, room list and gutters sit beside the conversation.
+            (view_w - 360.).max(360.)
         };
-        // You first, then everyone else in membership order.
+        let stage_h = if full {
+            // Leave room under the tiles for the floating controls.
+            (view_h - 32. - CONTROLS_ROOM).max(300.)
+        } else {
+            (view_h * 0.56).max(320.)
+        };
+        // You first, then everyone else in membership order; with follow on,
+        // the speaker leads the others.
+        let following = self.preferences.calls.follow_speaker;
         let mut people: Vec<&Participant> = call.participants.iter().collect();
-        people.sort_by_key(|p| !self.is_local(p));
-        let has_video = call
+        people.sort_by_key(|p| {
+            (
+                !self.is_local(p),
+                !(following && self.call_follow.picked() == Some(p.id.as_str())),
+            )
+        });
+        let cameras = call
             .video_tracks
             .iter()
-            .any(|t| t.source == VideoSource::Camera && self.call_tiles.contains_key(&t.id));
-        // A shared screen takes the width; people sit in a column beside it.
-        let side = presentation.is_some();
-        let size = match (people.len(), has_video) {
-            _ if side => (132., (SCREEN_HEIGHT - 2. * 8.) / SIDE_TILES as f32),
-            (_, false) => (132., 96.),
-            (0..=2, true) => (260., 162.),
-            (3..=4, true) => (200., 125.),
-            _ => (156., 98.),
+            .filter(|t| t.source == VideoSource::Camera && self.call_tiles.contains_key(&t.id))
+            .count();
+        let screen_track = if ended { None } else { self.shown_screen(call) };
+        let find = |user: &str, device: &str| {
+            people
+                .iter()
+                .copied()
+                .find(|p| p.user_id == user && p.device_id == device)
         };
-        let limit = if side { SIDE_TILES } else { MAX_TILES };
-        let overflow = people.len().saturating_sub(limit);
-        let shown = if overflow > 0 {
-            limit - 1
+        // What is large: a person you focused, the screen someone shares, the
+        // person being followed, or the grid. Your own choice is never overridden.
+        let main = if ended {
+            Main::Grid
+        } else if let Some(CallFocus::Person(user, device)) = &self.call_focus
+            && let Some(person) = find(user, device)
+        {
+            Main::Person(person, false)
+        } else if let Some(track) = screen_track {
+            Main::Screen(
+                track,
+                matches!(&self.call_focus, Some(CallFocus::Screen(id)) if id == &track.id),
+            )
+        } else if following
+            && let Some(person) = self
+                .call_follow
+                .picked()
+                .and_then(|id| people.iter().copied().find(|p| p.id == id))
+        {
+            Main::Person(person, true)
         } else {
-            people.len()
+            Main::Grid
         };
+        let expanded = !ended && (full || cameras >= 2 || screen_track.is_some());
         let ringing_direct =
             matches!(call.phase, CallPhase::Ringing { .. }) && call.kind == CallKind::Direct;
-        let focused = (!ended && !side)
-            .then(|| {
-                let key = self.call_focus.as_ref()?;
-                people
-                    .iter()
-                    .copied()
-                    .find(|p| (&p.user_id, &p.device_id) == (&key.0, &key.1))
-            })
-            .flatten();
-        let tiles = (!ended && !people.is_empty() && focused.is_some()).then(|| {
-            // One person large; everyone else in a strip beneath.
-            let focus = focused.expect("checked above");
-            v_flex()
-                .items_center()
+        let reconnecting_dim = call.phase == CallPhase::Reconnecting;
+        let strip_size = if expanded { (148., 92.) } else { (112., 70.) };
+        let strip = |cx: &mut Context<Self>, skip: Option<&Participant>| {
+            h_flex()
+                .flex_wrap()
+                .justify_center()
                 .gap(px(8.))
-                .px(px(16.))
-                .pt(px(12.))
-                .when(call.phase == CallPhase::Reconnecting, |col| {
-                    col.opacity(0.5)
-                })
-                .child(self.call_tile(focus, call, (480., 300.), cx))
-                .child(
-                    h_flex().flex_wrap().justify_center().gap(px(8.)).children(
-                        people
-                            .iter()
-                            .filter(|p| {
-                                (&p.user_id, &p.device_id) != (&focus.user_id, &focus.device_id)
-                            })
-                            .take(MAX_TILES)
-                            .map(|p| self.call_tile(p, call, (112., 70.), cx)),
-                    ),
-                )
-        });
-        let tiles = tiles.map(IntoElement::into_any_element).or_else(|| {
-            (!ended && !people.is_empty()).then(|| {
-                if side {
-                    v_flex().flex_none().gap(px(8.))
-                } else {
-                    h_flex()
-                        .flex_wrap()
-                        .justify_center()
-                        .gap(px(8.))
-                        .px(px(16.))
-                        .pt(px(12.))
-                }
-                .when(call.phase == CallPhase::Reconnecting, |row| {
-                    row.opacity(0.5)
-                })
                 .children(
                     people
                         .iter()
-                        .take(shown)
-                        .map(|p| self.call_tile(p, call, size, cx)),
+                        .filter(|p| {
+                            skip.is_none_or(|s| {
+                                (&p.user_id, &p.device_id) != (&s.user_id, &s.device_id)
+                            })
+                        })
+                        .take(MAX_TILES)
+                        .map(|p| self.call_tile(p, call, strip_size, cx))
+                        .collect::<Vec<_>>(),
                 )
-                // Beside someone else's screen, the status line says you share.
-                .children(
-                    (!side)
-                        .then(|| self.own_screen_tile(call, size, cx))
-                        .flatten(),
-                )
-                .when(ringing_direct, |row| {
-                    row.child(self.callee_tile(call, size, cx))
-                })
-                .when(overflow > 0, |row| {
-                    row.child(
-                        v_flex()
-                            .id("call-tile-more")
-                            .role(Role::Group)
-                            .aria_label(format!("{} more people", overflow + 1))
-                            .flex_none()
-                            .w(px(size.0))
-                            .h(px(size.1))
-                            .rounded(px(10.))
-                            .bg(cx.theme().secondary)
-                            .items_center()
-                            .justify_center()
-                            .text_size(px(15.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(muted_fg)
-                            .child(format!("+{}", overflow + 1)),
-                    )
-                })
+                .children(self.own_screen_tile(call, strip_size, cx))
                 .into_any_element()
-            })
-        });
+        };
+        // Announced to screen readers through the status line.
+        let mode = match &main {
+            Main::Person(person, true) => Some(format!(
+                "Following the speaker, showing {}",
+                self.person_name(person)
+            )),
+            Main::Person(person, false) => Some(format!("Focused on {}", self.person_name(person))),
+            Main::Screen(track, _) => Some(format!(
+                "Showing {}'s screen",
+                self.track_owner(call, track)
+            )),
+            Main::Grid if following && !ended => Some("Following the speaker".to_owned()),
+            Main::Grid => None,
+        };
+        let tiles: Option<AnyElement> = match &main {
+            _ if ended || people.is_empty() => None,
+            Main::Person(focus, _) => {
+                let strip_h = if people.len() > 1 {
+                    strip_size.1 + 8.
+                } else {
+                    0.
+                };
+                let mut height = if expanded {
+                    (stage_h - strip_h - 20.).max(160.)
+                } else {
+                    300.
+                };
+                let mut width = height * 1.6;
+                if width > avail_w {
+                    width = avail_w;
+                    height = width / 1.6;
+                }
+                Some(
+                    v_flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .px(px(16.))
+                        .pt(px(12.))
+                        .when(reconnecting_dim, |col| col.opacity(0.5))
+                        .child(self.call_tile(focus, call, (width, height), cx))
+                        .child(strip(cx, Some(focus)))
+                        .into_any_element(),
+                )
+            }
+            Main::Screen(track, focused) => {
+                let strip_h = if *focused { 0. } else { strip_size.1 + 8. };
+                let height = (stage_h - strip_h - 20.).max(200.);
+                self.screen_presentation(call, track, height, *focused, cx)
+                    .map(|screen| {
+                        v_flex()
+                            .gap(px(8.))
+                            .px(px(16.))
+                            .pt(px(12.))
+                            .when(reconnecting_dim, |col| col.opacity(0.5))
+                            .child(screen)
+                            .when(!*focused, |col| col.child(strip(cx, None)))
+                            .into_any_element()
+                    })
+            }
+            Main::Grid => {
+                let overflow = people.len().saturating_sub(MAX_TILES);
+                let shown = if overflow > 0 {
+                    MAX_TILES - 1
+                } else {
+                    people.len()
+                };
+                let own_screen = call
+                    .video_tracks
+                    .iter()
+                    .any(|t| t.local && t.source == VideoSource::Screen)
+                    as usize;
+                let count = shown + own_screen + ringing_direct as usize + (overflow > 0) as usize;
+                let size = if expanded {
+                    layout::fit_grid(count, avail_w - 32., stage_h - 24.)
+                } else {
+                    match (people.len(), cameras > 0) {
+                        (_, false) => (132., 96.),
+                        (0..=2, true) => (260., 162.),
+                        (3..=4, true) => (200., 125.),
+                        _ => (156., 98.),
+                    }
+                };
+                let row = h_flex()
+                    .flex_wrap()
+                    .justify_center()
+                    .gap(px(8.))
+                    .px(px(16.))
+                    .pt(px(12.))
+                    .when(reconnecting_dim, |row| row.opacity(0.5))
+                    .children(
+                        people
+                            .iter()
+                            .take(shown)
+                            .map(|p| self.call_tile(p, call, size, cx))
+                            .collect::<Vec<_>>(),
+                    )
+                    .children(self.own_screen_tile(call, size, cx))
+                    .when(ringing_direct, |row| {
+                        row.child(self.callee_tile(call, size, cx))
+                    })
+                    .when(overflow > 0, |row| {
+                        row.child(
+                            v_flex()
+                                .id("call-tile-more")
+                                .role(Role::Group)
+                                .aria_label(format!("{} more people", overflow + 1))
+                                .flex_none()
+                                .w(px(size.0))
+                                .h(px(size.1))
+                                .rounded(px(10.))
+                                .bg(cx.theme().secondary)
+                                .items_center()
+                                .justify_center()
+                                .text_size(px(15.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(muted_fg)
+                                .child(format!("+{}", overflow + 1)),
+                        )
+                    });
+                Some(if expanded {
+                    v_flex()
+                        .h(px(stage_h))
+                        .justify_center()
+                        .child(row)
+                        .into_any_element()
+                } else {
+                    row.into_any_element()
+                })
+            }
+        };
         let notice = (!ended)
             .then(|| {
                 call.events
@@ -1005,9 +1492,19 @@ impl MatrixApp {
         let status = v_flex()
             .id("call-status")
             .role(Role::Status)
-            .aria_label(match &detail {
-                Some(detail) => format!("{title}, {detail}"),
-                None => title.clone(),
+            .aria_label({
+                let mut spoken = match &detail {
+                    Some(detail) => format!("{title}, {detail}"),
+                    None => title.clone(),
+                };
+                if let Some(mode) = &mode {
+                    spoken.push_str(". ");
+                    spoken.push_str(mode);
+                }
+                if full {
+                    spoken.push_str(". Full screen");
+                }
+                spoken
             })
             .flex_1()
             .min_w_0()
@@ -1188,15 +1685,69 @@ impl MatrixApp {
                             this.call_result(result, cx)
                         })),
                 )
+                .when(
+                    call.participants
+                        .iter()
+                        .filter(|p| !self.is_local(p))
+                        .count()
+                        >= 2,
+                    |row| {
+                        row.child(
+                            Button::new("call-follow")
+                                .outline()
+                                .size(px(32.))
+                                .rounded(px(16.))
+                                .icon(Icon::new(IconName::AudioLines).size(px(15.)))
+                                .selected(following)
+                                .accessibility_label(if following {
+                                    "Stop following the speaker"
+                                } else {
+                                    "Follow the speaker"
+                                })
+                                .tooltip(if following {
+                                    "Stop Following the Speaker"
+                                } else {
+                                    "Follow the Speaker"
+                                })
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    let on = !this.preferences.calls.follow_speaker;
+                                    this.preferences.calls.follow_speaker = on;
+                                    if !on {
+                                        this.call_follow.reset();
+                                    }
+                                    this.save_preferences(window, cx);
+                                    cx.notify();
+                                })),
+                        )
+                    },
+                )
                 .child(self.call_devices_menu(call, cx))
                 .child(
                     Button::new("call-full-screen")
                         .outline()
                         .size(px(32.))
                         .rounded(px(16.))
-                        .icon(Icon::new(IconName::Maximize).size(px(15.)))
-                        .accessibility_label("Full screen")
-                        .tooltip(hint("Full Screen", Action::ToggleCallFullScreen))
+                        .icon(
+                            Icon::new(if full {
+                                IconName::Minimize
+                            } else {
+                                IconName::Maximize
+                            })
+                            .size(px(15.)),
+                        )
+                        .accessibility_label(if full {
+                            "Exit full screen"
+                        } else {
+                            "Full screen"
+                        })
+                        .tooltip(hint(
+                            if full {
+                                "Exit Full Screen"
+                            } else {
+                                "Full Screen"
+                            },
+                            Action::ToggleCallFullScreen,
+                        ))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.toggle_call_full_screen(window, cx)
                         })),
@@ -1232,6 +1783,67 @@ impl MatrixApp {
                         })),
                 )
         };
+        let bar = h_flex()
+            .h(px(52.))
+            .px(px(16.))
+            .gap(px(12.))
+            .child(status)
+            .child(controls);
+        if full {
+            // The call fills the window; the bar floats and fades after a pause.
+            let pinned = self.call_controls_pinned || self.call_menu.is_some();
+            let visible = self
+                .call_controls
+                .visible(std::time::Instant::now(), pinned);
+            let floating = div()
+                .absolute()
+                .bottom(px(20.))
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .child(
+                    bar.id("call-controls")
+                        .rounded(px(26.))
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .bg(cx.theme().popover)
+                        .shadow_lg()
+                        .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                            this.call_controls_pinned = *hovered;
+                            this.poke_controls(true, cx);
+                        })),
+                );
+            return div()
+                .id("call-stage")
+                .role(Role::Region)
+                .aria_label("Call, full screen")
+                .relative()
+                .size_full()
+                .bg(cx.theme().background)
+                .overflow_hidden()
+                .on_mouse_move(
+                    cx.listener(|this, _: &MouseMoveEvent, _, cx| this.poke_controls(false, cx)),
+                )
+                .on_key_down(
+                    cx.listener(|this, _: &KeyDownEvent, _, cx| this.poke_controls(false, cx)),
+                )
+                .child(
+                    v_flex()
+                        .size_full()
+                        .justify_center()
+                        .pb(px(CONTROLS_ROOM))
+                        .children(tiles),
+                )
+                .children(notice)
+                .child(motion::fade_toggle(
+                    floating,
+                    SharedString::from(format!("call-controls-{visible}")),
+                    visible,
+                    self.snapshot.reduce_motion,
+                ))
+                .into_any_element();
+        }
         motion::rise(
             v_flex()
                 .id("call-stage")
@@ -1240,29 +1852,43 @@ impl MatrixApp {
                 .flex_none()
                 .border_b_1()
                 .border_color(cx.theme().border)
-                .map(|stage| match presentation {
-                    Some(screen) => stage.child(
-                        h_flex()
-                            .px(px(16.))
-                            .pt(px(12.))
-                            .gap(px(8.))
-                            .child(screen)
-                            .children(tiles),
-                    ),
-                    None => stage.children(tiles),
-                })
+                .children(tiles)
                 .children(notice)
-                .child(
-                    h_flex()
-                        .h(px(52.))
-                        .px(px(16.))
-                        .gap(px(12.))
-                        .child(status)
-                        .child(controls),
-                ),
+                .child(bar),
             "call-stage-motion",
             self.snapshot.reduce_motion,
         )
+    }
+
+    /// Shows the full-screen controls and restarts their hide timer. `force`
+    /// restarts it even for a tiny move (used when the pointer leaves the bar
+    /// or a menu closes).
+    pub(crate) fn poke_controls(&mut self, force: bool, cx: &mut Context<Self>) {
+        if !self.call_fills_window() {
+            return;
+        }
+        let now = std::time::Instant::now();
+        let pinned = self.call_controls_pinned || self.call_menu.is_some();
+        let was_visible = self.call_controls.visible(now, pinned);
+        if self.call_controls.activity(now, force) {
+            self.call_controls_timer = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(CONTROLS_IDLE + std::time::Duration::from_millis(50))
+                    .await;
+                let _ = this.update(cx, |_, cx| cx.notify());
+            }));
+        }
+        if !was_visible || force {
+            cx.notify();
+        }
+    }
+
+    /// The call alone, filling the window. Used while the call is full screen.
+    pub(crate) fn call_full_screen_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        match self.live_call() {
+            Some(call) => self.call_stage(call, cx),
+            None => div().size_full().into_any_element(),
+        }
     }
 
     fn call_devices_menu(&self, call: &CallState, cx: &mut Context<Self>) -> AnyElement {
@@ -1678,6 +2304,10 @@ impl MatrixApp {
             ];
             return;
         }
+        let group = matches!(
+            flag,
+            "--preview-call-group" | "--preview-call-video" | "--preview-call-fullscreen"
+        );
         let direct = flag == "--preview-call-ringing";
         let room = if direct { "alex" } else { "general" };
         let sharing = flag == "--preview-call-sharing";
@@ -1694,7 +2324,7 @@ impl MatrixApp {
                 Some(false),
                 true,
             ));
-            if flag == "--preview-call-group" {
+            if group {
                 for (user, name) in [
                     ("@kai:preview.invalid", "Kai"),
                     ("@mira:preview.invalid", "Mira"),
@@ -1702,6 +2332,29 @@ impl MatrixApp {
                     participants.push(person(user, Some(name), Some(false), false));
                 }
             }
+        }
+        // Cameras on for the video and full-screen previews.
+        let cameras_on = matches!(flag, "--preview-call-video" | "--preview-call-fullscreen");
+        if cameras_on {
+            for p in &mut participants {
+                p.video = Some(true);
+            }
+        }
+        if flag == "--preview-call-volume" {
+            for p in &mut participants {
+                match p.user_id.as_str() {
+                    "@alex:preview.invalid" => {
+                        let _ = p.playback.set_volume(0.6);
+                    }
+                    "@sam:preview.invalid" => p.playback.muted = true,
+                    _ => {}
+                }
+            }
+            // Show the menu open, as a capture of the volume controls.
+            self.call_menu = Some("@alex:preview.invalid:PREVIEW".into());
+        }
+        if flag == "--preview-call-fullscreen" {
+            self.call_full_screen = true;
         }
         let device = |id: &str, name: &str| CallDevice {
             id: id.into(),
@@ -1749,6 +2402,22 @@ impl MatrixApp {
             if let Some(frame) = preview_screen(1600, 1000) {
                 self.preview_frames
                     .insert(id.into(), LatestFrame::fixed(frame));
+            }
+        }
+        if cameras_on {
+            for (index, p) in participants.iter().enumerate() {
+                let local = p.user_id == self.snapshot.user_id;
+                let id = format!("preview-camera-{index}");
+                video_tracks.push(CallVideoTrack {
+                    id: id.clone(),
+                    user_id: p.user_id.clone(),
+                    device_id: p.device_id.clone(),
+                    local,
+                    source: VideoSource::Camera,
+                });
+                if let Some(frame) = preview_camera(1280, 720, index as u32) {
+                    self.preview_frames.insert(id, LatestFrame::fixed(frame));
+                }
             }
         }
         self.snapshot.call = Some(CallState {
@@ -1810,6 +2479,44 @@ impl MatrixApp {
         self.navigation.selected_room = Some(room.into());
         self.snapshot.selected_room = room.into();
     }
+}
+
+/// A generated stand-in for a camera: a soft gradient with a head and
+/// shoulders silhouette. Preview captures only.
+fn preview_camera(width: u32, height: u32, seed: u32) -> Option<twayblade_core::calls::VideoFrame> {
+    let tints = [
+        (70u32, 110u32, 150u32),
+        (120, 90, 140),
+        (90, 130, 110),
+        (150, 110, 90),
+    ];
+    let (tr, tg, tb) = tints[seed as usize % tints.len()];
+    let mut bgra = vec![0u8; width as usize * height as usize * 4];
+    let (cx, cy) = (width as f32 / 2., height as f32 * 0.42);
+    for y in 0..height {
+        for x in 0..width {
+            let fade = 0.55 + 0.45 * (y as f32 / height as f32);
+            let (dx, dy) = (x as f32 - cx, y as f32 - cy);
+            let head = (dx * dx + dy * dy).sqrt() < height as f32 * 0.17;
+            let (sx, sy) = (
+                dx / (width as f32 * 0.24),
+                (y as f32 - height as f32 * 0.98) / (height as f32 * 0.42),
+            );
+            let body = sx * sx + sy * sy < 1.;
+            let (r, g, b) = if head || body {
+                (225u32, 205u32, 190u32)
+            } else {
+                (
+                    (tr as f32 * fade) as u32,
+                    (tg as f32 * fade) as u32,
+                    (tb as f32 * fade) as u32,
+                )
+            };
+            let at = (y as usize * width as usize + x as usize) * 4;
+            bgra[at..at + 4].copy_from_slice(&[b as u8, g as u8, r as u8, 255]);
+        }
+    }
+    twayblade_core::calls::VideoFrame::new(width, height, 0, 0, bgra).ok()
 }
 
 /// A generated stand-in for a shared window: title bar, sidebar, text lines

@@ -13,6 +13,7 @@ mod timeline;
 // Secondary windows, overlays and shared pieces.
 pub(crate) mod attachments;
 pub(crate) mod avatars;
+pub(crate) mod call_layout;
 pub(crate) mod calls;
 pub(crate) mod editing;
 pub(crate) mod emoji;
@@ -227,7 +228,7 @@ impl Render for MatrixApp {
         if let Some(viewer) = &mut self.viewer {
             viewer.clamp_pan(window);
         }
-        self.sync_call_views(cx);
+        self.sync_call_views(window, cx);
         self.sync_ringtone();
         self.sync_room_loading(cx);
         if self.security_open {
@@ -238,6 +239,8 @@ impl Render for MatrixApp {
             self.session_recovery_view(cx)
         } else if self.snapshot.user_id.is_empty() {
             self.sign_in_view(cx)
+        } else if self.call_fills_window() {
+            self.call_full_screen_view(cx)
         } else {
             let reduce = self.snapshot.reduce_motion;
             let panel = if self.management.is_some() {
@@ -399,8 +402,8 @@ impl Render for MatrixApp {
                 }),
             )
             .on_action(cx.listener(|this, _: &CloseProfile, window, cx| {
-                if window.is_fullscreen() && this.live_call().is_some() {
-                    window.toggle_fullscreen();
+                if this.call_fills_window() {
+                    this.toggle_call_full_screen(window, cx);
                 } else if this.call_focus.is_some() && this.live_call().is_some() {
                     this.call_focus = None;
                     cx.notify();

@@ -16,6 +16,14 @@ pub(super) struct Preferences {
     pub chat: Chat,
     pub notifications: DeviceNotifications,
     pub updates: twayblade_platform::updates::Preferences,
+    pub calls: Calls,
+}
+/// Call view choices that carry over between calls.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct Calls {
+    /// Show whoever is talking, once they have spoken for about a second.
+    pub follow_speaker: bool,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -25,6 +33,7 @@ impl Default for Preferences {
             chat: Default::default(),
             notifications: Default::default(),
             updates: Default::default(),
+            calls: Default::default(),
         }
     }
 }
