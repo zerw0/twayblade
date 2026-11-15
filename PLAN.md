@@ -366,6 +366,18 @@ and release-page button. Verified by compilation, strict Clippy and offline app
 tests only; no capture, Element comparison or physical Mac review. A launch-time
 notice outside Settings is not implemented.
 
+Emoji picker clipping (2026-11-15, `fix/emoji-clipping`): newer emoji with art
+across the whole glyph box (melting face, hugging face, shaking face, star-struck)
+were cut off in the picker. Cause: GPUI Kit's `Button` clips its content to its
+padded interior (about 20 px of a 34 px cell); it is not a rasterizer or atlas
+problem (CoreText's reported bounds and the drawn bitmap were measured and the
+bounds are never too small). The picker now draws the system emoji in an
+unclipped sibling above the button, which keeps hover, selection, focus and the
+accessibility label. Not fixable here: the saluting face is cut at the right in
+the system's own emoji data on this macOS (AppKit text draws it the same way).
+Verified by captures, an offline click test and compilation; reaction chips and
+other emoji in buttons were not changed. Linux and Windows emoji fonts unchecked.
+
 ## Workspace
 
 ```text

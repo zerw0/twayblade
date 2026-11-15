@@ -96,6 +96,32 @@ fn tone_variants(emoji: &'static emojis::Emoji) -> Option<Vec<&'static emojis::E
         .collect();
     (variants.len() == 6).then_some(variants)
 }
+/// A button with an emoji on it.
+///
+/// A `Button` clips its content to its padded interior (a 34 px button keeps
+/// about 20 px), and some emoji draw art across their whole glyph box: the melting
+/// face's drips, the hugging face's hands, the shaking face's motion lines.
+/// Drawn inside the button those are cut off. So the system emoji is drawn by
+/// a sibling stacked on top, which nothing clips. It takes no pointer input,
+/// so the button underneath still handles hover, press, focus and the label.
+fn glyph_button(button: Button, extent: f32, glyph: &str, size: f32) -> AnyElement {
+    div()
+        .relative()
+        .flex_none()
+        .size(px(extent))
+        .child(button)
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(div().text_size(px(size)).child(glyph.to_owned())),
+        )
+        .into_any_element()
+}
+
 fn grid(query: &str, preferences: &Preferences) -> Grid {
     let mut grid = Grid {
         emojis: Vec::new(),
@@ -598,21 +624,25 @@ impl MatrixApp {
                             .children(cells.clone().map(|index| {
                                 let emoji = grid.emojis[index];
                                 let tones = tone_variants(emoji).is_some();
-                                Button::new(SharedString::from(format!("emoji-{index}")))
-                                    .ghost()
-                                    .size(px(CELL))
-                                    .rounded(px(6.))
-                                    .selected(selected == index)
-                                    .accessibility_label(format!("Insert {}", emoji.name()))
-                                    .tooltip(if tones {
-                                        format!("{} · choose a skin tone", emoji.name())
-                                    } else {
-                                        emoji.name().to_owned()
-                                    })
-                                    .child(div().text_size(px(20.)).child(emoji.as_str()))
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.pick_emoji(index, window, cx)
-                                    }))
+                                glyph_button(
+                                    Button::new(SharedString::from(format!("emoji-{index}")))
+                                        .ghost()
+                                        .size(px(CELL))
+                                        .rounded(px(6.))
+                                        .selected(selected == index)
+                                        .accessibility_label(format!("Insert {}", emoji.name()))
+                                        .tooltip(if tones {
+                                            format!("{} · choose a skin tone", emoji.name())
+                                        } else {
+                                            emoji.name().to_owned()
+                                        })
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.pick_emoji(index, window, cx)
+                                        })),
+                                    CELL,
+                                    emoji.as_str(),
+                                    20.,
+                                )
                             }))
                             .into_any_element(),
                     })
@@ -661,21 +691,25 @@ impl MatrixApp {
                     )
                     .child(h_flex().justify_between().children(
                         variants.into_iter().enumerate().map(|(tone, variant)| {
-                            Button::new(SharedString::from(format!("emoji-tone-{tone}")))
-                                .ghost()
-                                .size(px(36.))
-                                .rounded(px(7.))
-                                .selected(tone == chosen)
-                                .accessibility_label(format!(
-                                    "{}, {}",
-                                    variant.name(),
-                                    TONE_NAMES[tone]
-                                ))
-                                .tooltip(TONE_NAMES[tone])
-                                .child(div().text_size(px(22.)).child(variant.as_str()))
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.choose_tone(tone, window, cx)
-                                }))
+                            glyph_button(
+                                Button::new(SharedString::from(format!("emoji-tone-{tone}")))
+                                    .ghost()
+                                    .size(px(36.))
+                                    .rounded(px(7.))
+                                    .selected(tone == chosen)
+                                    .accessibility_label(format!(
+                                        "{}, {}",
+                                        variant.name(),
+                                        TONE_NAMES[tone]
+                                    ))
+                                    .tooltip(TONE_NAMES[tone])
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.choose_tone(tone, window, cx)
+                                    })),
+                                36.,
+                                variant.as_str(),
+                                22.,
+                            )
                         }),
                     ))
                     .test_support(),

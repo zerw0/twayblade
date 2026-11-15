@@ -785,6 +785,37 @@ fn emoji_picker_inserts_at_unicode_cursor_and_enter_never_sends(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
+fn emoji_cell_click_reaches_the_button_under_its_glyph(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("emoji-open", cx);
+        window.within("emoji-search-panel").click("input-state", cx);
+        window.input("crab", cx);
+        // The glyph is drawn by a sibling above the button; it must not block the click.
+        window.click("emoji-0", cx);
+        assert_eq!(
+            window
+                .within("composer-panel")
+                .find_by_label("Message")
+                .value(),
+            Some("🦀")
+        );
+    })
+    .expect("click an emoji cell");
+    cx.update(|cx| {
+        assert_eq!(
+            app.read(cx)
+                .emoji_preferences
+                .recents
+                .first()
+                .map(String::as_str),
+            Some("🦀")
+        );
+    });
+}
+
+#[gpui_kit::test]
 fn shortcode_skin_tone_and_reaction_share_the_picker(cx: &mut TestAppContext) {
     use gpui_kit::test::TestEventExt;
     let (window, app) = preview_window(cx);
