@@ -350,7 +350,68 @@ mod tests {
                 .whoami()
                 .await
                 .expect("refreshed session accepted by Synapse");
+            room_list_survives_token_refreshes(&account).await;
         }
+    }
+
+    /// #67: the room list keeps running while the 5 s access tokens rotate
+    /// underneath a live sync, and the session never leaves Active.
+    async fn room_list_survives_token_refreshes(account: &Account) {
+        use crate::rooms::SyncStatus;
+        use futures_util::StreamExt;
+        let (latest, mut snapshots) =
+            tokio::sync::watch::channel::<Option<(SyncStatus, Vec<String>)>>(None);
+        let drain = account.clone();
+        let list = tokio::spawn(async move {
+            let stream = drain.room_updates();
+            tokio::pin!(stream);
+            while let Some(snapshot) = stream.next().await {
+                let rooms = snapshot.rooms.iter().map(|room| room.id.clone()).collect();
+                latest.send_replace(Some((snapshot.status, rooms)));
+            }
+        });
+        let mut wait_for = async |seconds: u64, done: &dyn Fn(SyncStatus, &[String]) -> bool| {
+            tokio::time::timeout(std::time::Duration::from_secs(seconds), async {
+                loop {
+                    if let Some((status, rooms)) = snapshots.borrow_and_update().clone()
+                        && done(status, &rooms)
+                    {
+                        return;
+                    }
+                    snapshots.changed().await.expect("room list stream ended");
+                }
+            })
+            .await
+            .expect("room list state reached")
+        };
+        wait_for(30, &|status, _| status == SyncStatus::Connected).await;
+        for _ in 0..2 {
+            // Outlive the token; the sync's long poll may hold one request
+            // open meanwhile, so the next request is what triggers a refresh.
+            let before = account.client.access_token().expect("token");
+            tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+            let room = account
+                .client
+                .create_room(matrix_sdk::ruma::api::client::room::create_room::v3::Request::new())
+                .await
+                .expect("room after the token expired");
+            assert!(
+                before != account.client.access_token().expect("token"),
+                "the expired token was refreshed"
+            );
+            let id = room.room_id().to_string();
+            wait_for(45, &|status, rooms| {
+                status == SyncStatus::Connected && rooms.contains(&id)
+            })
+            .await;
+        }
+        assert_eq!(
+            *account.session_state().borrow(),
+            crate::auth::SessionState::Active
+        );
+        assert!(!list.is_finished(), "the room list ended during refreshes");
+        list.abort();
+        let _ = list.await;
     }
     #[tokio::test]
     #[ignore = "requires isolated MAS + Synapse and unlocked macOS Keychain"]

@@ -512,3 +512,77 @@ async fn room_open_before_first_sync_and_during_sync_restart() {
         "sync test logout",
     );
 }
+
+/// #67: a long outage on every route (what sleep or a network change looks
+/// like to the client) must not end the room list. A room created meanwhile
+/// on another device appears once the network is back.
+#[tokio::test]
+#[ignore = "requires isolated TLS Synapse; run.sh room-open"]
+async fn room_list_recovers_after_a_long_network_loss() {
+    use crate::rooms::SyncStatus;
+    let (root, data, cert) = fixture().await;
+    let work = root.join(format!("room-open-outage-{}", Uuid::new_v4()));
+    let proxy = Proxy::start(&root, work.join("proxy")).await;
+    // The other device reaches the server through its own, healthy proxy.
+    let other_proxy = Proxy::start(&root, work.join("other-proxy")).await;
+    let main = client(&proxy, &data, &cert, &work.join("store"), true).await;
+    let other = client(&other_proxy, &data, &cert, &work.join("other"), true).await;
+    let account = account(main, work.join("store"));
+    let (latest, mut snapshots) =
+        tokio::sync::watch::channel::<Option<(SyncStatus, Vec<String>)>>(None);
+    let drain = account.clone();
+    let list = tokio::spawn(async move {
+        let stream = drain.room_updates();
+        tokio::pin!(stream);
+        while let Some(snapshot) = stream.next().await {
+            let rooms = snapshot.rooms.iter().map(|room| room.id.clone()).collect();
+            latest.send_replace(Some((snapshot.status, rooms)));
+        }
+    });
+    let mut wait_for =
+        async |stage: &'static str, seconds: u64, done: &dyn Fn(SyncStatus, &[String]) -> bool| {
+            checked(
+                tokio::time::timeout(Duration::from_secs(seconds), async {
+                    loop {
+                        if let Some((status, rooms)) = snapshots.borrow_and_update().clone()
+                            && done(status, &rooms)
+                        {
+                            return;
+                        }
+                        checked(snapshots.changed().await, "room list stream ended");
+                    }
+                })
+                .await,
+                stage,
+            )
+        };
+    wait_for("first sync", 30, &|status, _| {
+        status == SyncStatus::Connected
+    })
+    .await;
+
+    proxy.fault("drop", "all").await;
+    wait_for("offline is reported", 90, &|status, _| {
+        status == SyncStatus::Offline
+    })
+    .await;
+    let room = checked(
+        other.create_room(create_room::v3::Request::new()).await,
+        "room created on the other device",
+    );
+    let id = room.room_id().to_string();
+    // Stay away long enough for the SDK to back off, as after a sleep.
+    tokio::time::sleep(Duration::from_secs(45)).await;
+    assert!(!list.is_finished(), "the room list ended during the outage");
+
+    proxy.fault("normal", "all").await;
+    wait_for("the list catches up", 120, &|status, rooms| {
+        status == SyncStatus::Connected && rooms.contains(&id)
+    })
+    .await;
+    assert!(!list.is_finished());
+    list.abort();
+    let _ = list.await;
+    checked(account.client.matrix_auth().logout().await, "outage logout");
+    checked(other.matrix_auth().logout().await, "other device logout");
+}

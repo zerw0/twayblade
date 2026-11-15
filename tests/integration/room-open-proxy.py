@@ -2,7 +2,7 @@
 """Loopback-only TLS fault proxy for generated Synapse accounts. No HTTP logging.
 
 The control file contains a mode (normal/transient/limited/stall/drop) and an optional
-route (encryption/sync). Stats contain counts only, never paths or payloads.
+route (encryption/sync, or all for every request, as when the network goes away). Stats contain counts only, never paths or payloads.
 """
 import http.server
 import json
@@ -49,7 +49,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             control = plan()
             if route in stats:
                 stats[route] += 1
-            mode = control.get("mode", "normal") if route == control.get("route", "encryption") else "normal"
+            target = control.get("route", "encryption")
+            mode = control.get("mode", "normal") if target in (route, "all") else "normal"
             if mode != "normal":
                 stats["faults"] += 1
             (work / "stats.json").write_text(json.dumps(stats))
