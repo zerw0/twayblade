@@ -21,7 +21,9 @@ gpui_kit::actions!(
         LeaveCall,
         ToggleCallFullScreen,
         AnswerCall,
-        DeclineCall
+        DeclineCall,
+        FocusNextArea,
+        FocusPreviousArea
     ]
 );
 
@@ -140,6 +142,8 @@ pub enum ShortcutAction {
     ToggleCallFullScreen,
     AnswerCall,
     DeclineCall,
+    FocusNextArea,
+    FocusPreviousArea,
 }
 impl ShortcutAction {
     fn binding(self, keys: &'static str, context: Option<&str>) -> KeyBinding {
@@ -184,6 +188,8 @@ impl ShortcutAction {
             Self::ToggleCallFullScreen => KeyBinding::new(keys, ToggleCallFullScreen, context),
             Self::AnswerCall => KeyBinding::new(keys, AnswerCall, context),
             Self::DeclineCall => KeyBinding::new(keys, DeclineCall, context),
+            Self::FocusNextArea => KeyBinding::new(keys, FocusNextArea, context),
+            Self::FocusPreviousArea => KeyBinding::new(keys, FocusPreviousArea, context),
         }
     }
 }
@@ -363,6 +369,26 @@ pub const SHORTCUTS: &[Shortcut] = &[
             other: "ctrl-k",
         },
         action: Some(ShortcutAction::FindConversation),
+        context: Some("Twayblade"),
+    },
+    Shortcut {
+        area: Area::Navigation,
+        label: "Move to next area",
+        keys: KeyChord {
+            mac: "f6",
+            other: "f6",
+        },
+        action: Some(ShortcutAction::FocusNextArea),
+        context: Some("Twayblade"),
+    },
+    Shortcut {
+        area: Area::Navigation,
+        label: "Move to previous area",
+        keys: KeyChord {
+            mac: "shift-f6",
+            other: "shift-f6",
+        },
+        action: Some(ShortcutAction::FocusPreviousArea),
         context: Some("Twayblade"),
     },
     Shortcut {

@@ -402,6 +402,18 @@ pub(super) struct MatrixApp {
     pub viewer_request: u64,
     pub reveal_image: Option<String>,
     pub image_focus: std::cell::RefCell<HashMap<String, FocusHandle>>,
+    /// The message holding each timeline's one tab stop (main, thread); None
+    /// follows the latest. See `ui::focus`.
+    pub message_cursor: [Option<String>; 2],
+    /// Whether focus is on that message or its controls, refreshed each frame.
+    pub message_cursor_focused: [bool; 2],
+    /// Containers F6 moves between; they are never tab stops themselves.
+    pub sidebar_area: FocusHandle,
+    pub timeline_area: FocusHandle,
+    pub thread_area: FocusHandle,
+    pub sidebar_scroll: ScrollHandle,
+    /// Scroll the sidebar to the Archive on the next frame.
+    pub(super) reveal_archive: bool,
     pub invite_pending: HashSet<String>,
     pub profile: Option<ProfilePage>,
     /// Room details panel; the profile view replaces it while open.
@@ -779,6 +791,13 @@ impl MatrixApp {
             viewer_request: 0,
             reveal_image: None,
             image_focus: std::cell::RefCell::new(HashMap::new()),
+            message_cursor: [None, None],
+            message_cursor_focused: [false, false],
+            sidebar_area: cx.focus_handle(),
+            timeline_area: cx.focus_handle(),
+            thread_area: cx.focus_handle(),
+            sidebar_scroll: ScrollHandle::new(),
+            reveal_archive: false,
             invite_pending: HashSet::new(),
             profile: None,
             details_open: false,
@@ -1395,6 +1414,25 @@ impl MatrixApp {
             self.select_space(None, window, cx);
         }
         self.collapsed_sections.remove("archive");
+        self.reveal_archive = true;
+        // Keyboard and VoiceOver users land in the Archive too; the menu leaves
+        // focus where its item moved it.
+        let first = self
+            .snapshot
+            .rooms
+            .iter()
+            .find(|room| {
+                room.archived
+                    && !room.is_space
+                    && self.navigation.room_visible(&room.id, &self.snapshot)
+            })
+            .map(|room| room.id.clone());
+        if let Some(room) = first
+            && self.search.read(cx).value().is_empty()
+        {
+            let handle = self.room_focus(&room, cx);
+            window.focus(&handle, cx);
+        }
         cx.notify();
     }
 

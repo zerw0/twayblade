@@ -484,16 +484,27 @@ impl MatrixApp {
                 )
             })
             .child(
-                MessageScroller::new("thread-messages", t.scroller.clone(), move |ix, _, cx| {
-                    weak.update(cx, |this, cx| {
-                        let t = this.thread.as_ref().expect("thread scroller");
-                        this.message_group_from(ix, &t.messages, &t.groups, true, cx)
-                    })
-                    .unwrap_or_else(|_| div().into_any_element())
-                })
-                .flex_1()
-                .min_h_0()
-                .with_row_style(StyleRefinement::default().px_0().pb_0()),
+                v_flex()
+                    .id("thread-area")
+                    .track_focus(&self.thread_area)
+                    .flex_1()
+                    .min_h_0()
+                    .child(
+                        MessageScroller::new(
+                            "thread-messages",
+                            t.scroller.clone(),
+                            move |ix, _, cx| {
+                                weak.update(cx, |this, cx| {
+                                    let t = this.thread.as_ref().expect("thread scroller");
+                                    this.message_group_from(ix, &t.messages, &t.groups, true, cx)
+                                })
+                                .unwrap_or_else(|_| div().into_any_element())
+                            },
+                        )
+                        .flex_1()
+                        .min_h_0()
+                        .with_row_style(StyleRefinement::default().px_0().pb_0()),
+                    ),
             )
             .when(!t.status.is_empty(), |v| {
                 v.child(

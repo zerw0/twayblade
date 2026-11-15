@@ -256,6 +256,14 @@ impl MatrixApp {
             .with_row_style(StyleRefinement::default().px_0().pb_0())
             .into_any_element()
         };
+        // The messages area F6 lands in; never a Tab stop itself.
+        let body = v_flex()
+            .id("timeline-area")
+            .track_focus(&self.timeline_area)
+            .flex_1()
+            .min_h_0()
+            .child(body)
+            .into_any_element();
 
         let timeline_notice =
             if load == RoomLoad::Loading || (self.groups.is_empty() && load != RoomLoad::Ready) {

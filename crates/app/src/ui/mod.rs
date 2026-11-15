@@ -19,6 +19,7 @@ pub(crate) mod call_layout;
 pub(crate) mod calls;
 pub(crate) mod editing;
 pub(crate) mod emoji;
+pub(crate) mod focus;
 pub(crate) mod keyboard;
 pub(crate) mod motion;
 pub(crate) mod security;
@@ -233,6 +234,7 @@ impl Render for MatrixApp {
         self.sync_call_views(window, cx);
         self.sync_ringtone();
         self.sync_room_loading(cx);
+        self.sync_message_cursors(window, cx);
         if self.security_open {
             self.security_open = false;
             self.open_settings(crate::ui::settings::Section::Security, cx);
@@ -375,6 +377,8 @@ impl Render for MatrixApp {
                 )
                 .into_any_element()
         };
+        // The sidebar applied the Archive scroll while building `content`.
+        self.reveal_archive = false;
         let overlay = self.viewer.as_ref().map(|_| self.viewer_view(window, cx));
         let workspace = !self.security_open
             && !self.snapshot.user_id.is_empty()
@@ -412,6 +416,16 @@ impl Render for MatrixApp {
                     this.open_settings(crate::ui::settings::Section::Keyboard, cx)
                 }),
             )
+            .on_action(
+                cx.listener(|this, _: &crate::shortcuts::FocusNextArea, window, cx| {
+                    this.focus_next_area(true, window, cx)
+                }),
+            )
+            .on_action(cx.listener(
+                |this, _: &crate::shortcuts::FocusPreviousArea, window, cx| {
+                    this.focus_next_area(false, window, cx)
+                },
+            ))
             .on_action(cx.listener(|this, _: &FindConversation, window, cx| {
                 this.search.update(cx, |state, cx| state.focus(window, cx))
             }))

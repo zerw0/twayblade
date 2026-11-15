@@ -2648,6 +2648,11 @@ fn archive_moves_a_room_out_of_its_section_and_lists_it_from_home(cx: &mut TestA
         // listing a room that lives in a space.
         app.update(cx, |app, cx| app.show_archive(window, cx));
         window.render_frame(cx);
+        let row = app.update(cx, |app, cx| app.room_focus("announcements", cx));
+        assert!(
+            row.is_focused(window),
+            "keyboard focus lands on the first archived room"
+        );
         let app_state = app.read(cx);
         assert!(app_state.navigation.selected_space.is_none());
         assert!(!app_state.collapsed_sections.contains("archive"));
@@ -2875,4 +2880,143 @@ fn bell_opens_notifications_and_a_row_opens_its_room(cx: &mut TestAppContext) {
             Some(target.as_str())
         );
     });
+}
+
+#[gpui_kit::test]
+fn f6_moves_between_areas_and_each_timeline_is_one_tab_stop(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestEventExt;
+    let (window, app) = preview_window(cx);
+    cx.update(|cx| cx.bind_keys(crate::shortcuts::bindings()));
+    cx.update_window(window, |_, window, cx| {
+        let press = |key: &str, window: &mut gpui_kit::Window, cx: &mut gpui_kit::App| {
+            window.key_down(key, false, cx);
+            window.render_frame(cx);
+        };
+        window.render_frame(cx);
+        let (room, ids) = {
+            let app = app.read(cx);
+            let ids: Vec<String> = app.snapshot.messages.iter().map(|m| m.id.clone()).collect();
+            (
+                app.navigation.selected_room.clone().expect("open room"),
+                ids,
+            )
+        };
+        let row = |id: &str, cx: &mut gpui_kit::App| {
+            app.update(cx, |app, cx| app.message_focus(false, id, cx))
+        };
+        app.update(cx, |app, cx| app.focus.focus(window, cx));
+        window.render_frame(cx);
+
+        // F6 from the title bar: the open conversation's row in the sidebar.
+        press("f6", window, cx);
+        let room_row = app.update(cx, |app, cx| app.room_focus(&room, cx));
+        assert!(room_row.is_focused(window), "F6 starts at the sidebar");
+        // Then the latest message.
+        press("f6", window, cx);
+        let latest = ids.last().unwrap();
+        assert!(
+            row(latest, cx).is_focused(window),
+            "F6 lands on the latest message"
+        );
+        // Arrows move through messages; Home goes to the first loaded one.
+        press("up", window, cx);
+        let previous = &ids[ids.len() - 2];
+        assert!(
+            row(previous, cx).is_focused(window),
+            "↑ moves to the previous message"
+        );
+        press("home", window, cx);
+        assert!(
+            row(&ids[0], cx).is_focused(window),
+            "Home moves to the first message"
+        );
+        // Then the message field, and back: the timeline remembers its message.
+        press("f6", window, cx);
+        let composer = app.read(cx).composer.clone();
+        assert!(
+            gpui::Focusable::focus_handle(composer.read(cx), cx).is_focused(window),
+            "F6 reaches the message field"
+        );
+        press("shift-f6", window, cx);
+        assert!(
+            row(&ids[0], cx).is_focused(window),
+            "⇧F6 returns to the message last moved to"
+        );
+        press("f6", window, cx);
+        press("f6", window, cx);
+        assert!(
+            room_row.is_focused(window),
+            "F6 wraps from the message field to the sidebar"
+        );
+
+        // Tab from the message: its own controls, then out of the timeline;
+        // no other message's controls are on the way.
+        press("shift-f6", window, cx);
+        press("shift-f6", window, cx);
+        assert!(row(&ids[0], cx).is_focused(window));
+        let area = app.read(cx).timeline_area.clone();
+        let mut controls = 0;
+        let mut reached_thread = false;
+        loop {
+            press("tab", window, cx);
+            if !area.contains_focused(window, cx) {
+                break;
+            }
+            controls += 1;
+            reached_thread |= window.find("thread-sample-0").focused() == Some(true);
+            let other = app
+                .read(cx)
+                .image_focus
+                .borrow()
+                .iter()
+                .find(|(key, handle)| handle.is_focused(window) && !key.ends_with("sample-0"))
+                .map(|(key, _)| key.clone());
+            assert_eq!(other, None, "Tab reached another message's control");
+            assert!(
+                controls < 10,
+                "Tab must leave the timeline after one message"
+            );
+        }
+        assert!(
+            reached_thread,
+            "the focused message's controls are reachable with Tab"
+        );
+    })
+    .expect("area and message keyboard navigation");
+}
+
+#[gpui_kit::test]
+fn opening_the_archive_scrolls_a_long_sidebar_to_it(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        app.update(cx, |app, cx| {
+            // Enough rooms to push the Archive below the sidebar's bottom edge.
+            let template = app
+                .snapshot
+                .rooms
+                .iter()
+                .find(|room| !room.is_space && !room.direct)
+                .cloned()
+                .expect("a sample room");
+            for ix in 0..60 {
+                let mut room = template.clone();
+                room.id = format!("filler-{ix}");
+                room.name = format!("Filler {ix}");
+                room.favourite = false;
+                app.snapshot.rooms.push(room);
+            }
+            app.set_archived("announcements".into(), true, window, cx);
+            app.show_archive(window, cx);
+        });
+        window.render_frame(cx);
+        window.render_frame(cx);
+        let height = window.viewport_size().height;
+        let row = window.find("room-announcements").bounds();
+        assert!(
+            row.top() >= gpui_kit::px(0.) && row.bottom() <= height,
+            "the archived room is scrolled into view: {row:?} in a {height:?} window"
+        );
+    })
+    .expect("archive scroll");
 }

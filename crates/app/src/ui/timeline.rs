@@ -12,6 +12,10 @@ impl MatrixApp {
         let palette = theme::palette(cx);
         let bubbles = self.preferences.chat.style == ChatStyle::Bubbles;
         let outgoing = outgoing && bubbles;
+        // Only the cursor message's controls are Tab stops (see `ui::focus`);
+        // its hover actions also show while it has keyboard focus.
+        let stops = self.message_tab_stops(in_thread, &message.id);
+        let show_actions = self.message_cursor_focused(in_thread, &message.id);
         let bubble = match message.kind {
             MessageKind::Text
             | MessageKind::Emote
@@ -151,7 +155,7 @@ impl MatrixApp {
                         if message.kind == MessageKind::Image {
                             let id = message.id.clone();
                             let keyboard_id = id.clone();
-                            let focus = self.image_focus(&id, cx);
+                            let focus = self.image_focus(&id, cx).tab_stop(stops);
                             let mut button = Button::new(SharedString::from(format!("image-{id}")))
                                 .ghost()
                                 .text_color(if outgoing {
@@ -161,6 +165,7 @@ impl MatrixApp {
                                 })
                                 .p_0()
                                 .track_focus(&focus)
+                                .tab_stop(stops)
                                 .accessibility_label(format!("Open image {}", attachment.filename))
                                 .tooltip("Open Image · Space")
                                 .disabled(message.event_id.is_none())
@@ -259,6 +264,7 @@ impl MatrixApp {
                                             )))
                                             .small()
                                             .label("Cancel upload")
+                                            .tab_stop(stops)
                                             .disabled(self.preview)
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 this.cancel_upload(cancel_id.clone(), window, cx)
@@ -279,6 +285,7 @@ impl MatrixApp {
                                             .text_color(on_bubble)
                                             .icon(IconName::Download)
                                             .accessibility_label("Save attachment")
+                                            .tab_stop(stops)
                                             .tooltip("Save…")
                                             .disabled(self.preview)
                                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -301,6 +308,7 @@ impl MatrixApp {
                                             .text_color(on_bubble)
                                             .icon(IconName::ExternalLink)
                                             .accessibility_label("Open attachment")
+                                            .tab_stop(stops)
                                             .tooltip("Open…")
                                             .disabled(self.preview)
                                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -343,11 +351,41 @@ impl MatrixApp {
                 .child("Message deleted")
                 .into_any_element(),
         };
+        let row_focus = self
+            .message_focus(in_thread, &message.id, cx)
+            .tab_stop(self.message_cursor(in_thread) == Some(message.id.as_str()));
+        let key_id = message.id.clone();
+        let click_id = message.id.clone();
+        let key_focus = row_focus.clone();
         let mut row = v_flex()
             .id(SharedString::from(format!("message-row-{}", message.id)))
             // Message text is drawn, not exposed; screen readers read this label.
             .role(Role::Group)
             .aria_label(accessible_message(message, &self.snapshot.user_id))
+            .track_focus(&row_focus)
+            .rounded(px(8.))
+            .focus_visible(|style| style.bg(palette.selection))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.set_message_cursor(in_thread, click_id.clone(), cx)
+                }),
+            )
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                // Only on the row itself; its buttons keep their own keys.
+                if !key_focus.is_focused(window) || event.keystroke.modifiers.modified() {
+                    return;
+                }
+                let step = match event.keystroke.key.as_str() {
+                    "up" => crate::ui::focus::Step::Previous,
+                    "down" => crate::ui::focus::Step::Next,
+                    "home" => crate::ui::focus::Step::First,
+                    "end" => crate::ui::focus::Step::Last,
+                    _ => return,
+                };
+                this.step_message(in_thread, &key_id, step, window, cx);
+                cx.stop_propagation();
+            }))
             .min_w_0()
             .max_w_full()
             .gap(px(3.))
@@ -386,10 +424,16 @@ impl MatrixApp {
                 style
                     .border_color(cx.theme().border)
                     .bg(cx.theme().background)
+            })
+            .when(show_actions, |bar| {
+                bar.border_color(cx.theme().border)
+                    .bg(cx.theme().background)
             });
         if message.event_id.is_some() || self.preview {
             let message_id = message.id.clone();
-            let focus = self.image_focus(&format!("reaction-action-{}", message.id), cx);
+            let focus = self
+                .image_focus(&format!("reaction-action-{}", message.id), cx)
+                .tab_stop(stops);
             actions = actions.child(
                 div()
                     .flex_none()
@@ -397,9 +441,11 @@ impl MatrixApp {
                     .focus(|style| style.opacity(1.))
                     .opacity(0.)
                     .group_hover("message", |style| style.opacity(1.))
+                    .when(show_actions, |view| view.opacity(1.))
                     .child(
                         Button::new(SharedString::from(format!("add-reaction-{}", message.id)))
                             .track_focus(&focus)
+                            .tab_stop(stops)
                             .ghost()
                             .xsmall()
                             .icon(IconName::FaceSlightlySmiling)
@@ -415,16 +461,20 @@ impl MatrixApp {
         if message.editable
             && let Some(event_id) = message.event_id.clone()
         {
-            let focus = self.image_focus(&format!("edit-action-{}", message.id), cx);
+            let focus = self
+                .image_focus(&format!("edit-action-{}", message.id), cx)
+                .tab_stop(stops);
             actions = actions.child(
                 div()
                     .track_focus(&focus)
                     .focus(|style| style.opacity(1.))
                     .opacity(0.)
                     .group_hover("message", |style| style.opacity(1.))
+                    .when(show_actions, |view| view.opacity(1.))
                     .child(
                         Button::new(SharedString::from(format!("edit-{}", message.id)))
                             .track_focus(&focus)
+                            .tab_stop(stops)
                             .ghost()
                             .xsmall()
                             .icon(IconName::Pencil)
@@ -438,16 +488,20 @@ impl MatrixApp {
         }
         if !in_thread && message.event_id.is_some() {
             let id = message.id.clone();
-            let focus = self.image_focus(&format!("thread-action-{id}"), cx);
+            let focus = self
+                .image_focus(&format!("thread-action-{id}"), cx)
+                .tab_stop(stops);
             actions = actions.child(
                 div()
                     .track_focus(&focus)
                     .focus(|style| style.opacity(1.))
                     .opacity(0.)
                     .group_hover("message", |style| style.opacity(1.))
+                    .when(show_actions, |view| view.opacity(1.))
                     .child(
                         Button::new(SharedString::from(format!("reply-thread-{id}")))
                             .track_focus(&focus)
+                            .tab_stop(stops)
                             .ghost()
                             .xsmall()
                             .icon(IconName::MessagesSquare)
@@ -493,6 +547,7 @@ impl MatrixApp {
                         .label(format!("{} {}", key, reaction.count))
                         .selected(reaction.mine)
                         .toggled(reaction.mine)
+                        .tab_stop(stops)
                         .accessibility_label(format!(
                             "{action} {} reaction, {} people",
                             key, reaction.count
@@ -549,6 +604,7 @@ impl MatrixApp {
                     )
                     .accessibility_label("Open thread")
                     .tooltip("Open thread")
+                    .tab_stop(stops)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_thread(id.clone(), window, cx)
                     })),
@@ -573,6 +629,7 @@ impl MatrixApp {
                         .xsmall()
                         .label(label)
                         .tooltip(format!("{label} failed message"))
+                        .tab_stop(stops)
                         .disabled(disabled)
                         .on_click(cx.listener(
                             move |this, _, window, cx| {

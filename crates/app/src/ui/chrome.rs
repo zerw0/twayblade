@@ -319,6 +319,8 @@ impl MatrixApp {
                 }
             });
         let row = Button::new(SharedString::from(format!("room-{}", room.id)))
+            // A known handle, so F6 and the Archive menu item can focus the row.
+            .track_focus(&self.room_focus(&room.id, cx))
             .ghost()
             .w_full()
             .h(px(density.row()))
@@ -796,13 +798,18 @@ impl MatrixApp {
             .min_h_0()
             .px(px(8.))
             .pb(px(10.))
-            .overflow_y_scroll();
+            .overflow_y_scroll()
+            .track_scroll(&self.sidebar_scroll);
+        // Direct children so far; the Archive is scrolled to by its index.
+        let mut children = 0;
         let typed = self.search.read(cx).value().trim().to_owned();
         if !typed.is_empty() {
             list = list.child(div().pt(px(6.)).child(self.search_messages_row(&typed, cx)));
+            children += 1;
         }
         if !self.snapshot.invites.is_empty() {
             list = list.child(self.invite_section(cx));
+            children += 1;
         }
         let favourites: Vec<&Room> = visible
             .iter()
@@ -820,6 +827,7 @@ impl MatrixApp {
         if !favourites.is_empty() {
             list =
                 list.child(self.sidebar_section("favourites", "Favourites", favourites, None, cx));
+            children += 1;
         }
         if !channels.is_empty() {
             list = list.child(self.sidebar_section(
@@ -829,6 +837,7 @@ impl MatrixApp {
                 Some(("Create Room…", crate::ui::spaces::ManageKind::Create)),
                 cx,
             ));
+            children += 1;
         }
         if !direct.is_empty() {
             list = list.child(self.sidebar_section(
@@ -838,9 +847,13 @@ impl MatrixApp {
                 Some(("New Direct Message…", crate::ui::spaces::ManageKind::Dm)),
                 cx,
             ));
+            children += 1;
         }
         if !archived.is_empty() {
             list = list.child(self.sidebar_section("archive", "Archive", archived, None, cx));
+            if self.reveal_archive {
+                self.sidebar_scroll.scroll_to_item(children);
+            }
         }
         if visible.is_empty() {
             let empty = if !query.is_empty() {
@@ -862,6 +875,7 @@ impl MatrixApp {
         }
         v_flex()
             .id("sidebar")
+            .track_focus(&self.sidebar_area)
             .role(Role::Navigation)
             .aria_label("Conversations")
             .w(px(SIDEBAR_WIDTH))
