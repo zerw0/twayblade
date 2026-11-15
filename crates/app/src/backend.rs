@@ -1680,32 +1680,65 @@ impl Backend {
         let shared = self.state.clone();
         let updates = self.updates.clone();
         state.tasks.push(self.runtime.spawn(async move {
-            let stream = rooms_account.room_updates();
-            tokio::pin!(stream);
-            while let Some(snapshot) = stream.next().await {
-                let Ok(state) = shared.lock() else {
-                    return;
-                };
-                if state.epoch != epoch {
+            // The room stream ends when the SDK closes a channel or a sync
+            // stops for good. If that happens while this login is still the
+            // current, active one, a frozen list would keep saying "Connected":
+            // log why and start the stream again after a growing pause.
+            let mut failures = 0u32;
+            loop {
+                let stream = rooms_account.room_updates();
+                tokio::pin!(stream);
+                // Logged only when the room count or status changes.
+                // status: 0 connecting, 1 syncing, 2 connected, 3 offline, 4 failed, 5 stopped.
+                let mut last: Option<(usize, u64)> = None;
+                while let Some(snapshot) = stream.next().await {
+                    let Ok(state) = shared.lock() else {
+                        return;
+                    };
+                    if state.epoch != epoch {
+                        return;
+                    }
+                    let text = sync_status_text(snapshot.status);
+                    let code = match snapshot.status {
+                        SyncStatus::Connecting => 0,
+                        SyncStatus::Syncing => 1,
+                        SyncStatus::Connected => 2,
+                        SyncStatus::Offline => 3,
+                        SyncStatus::Failed => 4,
+                        SyncStatus::Stopped => 5,
+                    };
+                    if last != Some((snapshot.rooms.len(), code)) {
+                        last = Some((snapshot.rooms.len(), code));
+                        tracing::debug!(name: "rooms_snapshot", rooms = snapshot.rooms.len(), status = code);
+                    }
+                    publish(&updates, |view| {
+                        view.sync_status = text.into();
+                        view.unread_total = snapshot
+                            .rooms
+                            .iter()
+                            .fold(0u64, |sum, room| sum.saturating_add(room.unread));
+                        view.rooms = snapshot.rooms;
+                        for room in &mut view.rooms {
+                            room.presence = room
+                                .partner
+                                .as_ref()
+                                .and_then(|id| view.presence.get(id))
+                                .cloned();
+                        }
+                        view.notifications = snapshot.notifications;
+                        view.invites = snapshot.invites;
+                    });
+                }
+                let current = shared.lock().is_ok_and(|state| state.epoch == epoch);
+                let active = *rooms_account.session_state().borrow()
+                    == twayblade_core::auth::SessionState::Active;
+                tracing::warn!(name: "room_stream_task_end", epoch_current = current, session_active = active, failures);
+                if !current || !active {
                     return;
                 }
-                publish(&updates, |view| {
-                    view.sync_status = sync_status_text(snapshot.status).into();
-                    view.unread_total = snapshot
-                        .rooms
-                        .iter()
-                        .fold(0u64, |sum, room| sum.saturating_add(room.unread));
-                    view.rooms = snapshot.rooms;
-                    for room in &mut view.rooms {
-                        room.presence = room
-                            .partner
-                            .as_ref()
-                            .and_then(|id| view.presence.get(id))
-                            .cloned();
-                    }
-                    view.notifications = snapshot.notifications;
-                    view.invites = snapshot.invites;
-                });
+                tokio::time::sleep(std::time::Duration::from_secs(1u64 << failures.min(5))).await;
+                failures = failures.saturating_add(1);
+                tracing::info!(name: "room_stream_restart", failures);
             }
         }));
         let shared = self.state.clone();

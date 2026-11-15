@@ -184,6 +184,14 @@ impl SafeFields {
                 | "ready"
                 | "revision"
                 | "stale"
+                // Counts and flags only, never identifiers or text.
+                | "rooms"
+                | "empty"
+                | "active"
+                | "failures"
+                | "delay_ms"
+                | "epoch_current"
+                | "session_active"
         )
     }
 }
@@ -345,6 +353,26 @@ mod tests {
         assert!(output.contains("generation=7"));
         assert!(output.contains("elapsed_ms=12"));
         assert!(output.contains("room_open"));
+    }
+    #[test]
+    fn sync_lifecycle_events_log_counts_and_flags_but_not_text() {
+        let buffer = Buffer(Arc::default());
+        let inspect = buffer.clone();
+        let subscriber = tracing_subscriber::registry().with(SafeLayer {
+            writer: Mutex::new(buffer),
+        });
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::warn!(name: "sync_restart_scheduled_error", failures = 2u32, delay_ms = 4000u64, rooms = 31usize, reason = "secret-reason");
+            tracing::warn!(name: "room_stream_task_end", epoch_current = true, session_active = false, failures = 0u32);
+            tracing::info!(name: "ui_window_active", active = true, rooms = 0usize);
+        });
+        let bytes = inspect.0.lock().unwrap();
+        let output = String::from_utf8_lossy(&bytes);
+        assert!(!output.contains("secret"));
+        assert!(output.contains("sync_restart_scheduled_error"));
+        assert!(output.contains(" failures=2 delay_ms=4000 rooms=31"));
+        assert!(output.contains(" epoch_current=true session_active=false failures=0"));
+        assert!(output.contains(" active=true rooms=0"));
     }
     #[test]
     fn rotation_bounds_file_count_and_sizes() {

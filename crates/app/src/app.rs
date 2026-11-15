@@ -357,7 +357,7 @@ pub(super) struct MatrixApp {
     /// Selections queued but not yet applied by the backend.
     selection_pending: u32,
     /// Last logged (room matched, timeline ready, selections pending).
-    selection_trace: Option<(bool, bool, u32)>,
+    selection_trace: Option<(bool, bool, u32, usize, bool)>,
     /// One video view per shown call track, keyed by track ID.
     pub(super) call_tiles: HashMap<String, Entity<crate::ui::calls::VideoTile>>,
     /// What the user chose to show large in the call; None shows the grid.
@@ -489,6 +489,11 @@ impl MatrixApp {
         }));
         subscriptions.push(cx.observe_window_activation(window, |this, window, cx| {
             this.notification_window_active = window.is_window_active();
+            tracing::info!(
+                name: "ui_window_active",
+                active = this.notification_window_active,
+                rooms = this.snapshot.rooms.len()
+            );
             this.notification_config();
             cx.notify();
         }));
@@ -985,16 +990,20 @@ impl MatrixApp {
                 self.navigation.selected_room.as_deref() == Some(&self.snapshot.selected_room),
                 self.snapshot.timeline_ready,
                 self.selection_pending,
+                self.snapshot.rooms.len(),
+                self.snapshot.messages.is_empty(),
             )
         });
         if shown != self.selection_trace {
             self.selection_trace = shown;
-            if let Some((matched, ready, pending)) = shown {
+            if let Some((matched, ready, pending, rooms, empty)) = shown {
                 tracing::info!(
                     name: "ui_room_state",
                     matched,
                     ready,
                     pending,
+                    rooms,
+                    empty,
                     revision = self.snapshot.revision
                 );
             }

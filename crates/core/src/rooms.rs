@@ -269,7 +269,10 @@ impl Account {
                         let changed = match change {
                             Ok(change) => Some(change.iter_all_room_ids().map(|id| id.to_string()).collect::<std::collections::HashSet<_>>()),
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => None,
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                tracing::warn!(name: "room_stream_end_room_updates_closed", rooms = rooms.len());
+                                break;
+                            }
                         };
                         // Entry identities/order may be unchanged while SDK
                         // unread/profile state changes behind their handles.
@@ -282,46 +285,80 @@ impl Account {
                         }
                     }
                     _ = session_state.changed() => {
-                        if *session_state.borrow_and_update() != crate::auth::SessionState::Active {
+                        let now = *session_state.borrow_and_update();
+                        match now {
+                            crate::auth::SessionState::Active => tracing::info!(name: "session_state_active", active = true),
+                            crate::auth::SessionState::SoftLoggedOut => tracing::warn!(name: "session_state_soft_logged_out", active = false),
+                            crate::auth::SessionState::HardLoggedOut => tracing::warn!(name: "session_state_hard_logged_out", active = false),
+                        }
+                        if now != crate::auth::SessionState::Active {
                             service.stop().await;
                             yield snapshot(&rooms, SyncStatus::Stopped);
+                            tracing::warn!(name: "room_stream_end_session_inactive", rooms = rooms.len());
                             break;
                         }
                     }
                     result = selection.changed() => {
-                        if result.is_err() { break; }
+                        if result.is_err() {
+                            tracing::warn!(name: "room_stream_end_selection_closed", rooms = rooms.len());
+                            break;
+                        }
                         let selected = selection.borrow_and_update().clone();
                         let mut subscriptions = requested.borrow().clone(); subscriptions.extend(selected);
                         let ids: Vec<_> = subscriptions.iter().map(|id| id.as_ref()).collect();
                         service.room_list_service().set_room_subscriptions(&ids).await;
                     }
                     change = requested.changed() => {
-                        if change.is_err() { break; }
+                        if change.is_err() {
+                            tracing::warn!(name: "room_stream_end_subscriptions_closed", rooms = rooms.len());
+                            break;
+                        }
                         let mut subscriptions = requested.borrow_and_update().clone(); subscriptions.extend(selection.borrow().clone());
                         let ids: Vec<_> = subscriptions.iter().map(|id| id.as_ref()).collect();
                         service.room_list_service().set_room_subscriptions(&ids).await;
                     }
                     next = state.next() => {
                         status = match next {
-                            Some(State::Running) => { failures = 0; restart = None; SyncStatus::Connected }
-                            Some(State::Offline) => SyncStatus::Offline,
-                            Some(State::Error(_) | State::Idle | State::Terminated) => {
+                            Some(State::Running) => {
+                                tracing::info!(name: "sync_state_running", failures, rooms = rooms.len());
+                                failures = 0; restart = None; SyncStatus::Connected
+                            }
+                            Some(State::Offline) => {
+                                tracing::info!(name: "sync_state_offline", failures, rooms = rooms.len());
+                                SyncStatus::Offline
+                            }
+                            Some(state @ (State::Error(_) | State::Idle | State::Terminated)) => {
                                 if restart.is_none() {
-                                    restart = Some(Box::pin(tokio::time::sleep(restart_delay(failures))));
+                                    let delay = restart_delay(failures);
+                                    let (failures_now, delay_ms, rooms_now) = (failures, delay.as_millis() as u64, rooms.len());
+                                    // Only the variant is logged (as the event name): SDK error text can carry server bodies.
+                                    match state {
+                                        State::Error(_) => tracing::warn!(name: "sync_restart_scheduled_error", failures = failures_now, delay_ms, rooms = rooms_now),
+                                        State::Idle => tracing::warn!(name: "sync_restart_scheduled_idle", failures = failures_now, delay_ms, rooms = rooms_now),
+                                        _ => tracing::warn!(name: "sync_restart_scheduled_terminated", failures = failures_now, delay_ms, rooms = rooms_now),
+                                    }
+                                    restart = Some(Box::pin(tokio::time::sleep(delay)));
                                     failures = failures.saturating_add(1);
                                 }
                                 SyncStatus::Offline
                             }
-                            None => break,
+                            None => {
+                                tracing::warn!(name: "room_stream_end_sync_state_closed", rooms = rooms.len());
+                                break;
+                            }
                         };
                     }
                     _ = async { match &mut restart { Some(sleep) => sleep.as_mut().await, None => std::future::pending().await } } => {
                         restart = None;
                         status = SyncStatus::Connecting;
+                        tracing::info!(name: "sync_restart", failures, rooms = rooms.len());
                         service.start().await;
                     }
                     next = changes.next() => {
-                        let Some(diffs) = next else { break; };
+                        let Some(diffs) = next else {
+                            tracing::warn!(name: "room_stream_end_room_list_closed", rooms = rooms.len());
+                            break;
+                        };
                         for diff in diffs { diff.map(|entry| summary(entry.into_inner())).apply(&mut rooms); }
                     }
 
