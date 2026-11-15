@@ -1,17 +1,18 @@
 # Compatibility evidence
 
-Updated 2026-11-11. Records what has actually been run, per platform. Compile
+Updated 2026-11-15. Records what has actually been run, per platform. Compile
 checks, offline UI tests, isolated-server tests and live/physical acceptance are
 listed separately. Earlier Iced/SwiftUI evidence was removed with those frontends.
 
 | Check | macOS arm64 | Linux | Windows |
 | --- | --- | --- | --- |
-| fmt / Clippy (`-D warnings`) / unit tests | Pass locally (Rust 1.99; locked/all features; 97 tests) | Not run | Not run |
-| CI (`.github/workflows/check.yml`) | Never observed passing | Never observed passing | Never observed passing |
-| GPUI build and launch | Pass; ad-hoc `.app` launches | Not run | Not run |
+| fmt / Clippy (`-D warnings`) / unit tests | Pass locally (Rust 1.99; locked/all features; 143 app and 63 core tests) | Pass in CI (Ubuntu 24.04) | Pass in CI (Windows Server 2022) |
+| CI (`.github/workflows/check.yml`) | Observed passing on every pull request since 2026-11-14 (macOS 15); required on `main` since 2026-11-15 | Observed passing (Ubuntu 24.04), required | Observed passing (Windows Server 2022), required |
+| GPUI build and launch | Pass; ad-hoc `.app` launches | Compiles in CI; not launched | Compiles in CI; not launched |
 | Offline previews and Kit interaction tests | Pass; light/dark workspace, Home, profile, sign-in, details and 10k captures; Kit interaction/layout tests | Not run | Not run |
 | Isolated Synapse: encrypted send/receive, same-device store reopen | Pass | Not run | Not run |
 | Live password sign-in, room list, history | Operator reports GPUI sync/messaging working; homeserver not supplied | Not run | Not run |
+| Live homeserver, real Mac, diagnostics log (2026-11-15) | A window that stopped applying backend updates after a window state change was reproduced and diagnosed from `TWAYBLADE_LOG`; the fix (#75) is not yet confirmed on a longer run. Sleep and a network change alone did not break sync, which recovered immediately. | Not run | Not run |
 | Live GPUI send, relaunch restore (Keychain), logout | Operator reports send and Keychain restore; isolated cross-process lifecycle including logout/store deletion passes | Not run | Not run |
 | `.well-known` discovery against real servers | Pending | Not run | Not run |
 | OAuth/OIDC (Task 1) | SDK discovery/registration/PKCE, callback state, cancellation, atomic Keychain session/refresh; isolated MAS lifecycle passes | Not run | Not run |

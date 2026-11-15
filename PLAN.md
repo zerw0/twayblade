@@ -1,6 +1,6 @@
 # Twayblade — plan
 
-Updated 2026-11-14. Status: M0 in progress; no milestone exit claimed.
+Updated 2026-11-15. Status: M0 in progress; no milestone exit claimed.
 
 ## Goal
 
@@ -299,9 +299,11 @@ only when the user opts in.
 
 ## Next steps (in order)
 
-Prioritize the remaining product and acceptance work below. Individual PRs
-#25–#29 passed hosted macOS, Linux and Windows checks; the combined integration
-branch requires its own validation. CI does not establish physical acceptance.
+Prioritize the remaining product and acceptance work below. The integration
+branch (#57) and later work are merged; every pull request passes hosted macOS,
+Linux and Windows checks, which are required on `main` (auto-merge). CI does not
+establish physical acceptance. The roadmap board (issues #30–#77) tracks the
+open items, and per-change notes are in `docs/progress/`.
 
 1. **M1 authentication** and **2. M2 encryption usability** are implemented
    (see Progress). Remaining: real-browser sign-in on a public server, and
@@ -328,14 +330,14 @@ and [compatibility status](docs/compatibility/STATUS.md).
 
 | Milestone | Implemented | Remaining acceptance or source gaps |
 | --- | --- | --- |
-| M0 foundation | Password login, OS secret storage, encrypted SQLite restore, logout cleanup, instance lock, room list, timeline, send queue; hosted macOS/Linux/Windows checks | Physical macOS account/restore/logout checks and each OS's runtime gates |
+| M0 foundation | Password login, OS secret storage, encrypted SQLite restore, logout cleanup, instance lock, room list, timeline, send queue; hosted macOS/Linux/Windows checks; sync lifecycle diagnostics and room-stream restart (`TWAYBLADE_LOG`) | Physical macOS account/restore/logout checks and each OS's runtime gates; confirming the window keeps applying updates across window changes, sleep and network loss (#67), and offline behaviour on a real connection loss (#77) |
 | M1 authentication | Browser OAuth/OIDC with PKCE and callback validation, legacy SSO, refresh and recovery; isolated-server coverage | Public-server browser flows, real IdP cancellation/reauthentication and relaunch |
 | M2 encrypted messaging | SDK E2EE, verification, backup/recovery, reactions/edits/redactions, encrypted attachments | Physical verification/recovery flows and Element interoperability; missing/revoked-device acceptance |
 | M3 spaces, threads, viewer | Space navigation/join/leave, threads, image viewer; isolated SDK and offline UI checks | Element comparison, keyboard/trackpad use, real rooms and encrypted media across clients |
 | M4 settings | Appearance/chat styles, server push rules, notification adapters, account/security settings | OS permissions, delivery/click/badges, system appearance/accent transitions and Element comparison |
-| M4b chat polish | Search, gallery, presence, typing, formatting, history and keyboard UI | Physical keyboard layouts/IME, focus, long-history performance and public-server behavior |
-| M5 calls | Native MatrixRTC/LiveKit frame E2EE, ringing, devices, screen share, playback contracts, generated three-party interoperability | Live check of playback controls and speaker follow; X11/Windows source-picker views; Linux/Windows webcam capture is unimplemented; physical media/permissions on all OSes |
-| M6 release | AccessKit labels, binary CI, Nix package, update-check service/contracts | VoiceOver/AT-SPI/UIA, updater views, signed/tampered upgrade handling, signing/notarization and installed-package acceptance |
+| M4b chat polish | Search (with room, file and sender filters), gallery, presence, typing, formatting (shortcuts and composer toolbar), history and keyboard UI; emoji picker shows newer emoji whole | List formatting button and the thread composer toolbar (#39); physical keyboard layouts/IME, focus, long-history performance and public-server behavior (#68). The saluting-face emoji is cut in the system's own data on macOS. |
+| M5 calls | Native MatrixRTC/LiveKit frame E2EE, ringing, devices, screen share, generated three-party interoperability; call view (focus a person or shared screen, expanded layout, follow the speaker, per-person mute and volume, full screen with auto-hiding controls); in-app screen and window chooser for X11/Windows | Live check of speaker follow and volume/mute in a real call; the chooser in a real X11/Windows session (#47); Linux/Windows webcam capture is unimplemented (#48); legacy `m.call.*` (#50); physical media/permissions on all OSes (#49) |
+| M6 release | AccessKit labels (image viewer, dialogs and side panels now named), binary CI, Nix package, update-check service and Settings update controls, release notes draft generator | VoiceOver/AT-SPI/UIA runs and focus order (#51), launch-time update notice and in-app download/install (#56), signed/tampered upgrade handling, signing/notarization, packages and the release flow beyond the notes draft (#52–#55), installed-package acceptance |
 
 Integration base (2026-11-14):
 - `feature/integration-base` starts at current `origin/main` `077f021`, which
