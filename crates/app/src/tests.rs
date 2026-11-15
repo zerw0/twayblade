@@ -2247,7 +2247,10 @@ fn call_focus_button_toggles_one_person_large(cx: &mut TestAppContext) {
         window.click("call-focus-@alex:preview.invalid-PREVIEW", cx);
     })
     .expect("focus a participant");
-    let key = ("@alex:preview.invalid".to_owned(), "PREVIEW".to_owned());
+    let key = crate::ui::call_layout::CallFocus::Person(
+        "@alex:preview.invalid".to_owned(),
+        "PREVIEW".to_owned(),
+    );
     cx.update(|cx| assert_eq!(app.read(cx).call_focus.as_ref(), Some(&key)));
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
@@ -2255,6 +2258,106 @@ fn call_focus_button_toggles_one_person_large(cx: &mut TestAppContext) {
     })
     .expect("release focus");
     cx.update(|cx| assert!(app.read(cx).call_focus.is_none()));
+}
+
+#[gpui_kit::test]
+fn shared_screen_can_be_focused_and_released(cx: &mut TestAppContext) {
+    use crate::ui::call_layout::CallFocus;
+    let (window, app) = preview_window(cx);
+    cx.update(|cx| app.update(cx, |app, _| app.preview_call("--preview-call-screen")));
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("call-screen-focus", cx);
+    })
+    .expect("focus the shared screen");
+    cx.update(|cx| {
+        assert_eq!(
+            app.read(cx).call_focus,
+            Some(CallFocus::Screen("preview-screen-alex".into()))
+        )
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("call-screen-focus", cx);
+    })
+    .expect("release the shared screen");
+    cx.update(|cx| assert!(app.read(cx).call_focus.is_none()));
+}
+
+#[gpui_kit::test]
+fn follow_speaker_toggle_changes_the_preference(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update(|cx| app.update(cx, |app, _| app.preview_call("--preview-call-group")));
+    cx.update(|cx| assert!(!app.read(cx).preferences.calls.follow_speaker));
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("call-follow", cx);
+    })
+    .expect("turn follow on");
+    cx.update(|cx| assert!(app.read(cx).preferences.calls.follow_speaker));
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("call-follow", cx);
+    })
+    .expect("turn follow off");
+    cx.update(|cx| assert!(!app.read(cx).preferences.calls.follow_speaker));
+}
+
+#[gpui_kit::test]
+fn volume_menu_belongs_to_other_people_and_shows_local_playback(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update(|cx| app.update(cx, |app, _| app.preview_call("--preview-call-group")));
+    cx.update_window(window, |_, window, cx| window.render_frame(cx))
+        .expect("render");
+    cx.update(|cx| {
+        let app = app.read(cx);
+        // A slider for each other person; none for you.
+        assert_eq!(app.call_volume.len(), 4);
+        assert!(
+            !app.call_volume
+                .contains_key(&format!("{}:PREVIEW", app.snapshot.user_id))
+        );
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.click("call-more-@alex:preview.invalid:PREVIEW", cx);
+    })
+    .expect("open the menu");
+    cx.update(|cx| {
+        assert_eq!(
+            app.read(cx).call_menu.as_deref(),
+            Some("@alex:preview.invalid:PREVIEW")
+        )
+    });
+    cx.update(|cx| app.update(cx, |app, _| app.preview_call("--preview-call-volume")));
+    cx.update_window(window, |_, window, cx| window.render_frame(cx))
+        .expect("render the volume preview");
+    cx.update(|cx| {
+        let app = app.read(cx);
+        let call = app.snapshot.call.as_ref().expect("call");
+        let playback = |user: &str| {
+            call.participants
+                .iter()
+                .find(|p| p.user_id == user)
+                .expect("participant")
+                .playback
+        };
+        assert!(playback("@sam:preview.invalid").muted);
+        assert!((playback("@alex:preview.invalid").volume() - 0.6).abs() < 1e-6);
+    });
+}
+
+#[gpui_kit::test]
+fn call_full_screen_shows_only_the_call(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update(|cx| app.update(cx, |app, _| app.preview_call("--preview-call-fullscreen")));
+    cx.update_window(window, |_, window, cx| window.render_frame(cx))
+        .expect("render");
+    cx.update(|cx| assert!(app.read(cx).call_fills_window()));
+    // The floating controls are there, and the chat chrome is not.
+    cx.update_window(window, |_, window, cx| {
+        window.click("call-leave", cx);
+    })
+    .expect("controls are shown");
 }
 
 #[gpui_kit::test]

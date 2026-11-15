@@ -168,6 +168,40 @@ impl MatrixApp {
                 backend::calls::Control::Muted(muted),
             )
     }
+    /// Local playback volume of one participant, 0.0–2.0. Never heard by others.
+    pub fn set_participant_volume(
+        &self,
+        id: String,
+        volume: f32,
+    ) -> Result<(), twayblade_core::calls::CallError> {
+        let ticket = self
+            .snapshot
+            .call
+            .as_ref()
+            .and_then(|call| call.ticket)
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?;
+        self.backend
+            .as_ref()
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?
+            .set_participant_volume(ticket, id, volume)
+    }
+    /// Mutes one participant for you only.
+    pub fn set_participant_muted_locally(
+        &self,
+        id: String,
+        muted: bool,
+    ) -> Result<(), twayblade_core::calls::CallError> {
+        let ticket = self
+            .snapshot
+            .call
+            .as_ref()
+            .and_then(|call| call.ticket)
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?;
+        self.backend
+            .as_ref()
+            .ok_or(twayblade_core::calls::CallError::StaleRequest)?
+            .set_participant_muted_locally(ticket, id, muted)
+    }
     pub fn set_screen_share(&self, share: bool) -> Result<(), twayblade_core::calls::CallError> {
         self.backend
             .as_ref()
@@ -326,8 +360,35 @@ pub(super) struct MatrixApp {
     selection_trace: Option<(bool, bool, u32, usize, bool)>,
     /// One video view per shown call track, keyed by track ID.
     pub(super) call_tiles: HashMap<String, Entity<crate::ui::calls::VideoTile>>,
-    /// The participant (user, device) shown large in the call; None shows the grid.
-    pub(super) call_focus: Option<(String, String)>,
+    /// What the user chose to show large in the call; None shows the grid.
+    pub(super) call_focus: Option<crate::ui::call_layout::CallFocus>,
+    /// Debounced "follow the speaker" pick, used when the preference is on.
+    pub(super) call_follow: crate::ui::call_layout::SpeakerFollow,
+    /// Wakes the view when the follow pick may change.
+    pub(super) call_follow_timer: Option<Task<()>>,
+    /// The call fills the window (set together with window full screen).
+    pub(super) call_full_screen: bool,
+    /// The window has been seen full screen since the call asked for it.
+    pub(super) call_full_screen_entered: bool,
+    /// Pointer activity in full screen, for hiding the floating controls.
+    pub(super) call_controls: crate::ui::call_layout::ControlsVisibility,
+    pub(super) call_controls_timer: Option<Task<()>>,
+    /// The pointer or focus is on the full-screen controls.
+    pub(super) call_controls_pinned: bool,
+    /// One volume slider per remote participant, by participant ID.
+    pub(super) call_volume: HashMap<
+        String,
+        (
+            Entity<gpui_kit::component::slider::SliderState>,
+            Subscription,
+        ),
+    >,
+    /// When a volume was last sent, so dragging doesn't flood the queue.
+    pub(super) call_volume_sent: Option<std::time::Instant>,
+    /// The measured size of the call stage, for fitting the camera grid.
+    pub(super) call_stage_size: std::rc::Rc<std::cell::Cell<gpui_kit::gpui::Size<Pixels>>>,
+    /// Participant IDs whose tile menu is open.
+    pub(super) call_menu: Option<String>,
     /// Repaints once a second during a call for its duration.
     pub(super) call_clock: Option<Task<()>>,
     /// Plays while an incoming call rings; dropping it stops the sound.
@@ -655,6 +716,17 @@ impl MatrixApp {
             selection_trace: None,
             call_tiles: HashMap::new(),
             call_focus: None,
+            call_follow: Default::default(),
+            call_follow_timer: None,
+            call_full_screen: false,
+            call_full_screen_entered: false,
+            call_controls: Default::default(),
+            call_controls_timer: None,
+            call_controls_pinned: false,
+            call_volume: HashMap::new(),
+            call_volume_sent: None,
+            call_stage_size: Default::default(),
+            call_menu: None,
             call_clock: None,
             ringtone: None,
             call_screen_focus: None,
