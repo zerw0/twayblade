@@ -1,6 +1,9 @@
 //! Native camera capture: AVFoundation on macOS, Video4Linux2 on Linux and
 //! Media Foundation on Windows.
-use crate::{CaptureSource, Device, MediaError};
+use crate::{CaptureSource, MediaError};
+// The Linux and Windows backends list devices with their own types.
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+use crate::Device;
 mod convert;
 #[cfg(target_os = "macos")]
 #[allow(

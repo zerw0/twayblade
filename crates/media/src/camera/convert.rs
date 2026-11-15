@@ -1,8 +1,11 @@
 //! Frame conversion and capture-mode choice shared by the Linux and Windows
 //! camera backends. Safe Rust only; the OS code hands in bounded byte slices.
 #![cfg_attr(
-    not(any(target_os = "linux", target_os = "windows", test)),
-    allow(dead_code, reason = "used by the Linux and Windows camera backends")
+    not(any(target_os = "linux", test)),
+    allow(
+        dead_code,
+        reason = "mode choice and YUYV conversion are Linux-only; Windows uses the size limits and NV12 length"
+    )
 )]
 use livekit::webrtc::video_frame::I420Buffer;
 
