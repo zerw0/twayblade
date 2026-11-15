@@ -21,10 +21,12 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::validate_homeserver;
+mod accounts;
 mod loopback;
 mod oauth;
 mod recovery;
 mod sso;
+pub use accounts::SavedAccount;
 pub use oauth::OAuthLogin;
 pub use recovery::SessionState;
 pub use sso::SsoLogin;
@@ -50,6 +52,25 @@ struct SavedOAuth {
 }
 
 impl SavedSession {
+    fn new(homeserver: String) -> Self {
+        Self {
+            homeserver,
+            generation: Uuid::new_v4(),
+            store_id: Uuid::new_v4(),
+            passphrase: Uuid::new_v4().to_string(),
+            session: None,
+            oauth: None,
+        }
+    }
+
+    fn user_id(&self) -> Option<String> {
+        match (&self.session, &self.oauth) {
+            (Some(session), None) => Some(session.meta.user_id.to_string()),
+            (None, Some(oauth)) => Some(oauth.user.meta.user_id.to_string()),
+            _ => None,
+        }
+    }
+
     fn update(&mut self, session: AuthSession) -> Result<(), AuthError> {
         match session {
             AuthSession::Matrix(session) => {
@@ -82,7 +103,12 @@ pub struct Account {
     pub(crate) call_slot: Arc<tokio::sync::Semaphore>,
     instance_id: Uuid,
     remotely_revoked: Arc<AtomicBool>,
+    store_id: Uuid,
     store_path: PathBuf,
+    data_dir: PathBuf,
+    /// The service holding every account's slot (for recovery contexts).
+    base_store: secrets::SessionStore,
+    /// This account's own credential slot.
     session_store: secrets::SessionStore,
     persistence_lock: Arc<Mutex<()>>,
     pub(crate) root_certificate: Option<matrix_sdk::reqwest::Certificate>,
@@ -101,13 +127,52 @@ impl Account {
         self.instance_id.as_u128()
     }
 
+    /// Test fixtures: an account outside the saved-account index.
+    #[cfg(test)]
     pub(crate) fn new(
         client: Client,
         store_path: PathBuf,
         session_store: secrets::SessionStore,
         persistence_lock: Arc<Mutex<()>>,
     ) -> Self {
+        let data_dir = store_path
+            .parent()
+            .and_then(|path| path.parent())
+            .map(ToOwned::to_owned)
+            .unwrap_or_default();
+        let mut account = Self::open(
+            client,
+            &AuthContext {
+                session_store: session_store.clone(),
+                data_dir,
+                root_certificate: None,
+            },
+            Uuid::new_v4(),
+            persistence_lock,
+        );
+        account.store_path = store_path;
+        account.session_store = session_store;
+        account
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_certificate(
+        mut self,
+        certificate: Option<matrix_sdk::reqwest::Certificate>,
+    ) -> Self {
+        self.root_certificate = certificate;
+        self
+    }
+
+    fn open(
+        client: Client,
+        context: &AuthContext,
+        store_id: Uuid,
+        persistence_lock: Arc<Mutex<()>>,
+    ) -> Self {
         let (session_state, monitor) = recovery::monitor(&client);
+        let store_path = context.store_path(store_id);
+        let session_store = context.slot(store_id);
         Self {
             client,
             thread_read_updates: tokio::sync::broadcast::channel(32).0,
@@ -118,21 +183,21 @@ impl Account {
             call_slot: Arc::new(tokio::sync::Semaphore::new(1)),
             instance_id: Uuid::new_v4(),
             remotely_revoked: Arc::new(AtomicBool::new(false)),
+            store_id,
             store_path,
+            data_dir: context.data_dir.clone(),
+            base_store: context.session_store.clone(),
             session_store,
             persistence_lock,
-            root_certificate: None,
+            root_certificate: context.root_certificate.clone(),
             session_state,
             _session_monitor: monitor,
         }
     }
 
-    pub(crate) fn with_certificate(
-        mut self,
-        certificate: Option<matrix_sdk::reqwest::Certificate>,
-    ) -> Self {
-        self.root_certificate = certificate;
-        self
+    /// The saved account this session belongs to (see [`saved_accounts`]).
+    pub fn id(&self) -> String {
+        self.store_id.to_string()
     }
 
     pub fn user_id(&self) -> String {
@@ -157,7 +222,17 @@ impl Account {
                 .delete_sync()
                 .map_err(|_| AuthError::Storage)?;
         }
-        // The revoked device's keys and cached history have no further use.
+        self.forget().await
+    }
+
+    /// Drops this account from the saved list and deletes its local store.
+    /// The revoked device's keys and cached history have no further use.
+    async fn forget(&self) -> Result<(), AuthError> {
+        let store_id = self.store_id;
+        accounts::update(&self.data_dir, |index| {
+            index.remove(store_id);
+            Ok(())
+        })?;
         remove_store(&self.store_path).await
     }
 }
@@ -186,8 +261,9 @@ pub enum AuthError {
     Login,
     #[error("auth_logout")]
     Logout,
-    #[error("auth_existing_session")]
-    ExistingSession,
+    /// The Matrix user signing in is already saved in Twayblade.
+    #[error("auth_duplicate_account")]
+    DuplicateAccount,
     #[error("auth_already_running")]
     AlreadyRunning,
 }
@@ -260,12 +336,128 @@ impl AuthContext {
         self.data_dir.join("sessions").join(store_id.to_string())
     }
 
+    fn slot(&self, store_id: Uuid) -> secrets::SessionStore {
+        self.session_store.slot(&store_id.to_string())
+    }
+
     async fn save(&self, record: &SavedSession) -> Result<(), AuthError> {
         let value = Zeroizing::new(serde_json::to_string(record).map_err(|_| AuthError::Storage)?);
-        self.session_store
+        self.slot(record.store_id)
             .save(value)
             .await
             .map_err(|_| AuthError::Storage)
+    }
+
+    /// Starts adding an account: a pending index entry and a credential
+    /// checkpoint, proving secure storage works before any password or browser
+    /// step. Cleaned up by [`Self::abandon`], or at the next launch.
+    async fn begin_new(&self, homeserver: String) -> Result<SavedSession, AuthError> {
+        let record = SavedSession::new(homeserver);
+        let entry = accounts::Entry {
+            store_id: record.store_id,
+            user_id: String::new(),
+            homeserver: record.homeserver.clone(),
+            pending: true,
+        };
+        accounts::update(&self.data_dir, |index| {
+            index.accounts.push(entry);
+            Ok(())
+        })?;
+        if let Err(error) = self.save(&record).await {
+            self.abandon(&record).await;
+            return Err(error);
+        }
+        Ok(record)
+    }
+
+    /// Best-effort removal of an unfinished sign-in's slot, store and entry.
+    async fn abandon(&self, record: &SavedSession) {
+        let _ = self.slot(record.store_id).delete().await;
+        let _ = remove_store(&self.store_path(record.store_id)).await;
+        let _ = accounts::update(&self.data_dir, |index| {
+            index.remove(record.store_id);
+            Ok(())
+        });
+    }
+
+    /// Lists the signed-in account and makes it active. Rejects a user that
+    /// is already saved, before anything is connected.
+    fn complete(&self, record: &SavedSession) -> Result<(), AuthError> {
+        let user_id = record.user_id().ok_or(AuthError::Storage)?;
+        accounts::update(&self.data_dir, |index| {
+            index.complete(record.store_id, &user_id)
+        })
+    }
+
+    /// Runs once at launch, before the first restore: moves the original
+    /// single-session slot into its own per-account slot and removes sign-ins
+    /// a crash interrupted.
+    async fn prepare(&self) -> Result<(), AuthError> {
+        if let Some(value) = self
+            .session_store
+            .load()
+            .await
+            .map_err(|_| AuthError::Storage)?
+        {
+            let record: SavedSession =
+                serde_json::from_str(&value).map_err(|_| AuthError::Restore)?;
+            if let Some(user_id) = record.user_id() {
+                // Write the new slot and the index before removing the old
+                // slot, so an interruption only repeats this step.
+                self.slot(record.store_id)
+                    .save(value)
+                    .await
+                    .map_err(|_| AuthError::Storage)?;
+                accounts::update(&self.data_dir, |index| {
+                    if !index
+                        .accounts
+                        .iter()
+                        .any(|entry| entry.store_id == record.store_id)
+                    {
+                        index.accounts.insert(
+                            0,
+                            accounts::Entry {
+                                store_id: record.store_id,
+                                user_id,
+                                homeserver: record.homeserver.clone(),
+                                pending: false,
+                            },
+                        );
+                    }
+                    index.active.get_or_insert(record.store_id);
+                    Ok(())
+                })?;
+            } else {
+                // An interrupted sign-in left an empty, never-logged-in store.
+                remove_store(&self.store_path(record.store_id)).await?;
+            }
+            self.session_store
+                .delete()
+                .await
+                .map_err(|_| AuthError::Storage)?;
+        }
+        let pending: Vec<Uuid> = accounts::read(&self.data_dir)?
+            .map(|index| {
+                index
+                    .accounts
+                    .iter()
+                    .filter(|entry| entry.pending)
+                    .map(|entry| entry.store_id)
+                    .collect()
+            })
+            .unwrap_or_default();
+        for store_id in pending {
+            self.slot(store_id)
+                .delete()
+                .await
+                .map_err(|_| AuthError::Storage)?;
+            remove_store(&self.store_path(store_id)).await?;
+            accounts::update(&self.data_dir, |index| {
+                index.remove(store_id);
+                Ok(())
+            })?;
+        }
+        Ok(())
     }
 }
 
@@ -301,47 +493,100 @@ async fn client(
     Ok((client, path))
 }
 
+/// Opens the account used last, at launch. `None` when no account is saved.
 pub async fn restore() -> Result<Option<Account>, AuthError> {
     restore_in(&AuthContext::application()?).await
 }
 
+/// Opens another saved account and makes it the one used at launch.
+pub async fn restore_account(id: &str) -> Result<Account, AuthError> {
+    let context = AuthContext::application()?;
+    let store_id = Uuid::parse_str(id).map_err(|_| AuthError::Restore)?;
+    restore_entry(&context, store_id)
+        .await?
+        .ok_or(AuthError::Restore)
+}
+
+/// Every signed-in account, in the order they were added. No credentials.
+pub fn saved_accounts() -> Result<Vec<SavedAccount>, AuthError> {
+    saved_accounts_in(&AuthContext::application()?)
+}
+
+fn saved_accounts_in(context: &AuthContext) -> Result<Vec<SavedAccount>, AuthError> {
+    Ok(accounts::read(&context.data_dir)?
+        .map(|index| index.saved())
+        .unwrap_or_default())
+}
+
 async fn restore_in(context: &AuthContext) -> Result<Option<Account>, AuthError> {
-    let Some(value) = context
-        .session_store
-        .load()
-        .await
-        .map_err(|_| AuthError::Storage)?
-    else {
+    context.prepare().await?;
+    // An entry whose credential vanished (for example a cleared keychain) is
+    // dropped, and the next saved account is tried.
+    loop {
+        let Some(store_id) = accounts::read(&context.data_dir)?.and_then(|index| index.launch())
+        else {
+            return Ok(None);
+        };
+        if let Some(account) = restore_entry(context, store_id).await? {
+            return Ok(Some(account));
+        }
+    }
+}
+
+/// `None` (after removing the entry) when the account's credential is gone.
+async fn restore_entry(
+    context: &AuthContext,
+    store_id: Uuid,
+) -> Result<Option<Account>, AuthError> {
+    let listed = accounts::read(&context.data_dir)?
+        .is_some_and(|index| index.ready().any(|entry| entry.store_id == store_id));
+    if !listed {
+        return Err(AuthError::Restore);
+    }
+    let slot = context.slot(store_id);
+    let record = match slot.load().await.map_err(|_| AuthError::Storage)? {
+        Some(value) => {
+            let record: SavedSession =
+                serde_json::from_str(&value).map_err(|_| AuthError::Restore)?;
+            (record.store_id == store_id && record.user_id().is_some()).then_some(record)
+        }
+        None => None,
+    };
+    let Some(mut record) = record else {
+        let _ = slot.delete().await;
+        remove_store(&context.store_path(store_id)).await?;
+        accounts::update(&context.data_dir, |index| {
+            index.remove(store_id);
+            Ok(())
+        })?;
         return Ok(None);
     };
-    let mut record: SavedSession = serde_json::from_str(&value).map_err(|_| AuthError::Restore)?;
     let session = match (record.session.take(), record.oauth.take()) {
         (Some(session), None) => AuthSession::Matrix(session),
         (None, Some(session)) => AuthSession::OAuth(Box::new(OAuthSession {
             client_id: ClientId::new(session.client_id),
             user: session.user,
         })),
-        (None, None) => return Ok(None),
         _ => return Err(AuthError::Restore),
     };
-    let (client, path) = client(context, &record).await?;
+    let (client, _) = client(context, &record).await?;
     client
         .restore_session(session)
         .await
         .map_err(|_| AuthError::Restore)?;
-    let persistence_lock =
-        install_session_callbacks(&client, context.session_store.clone(), record.store_id)?;
+    let persistence_lock = install_session_callbacks(&client, slot, store_id)?;
     client.send_queue().enable_upload_progress(true);
     client.send_queue().set_enabled(true).await;
-    Ok(Some(
-        Account::new(
-            client,
-            path,
-            context.session_store.clone(),
-            persistence_lock,
-        )
-        .with_certificate(context.root_certificate.clone()),
-    ))
+    accounts::update(&context.data_dir, |index| {
+        index.active = Some(store_id);
+        Ok(())
+    })?;
+    Ok(Some(Account::open(
+        client,
+        context,
+        store_id,
+        persistence_lock,
+    )))
 }
 
 pub async fn login_password(
@@ -362,31 +607,15 @@ async fn login_password_in(
     if username.trim().is_empty() || password.is_empty() {
         return Err(AuthError::Login);
     }
-    if let Some(value) = context
-        .session_store
-        .load()
-        .await
-        .map_err(|_| AuthError::Storage)?
-    {
-        let previous: SavedSession =
-            serde_json::from_str(&value).map_err(|_| AuthError::Restore)?;
-        if previous.session.is_some() || previous.oauth.is_some() {
-            return Err(AuthError::ExistingSession);
-        }
-        // An interrupted earlier sign-in left an empty, never-logged-in store.
-        remove_store(&context.store_path(previous.store_id)).await?;
-    }
-    let mut record = SavedSession {
-        homeserver: homeserver.to_string(),
-        generation: Uuid::new_v4(),
-        store_id: Uuid::new_v4(),
-        passphrase: Uuid::new_v4().to_string(),
-        session: None,
-        oauth: None,
-    };
     // Prove secure storage works before transmitting the password or creating a device.
-    context.save(&record).await?;
-    let (client, path) = client(context, &record).await?;
+    let mut record = context.begin_new(homeserver.to_string()).await?;
+    let (client, _) = match client(context, &record).await {
+        Ok(client) => client,
+        Err(error) => {
+            context.abandon(&record).await;
+            return Err(error);
+        }
+    };
     let login = client
         .matrix_auth()
         .login_username(username.trim(), &password)
@@ -396,25 +625,30 @@ async fn login_password_in(
     let Some(session) = session else {
         // No device exists; discard the checkpoint and its empty store.
         drop(client);
-        let _ = context.session_store.delete().await;
-        let _ = remove_store(&path).await;
+        context.abandon(&record).await;
         return Err(AuthError::Login);
     };
     record.session = Some(session);
-    if let Err(error) = context.save(&record).await {
-        // Best effort revocation if secure persistence failed after server login.
+    let saved = match context.save(&record).await {
+        Ok(()) => context.complete(&record),
+        Err(error) => Err(error),
+    };
+    if let Err(error) = saved {
+        // Revoke the new device if it cannot be kept (storage failed, or this
+        // user is already signed in here).
         let _ = client.matrix_auth().logout().await;
+        drop(client);
+        context.abandon(&record).await;
         return Err(error);
     }
     let persistence_lock =
-        install_session_callbacks(&client, context.session_store.clone(), record.store_id)?;
-    Ok(Account::new(
+        install_session_callbacks(&client, context.slot(record.store_id), record.store_id)?;
+    Ok(Account::open(
         client,
-        path,
-        context.session_store.clone(),
+        context,
+        record.store_id,
         persistence_lock,
-    )
-    .with_certificate(context.root_certificate.clone()))
+    ))
 }
 
 /// Serialize full-record replacement with logout. A refresh from a stale
@@ -464,6 +698,145 @@ fn install_session_callbacks(
         )
         .map_err(|_| AuthError::Storage)?;
     Ok(gate)
+}
+
+// Only the macOS Keychain integration tests read credentials back.
+#[cfg(all(test, target_os = "macos"))]
+impl AuthContext {
+    /// Test view of the saved credential: the first listed account's slot
+    /// (including a pending sign-in), else the original single-session slot.
+    async fn saved_credential(
+        &self,
+    ) -> Result<Option<Zeroizing<String>>, secrets::SecretStoreError> {
+        let first = accounts::read(&self.data_dir)
+            .ok()
+            .flatten()
+            .and_then(|index| index.accounts.first().map(|entry| entry.store_id));
+        match first {
+            Some(store_id) => self.slot(store_id).load().await,
+            None => self.session_store.load().await,
+        }
+    }
+}
+
+#[cfg(test)]
+mod account_storage {
+    use super::*;
+    use matrix_sdk::{
+        SessionMeta, SessionTokens,
+        ruma::{device_id, user_id},
+    };
+
+    fn record(user: &matrix_sdk::ruma::UserId) -> SavedSession {
+        let mut record = SavedSession::new("https://matrix.example.org/".into());
+        record.session = Some(MatrixSession {
+            meta: SessionMeta {
+                user_id: user.to_owned(),
+                device_id: device_id!("TESTDEVICE").to_owned(),
+            },
+            tokens: SessionTokens {
+                access_token: "not-a-real-token".into(),
+                refresh_token: None,
+            },
+        });
+        record
+    }
+
+    /// Touches the real OS credential store under an isolated service name;
+    /// every item it writes is removed again.
+    #[tokio::test]
+    #[ignore = "requires an unlocked OS credential store"]
+    async fn single_session_slot_migrates_and_interrupted_sign_ins_are_removed() {
+        let scope = Uuid::new_v4();
+        let context = AuthContext {
+            session_store: secrets::SessionStore::new(&format!(
+                "twayblade.integration.accounts.{scope}"
+            )),
+            data_dir: std::env::temp_dir().join(format!("twayblade-accounts-{scope}")),
+            root_certificate: None,
+        };
+        // An account saved by an earlier version, in the single original slot.
+        let legacy = record(user_id!("@alice:example.org"));
+        let value = serde_json::to_string(&legacy).expect("record");
+        context
+            .session_store
+            .save(Zeroizing::new(value.clone()))
+            .await
+            .expect("legacy slot");
+        tokio::fs::create_dir_all(context.store_path(legacy.store_id))
+            .await
+            .expect("legacy store");
+        // A sign-in that a crash interrupted: pending entry, slot and store.
+        let interrupted = context
+            .begin_new("https://other.example.org/".into())
+            .await
+            .expect("pending sign-in");
+        tokio::fs::create_dir_all(context.store_path(interrupted.store_id))
+            .await
+            .expect("pending store");
+
+        context.prepare().await.expect("prepare");
+        assert!(
+            context.session_store.load().await.expect("load").is_none(),
+            "the original slot is emptied"
+        );
+        let moved = context
+            .slot(legacy.store_id)
+            .load()
+            .await
+            .expect("load")
+            .expect("account slot");
+        assert_eq!(moved.as_str(), value, "the record moves unchanged");
+        assert!(context.store_path(legacy.store_id).exists(), "history kept");
+        assert!(
+            context
+                .slot(interrupted.store_id)
+                .load()
+                .await
+                .expect("load")
+                .is_none()
+        );
+        assert!(!context.store_path(interrupted.store_id).exists());
+        let index = accounts::read(&context.data_dir)
+            .expect("index")
+            .expect("written");
+        assert_eq!(index.launch(), Some(legacy.store_id));
+        assert_eq!(
+            saved_accounts_in(&context).expect("list"),
+            [SavedAccount {
+                id: legacy.store_id.to_string(),
+                user_id: "@alice:example.org".into(),
+                homeserver: "https://matrix.example.org/".into(),
+            }]
+        );
+        // Running again is a no-op.
+        context.prepare().await.expect("second prepare");
+        assert_eq!(saved_accounts_in(&context).expect("list").len(), 1);
+
+        // Adding the same user again is refused without touching the saved one.
+        let mut again = context
+            .begin_new("https://matrix.example.org/".into())
+            .await
+            .expect("second sign-in");
+        again.session = record(user_id!("@alice:example.org")).session;
+        assert!(matches!(
+            context.complete(&again),
+            Err(AuthError::DuplicateAccount)
+        ));
+        context.abandon(&again).await;
+        assert!(
+            context
+                .slot(again.store_id)
+                .load()
+                .await
+                .expect("load")
+                .is_none()
+        );
+        assert_eq!(saved_accounts_in(&context).expect("list").len(), 1);
+
+        let _ = context.slot(legacy.store_id).delete().await;
+        let _ = tokio::fs::remove_dir_all(&context.data_dir).await;
+    }
 }
 
 #[cfg(test)]

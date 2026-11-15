@@ -49,6 +49,8 @@ pub(super) struct Snapshot {
     pub(super) preview_size: previews::PreviewSize,
     pub(super) revision: u64,
     pub(super) account_instance: u128,
+    /// Every saved account, in the order added; `active` marks the open one.
+    pub(super) accounts: Vec<AccountEntry>,
     pub(super) session_state: SessionState,
     pub(super) security: twayblade_core::security::SecuritySnapshot,
     pub(super) notifications: twayblade_core::notifications::RulesSnapshot,
@@ -87,6 +89,28 @@ pub(super) struct Snapshot {
     pub(super) timeline_status: String,
     /// Main timeline state behind `timeline_status`, for the view's layout.
     pub(super) timeline_phase: TimelineStatus,
+}
+
+/// One saved account in the switcher. No credentials or SDK handles.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct AccountEntry {
+    pub(super) id: String,
+    pub(super) user_id: String,
+    pub(super) homeserver: String,
+    pub(super) active: bool,
+}
+
+fn account_entries(active: Option<&str>) -> Vec<AccountEntry> {
+    auth::saved_accounts()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|saved| AccountEntry {
+            active: active == Some(saved.id.as_str()),
+            id: saved.id,
+            user_id: saved.user_id,
+            homeserver: saved.homeserver,
+        })
+        .collect()
 }
 
 #[derive(Clone)]
@@ -397,8 +421,8 @@ fn auth_failure(error: AuthError) -> ServiceError {
         AuthError::Logout => {
             "Sign-out could not be completed. The session has been retained; retry when connected."
         }
-        AuthError::ExistingSession => {
-            "A saved session already exists. Restart to restore it before signing in again."
+        AuthError::DuplicateAccount => {
+            "You are already signed in to this account. Switch to it from the account menu."
         }
         AuthError::AlreadyRunning => "Twayblade is already running. Close the other window first.",
     })
@@ -663,11 +687,14 @@ impl Backend {
         }
     }
 
+    /// `add` signs in another account next to the saved ones; otherwise a
+    /// signed-out session is resumed when there is one.
     pub(super) fn login(
         &self,
         homeserver: String,
         username: String,
         password: String,
+        add: bool,
     ) -> Result<(), ServiceError> {
         let _lifecycle = self
             .lifecycle
@@ -680,6 +707,7 @@ impl Backend {
             .map_err(|_| failure("Session is unavailable."))?
             .account
             .clone()
+            .filter(|_| !add)
             .filter(|account| *account.session_state().borrow() == SessionState::SoftLoggedOut);
         let account = self
             .runtime
@@ -699,6 +727,7 @@ impl Backend {
         homeserver: String,
         sso: bool,
         provider: Option<String>,
+        add: bool,
     ) -> Result<String, ServiceError> {
         let _lifecycle = self
             .lifecycle
@@ -710,6 +739,7 @@ impl Backend {
             .map_err(|_| failure("Session is unavailable."))?
             .account
             .clone()
+            .filter(|_| !add)
             .filter(|account| *account.session_state().borrow() == SessionState::SoftLoggedOut);
         let pending = self
             .runtime
@@ -794,7 +824,76 @@ impl Backend {
         publish(&self.updates, |snapshot| {
             snapshot.clear_account(state.previews.size);
         });
-        Ok(())
+        drop(state);
+        self.open_next_account()
+    }
+
+    /// Opens another saved account (from the account menu). Refused during a
+    /// call, which belongs to the open account.
+    pub(super) fn switch_account(&self, id: String) -> Result<(), ServiceError> {
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?;
+        {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| failure("Session is unavailable."))?;
+            if state
+                .account
+                .as_ref()
+                .is_some_and(|account| account.id() == id)
+            {
+                return Ok(());
+            }
+            let in_call = self.updates.borrow().call.as_ref().is_some_and(|call| {
+                !matches!(call.phase, twayblade_core::calls::CallPhase::Ended(_))
+            });
+            if in_call || state.call_task.is_some() {
+                return Err(failure("Leave the call before switching accounts."));
+            }
+        }
+        // Stop the open account first so its sync, notifications and calls end
+        // before the other store is opened.
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| failure("Session is unavailable."))?;
+            state.stop();
+            state.account = None;
+        }
+        twayblade_platform::notifications::clear_launch_activation();
+        let account = self
+            .runtime
+            .block_on(auth::restore_account(&id))
+            .map_err(auth_failure);
+        match account {
+            Ok(account) => self.connect(account),
+            Err(error) => {
+                // Fall back to an account that opens, so the window is never
+                // left without one while others are saved.
+                let _ = self.open_next_account();
+                Err(error)
+            }
+        }
+    }
+
+    /// After a sign-out: open the first remaining saved account, if any.
+    fn open_next_account(&self) -> Result<(), ServiceError> {
+        let Some(next) = auth::saved_accounts()
+            .map_err(auth_failure)?
+            .into_iter()
+            .next()
+        else {
+            return Ok(());
+        };
+        let account = self
+            .runtime
+            .block_on(auth::restore_account(&next.id))
+            .map_err(auth_failure)?;
+        self.connect(account)
     }
 
     pub(super) fn security_action(
@@ -1716,7 +1815,8 @@ impl Backend {
         publish(&self.updates, |snapshot| {
             snapshot.clear_account(state.previews.size);
         });
-        Ok(())
+        drop(state);
+        self.open_next_account()
     }
 
     pub(super) fn stop(&self) {
@@ -1765,6 +1865,7 @@ impl Backend {
             snapshot.clear_account(state.previews.size);
             snapshot.user_id = account.user_id();
             snapshot.account_instance = account.instance_id();
+            snapshot.accounts = account_entries(Some(&account.id()));
             snapshot.sync_status = "Connecting…".into();
         });
         calls::observe(self, &mut state, account.clone());

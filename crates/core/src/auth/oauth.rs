@@ -1,7 +1,7 @@
 //! SDK-owned OAuth authorization code/PKCE, with one local browser callback.
 use super::{
     Account, AuthContext, AuthError, SavedSession, client, install_session_callbacks,
-    loopback::Loopback, remove_store,
+    loopback::Loopback,
 };
 use matrix_sdk::{
     Client,
@@ -13,6 +13,7 @@ use matrix_sdk::{
 };
 use tokio::sync::watch;
 use url::Url;
+#[cfg(all(test, target_os = "macos"))]
 use uuid::Uuid;
 
 // No Debug: the authorization URL and eventual callback are sensitive.
@@ -50,37 +51,21 @@ impl OAuthLogin {
         recovery: Option<Account>,
     ) -> Result<Self, AuthError> {
         let homeserver = super::validate_homeserver(&homeserver).map_err(|_| AuthError::OAuth)?;
-        if recovery.is_none()
-            && let Some(value) = context
-                .session_store
-                .load()
-                .await
-                .map_err(|_| AuthError::Storage)?
-        {
-            let previous: SavedSession =
-                serde_json::from_str(&value).map_err(|_| AuthError::Restore)?;
-            if previous.session.is_some() || previous.oauth.is_some() {
-                return Err(AuthError::ExistingSession);
-            }
-            remove_store(&context.store_path(previous.store_id)).await?;
-        }
         let listener = Loopback::bind().await?;
         let record = if let Some(account) = &recovery {
             account.recovery_record().await?
         } else {
-            SavedSession {
-                homeserver: homeserver.to_string(),
-                generation: Uuid::new_v4(),
-                store_id: Uuid::new_v4(),
-                passphrase: Uuid::new_v4().to_string(),
-                session: None,
-                oauth: None,
+            context.begin_new(homeserver.to_string()).await?
+        };
+        let (client, _) = match client(&context, &record).await {
+            Ok(client) => client,
+            Err(error) => {
+                if recovery.is_none() {
+                    context.abandon(&record).await;
+                }
+                return Err(error);
             }
         };
-        if recovery.is_none() {
-            context.save(&record).await?;
-        }
-        let (client, path) = client(&context, &record).await?;
         if let Some(saved) = &record.oauth {
             client
                 .oauth()
@@ -121,8 +106,7 @@ impl OAuthLogin {
             Err(_) => {
                 drop(client);
                 if recovery.is_none() {
-                    let _ = context.session_store.delete().await;
-                    let _ = remove_store(&path).await;
+                    context.abandon(&record).await;
                 }
                 Err(AuthError::OAuth)
             }
@@ -135,7 +119,6 @@ impl OAuthLogin {
     }
 
     pub async fn finish(mut self, cancel: watch::Receiver<bool>) -> Result<Account, AuthError> {
-        let path = self.context.store_path(self.record.store_id);
         let oauth = self.client.oauth();
         let result = async {
             let callback = self.listener.receive(self.state.secret(), cancel).await?;
@@ -154,19 +137,19 @@ impl OAuthLogin {
                 account.persist_reauthentication(&mut self.record)?;
             } else {
                 self.context.save(&self.record).await?;
+                self.context.complete(&self.record)?;
             }
             let gate = install_session_callbacks(
                 &self.client,
-                self.context.session_store.clone(),
+                self.context.slot(self.record.store_id),
                 self.record.store_id,
             )?;
-            Ok(Account::new(
+            Ok(Account::open(
                 self.client.clone(),
-                path.clone(),
-                self.context.session_store.clone(),
+                &self.context,
+                self.record.store_id,
                 gate,
-            )
-            .with_certificate(self.context.root_certificate.clone()))
+            ))
         }
         .await;
         if result.is_err() {
@@ -177,8 +160,7 @@ impl OAuthLogin {
             drop(oauth);
             drop(self.client);
             if self.recovery.is_none() {
-                let _ = self.context.session_store.delete().await;
-                let _ = remove_store(&path).await;
+                self.context.abandon(&self.record).await;
             }
         }
         result
@@ -311,8 +293,7 @@ mod tests {
                 account.logout().await.expect("OAuth logout");
                 assert!(
                     context
-                        .session_store
-                        .load()
+                        .saved_credential()
                         .await
                         .expect("Keychain load")
                         .is_none()
@@ -332,8 +313,7 @@ mod tests {
                 "access token rotated"
             );
             let value = context
-                .session_store
-                .load()
+                .saved_credential()
                 .await
                 .expect("Keychain load")
                 .expect("session");
@@ -468,8 +448,7 @@ mod tests {
             assert!(
                 context(scope)
                     .await
-                    .session_store
-                    .load()
+                    .saved_credential()
                     .await
                     .expect("Keychain load")
                     .is_none()

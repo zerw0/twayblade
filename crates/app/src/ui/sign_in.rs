@@ -135,11 +135,85 @@ impl MatrixApp {
     }
 
     pub(crate) fn sign_in_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        let form = self
+            .sign_in_form(cx)
+            .p(px(28.))
+            .rounded(px(16.))
+            .bg(cx.theme().secondary)
+            .border_1()
+            .border_color(cx.theme().border);
+        v_flex()
+            .id("sign-in")
+            .size_full()
+            .items_center()
+            .pt(px(32.))
+            .pb(px(24.))
+            .px_6()
+            .overflow_y_scroll()
+            .child(form)
+            .into_any_element()
+    }
+
+    /// Add Account…: the same flow in a sheet over the dimmed workspace. It
+    /// closes only through Cancel or Escape, never by a stray outside click.
+    pub(crate) fn add_account_sheet(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .id("add-account-backdrop")
+            .test_support()
+            .absolute()
+            .inset_0()
+            .occlude()
+            .bg(gpui_kit::black().opacity(0.35))
+            .flex()
+            .items_start()
+            .justify_center()
+            .pt(px(56.))
+            .child(crate::ui::motion::rise(
+                div().child(
+                    self.sign_in_form(cx)
+                        .id("add-account-sheet")
+                        .role(Role::Dialog)
+                        .aria_label("Add Account")
+                        .p(px(24.))
+                        .rounded(px(12.))
+                        .bg(cx.theme().background)
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .shadow_lg()
+                        .max_h(relative(0.86))
+                        .overflow_y_scroll()
+                        .focus_trap("add-account-dialog", &self.add_account_focus),
+                ),
+                "add-account-motion",
+                self.snapshot.reduce_motion,
+            ))
+            .into_any_element()
+    }
+
+    /// The Cancel button that closes the Add Account sheet.
+    fn cancel_add_button(&self, cx: &mut Context<Self>) -> Button {
+        Button::new("cancel-add-account")
+            .ghost()
+            .label("Cancel")
+            .disabled(self.busy)
+            .on_click(cx.listener(|this, _, window, cx| this.cancel_add_account(window, cx)))
+    }
+
+    fn sign_in_form(&self, cx: &mut Context<Self>) -> Div {
         let muted = cx.theme().muted_foreground;
-        let welcome = self.options.is_none() && !self.choosing_server;
-        let signed_out =
-            self.snapshot.session_state == twayblade_core::auth::SessionState::SoftLoggedOut;
+        let adding = self.adding_account;
+        let welcome = self.options.is_none() && !self.choosing_server && !adding;
+        let signed_out = !adding
+            && self.snapshot.session_state == twayblade_core::auth::SessionState::SoftLoggedOut;
         let (title, subtitle) = match &self.options {
+            None if adding => (
+                "Add an account",
+                "Pick where the account lives, or enter another server.".to_owned(),
+            ),
+            Some(options) if adding => (
+                "Add an account",
+                format!("Choose how to sign in to {}.", options.homeserver),
+            ),
             None if welcome && !signed_out => (
                 "Twayblade",
                 "Encrypted messages and calls over Matrix.".to_owned(),
@@ -161,21 +235,15 @@ impl MatrixApp {
                 format!("Choose how to sign in to {}.", options.homeserver),
             ),
         };
-        let mut form = v_flex()
-            .w(px(420.))
-            .max_w_full()
-            .p(px(28.))
-            .gap(px(14.))
-            .rounded(px(16.))
-            .bg(cx.theme().secondary)
-            .border_1()
-            .border_color(cx.theme().border)
-            .child(
-                v_flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .pb(px(8.))
-                    .child(
+        let mut form = v_flex().w(px(420.)).max_w_full().gap(px(14.)).child(
+            v_flex()
+                .items_center()
+                .gap(px(if adding { 4. } else { 10. }))
+                .pb(px(if adding { 2. } else { 8. }))
+                // The sheet sits over the app, so it skips the brand mark and
+                // uses a sheet-sized title.
+                .when(!adding, |header| {
+                    header.child(
                         div()
                             .size(px(56.))
                             .rounded_full()
@@ -189,14 +257,19 @@ impl MatrixApp {
                                     .text_color(cx.theme().primary_foreground),
                             ),
                     )
-                    .child(heading("sign-in-title", title).text_size(px(22.)))
-                    .child(
-                        text_label("sign-in-subtitle", subtitle.clone())
-                            .text_color(muted)
-                            .text_center()
-                            .child(subtitle),
-                    ),
-            );
+                })
+                .child(heading("sign-in-title", title).text_size(px(if adding {
+                    16.
+                } else {
+                    22.
+                })))
+                .child(
+                    text_label("sign-in-subtitle", subtitle.clone())
+                        .text_color(muted)
+                        .text_center()
+                        .child(subtitle),
+                ),
+        );
         match &self.options {
             None if welcome && !signed_out => {
                 form = form.child(
@@ -290,7 +363,9 @@ impl MatrixApp {
                             h_flex()
                                 .justify_end()
                                 .gap(px(8.))
-                                .child(
+                                .child(if adding {
+                                    self.cancel_add_button(cx)
+                                } else {
                                     Button::new("back-to-welcome")
                                         .ghost()
                                         .label("Back")
@@ -298,8 +373,8 @@ impl MatrixApp {
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.choosing_server = false;
                                             cx.notify();
-                                        })),
-                                )
+                                        }))
+                                })
                                 .child(
                                     Button::new("discover")
                                         .primary()
@@ -426,7 +501,17 @@ impl MatrixApp {
                                         .disabled(self.busy),
                                 ),
                         )
-                        .child(h_flex().justify_end().child(sign_in.primary()));
+                        .child(
+                            h_flex()
+                                .justify_end()
+                                .gap(px(8.))
+                                .when(adding && self.oauth_cancel.is_none(), |row| {
+                                    row.child(self.cancel_add_button(cx))
+                                })
+                                .child(sign_in.primary()),
+                        );
+                } else if adding && self.oauth_cancel.is_none() {
+                    form = form.child(h_flex().justify_end().child(self.cancel_add_button(cx)));
                 }
             }
         }
@@ -457,23 +542,13 @@ impl MatrixApp {
             "Twayblade keeps your session securely in the {}.",
             secret_store_name()
         );
-        form = form.child(
+        form.child(
             text_label("session-storage", storage.clone())
                 .pt(px(8.))
                 .text_size(px(11.5))
                 .text_color(muted)
                 .text_center()
                 .child(storage),
-        );
-        v_flex()
-            .id("sign-in")
-            .size_full()
-            .items_center()
-            .pt(px(32.))
-            .pb(px(24.))
-            .px_6()
-            .overflow_y_scroll()
-            .child(form)
-            .into_any_element()
+        )
     }
 }

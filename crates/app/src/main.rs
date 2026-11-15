@@ -184,6 +184,22 @@ fn main() {
                             state.focus(window, cx);
                         });
                     }
+                    if args.iter().any(|arg| arg.starts_with("--preview-add-account") || arg == "--preview-sign-out") {
+                        let me = view.snapshot.user_id.clone();
+                        view.snapshot.accounts = vec![
+                            backend::AccountEntry { id: "sample-1".into(), user_id: me, homeserver: "https://matrix.example.org/".into(), active: true },
+                            backend::AccountEntry { id: "sample-2".into(), user_id: "@sam.work:example.com".into(), homeserver: "https://example.com/".into(), active: false },
+                        ];
+                    }
+                    if args.iter().any(|arg| arg == "--preview-add-account") {
+                        view.adding_account = true;
+                        view.choosing_server = true;
+                    }
+                    if args.iter().any(|arg| arg == "--preview-add-account-options") {
+                        view.adding_account = true;
+                        view.options = Some(backend::LoginOptions { homeserver: "matrix.example.org".into(), password: true, browser: true, sso: false, providers: Vec::new() });
+                    }
+                    if args.iter().any(|arg| arg == "--preview-sign-out") { view.open_management(ui::spaces::ManageKind::SignOut, window, cx); }
                     if args.iter().any(|arg| arg == "--preview-activity") {
                         view.snapshot.invites = vec![twayblade_core::space_actions::Invite { id: "sample-room".into(), name: "Planning".into(), ..Default::default() }];
                         for (room, mentions) in view.snapshot.rooms.iter_mut().zip([2u64, 0, 0, 1]) { room.mentions = mentions; room.unread = room.unread.max(mentions).max(1); }

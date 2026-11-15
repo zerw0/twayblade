@@ -2,7 +2,6 @@
 use super::{
     Account, AuthContext, AuthError, SavedSession, client, install_session_callbacks,
     loopback::{CallbackKind, Loopback},
-    remove_store,
 };
 use matrix_sdk::Client;
 use tokio::sync::watch;
@@ -52,20 +51,6 @@ impl SsoLogin {
         recovery: Option<Account>,
     ) -> Result<Self, AuthError> {
         let homeserver = super::validate_homeserver(&homeserver).map_err(|_| AuthError::Login)?;
-        if recovery.is_none()
-            && let Some(value) = context
-                .session_store
-                .load()
-                .await
-                .map_err(|_| AuthError::Storage)?
-        {
-            let previous: SavedSession =
-                serde_json::from_str(&value).map_err(|_| AuthError::Restore)?;
-            if previous.session.is_some() || previous.oauth.is_some() {
-                return Err(AuthError::ExistingSession);
-            }
-            remove_store(&context.store_path(previous.store_id)).await?;
-        }
         let mut listener = Loopback::bind().await?;
         listener.kind = CallbackKind::Sso;
         let state = Uuid::new_v4().to_string();
@@ -74,19 +59,17 @@ impl SsoLogin {
         let record = if let Some(account) = &recovery {
             account.recovery_record().await?
         } else {
-            SavedSession {
-                homeserver: homeserver.to_string(),
-                generation: Uuid::new_v4(),
-                store_id: Uuid::new_v4(),
-                passphrase: Uuid::new_v4().to_string(),
-                session: None,
-                oauth: None,
+            context.begin_new(homeserver.to_string()).await?
+        };
+        let (client, _) = match client(&context, &record).await {
+            Ok(client) => client,
+            Err(error) => {
+                if recovery.is_none() {
+                    context.abandon(&record).await;
+                }
+                return Err(error);
             }
         };
-        if recovery.is_none() {
-            context.save(&record).await?;
-        }
-        let (client, path) = client(&context, &record).await?;
         let url = client
             .matrix_auth()
             .get_sso_login_url(redirect.as_str(), provider.as_deref())
@@ -106,8 +89,7 @@ impl SsoLogin {
             None => {
                 drop(client);
                 if recovery.is_none() {
-                    let _ = context.session_store.delete().await;
-                    let _ = remove_store(&path).await;
+                    context.abandon(&record).await;
                 }
                 Err(AuthError::Login)
             }
@@ -119,7 +101,6 @@ impl SsoLogin {
     }
 
     pub async fn finish(mut self, cancel: watch::Receiver<bool>) -> Result<Account, AuthError> {
-        let path = self.context.store_path(self.record.store_id);
         let result = async {
             let callback = self.listener.receive(&self.state, cancel).await?;
             let mut login = self
@@ -151,19 +132,19 @@ impl SsoLogin {
                 account.persist_reauthentication(&mut self.record)?;
             } else {
                 self.context.save(&self.record).await?;
+                self.context.complete(&self.record)?;
             }
             let gate = install_session_callbacks(
                 &self.client,
-                self.context.session_store.clone(),
+                self.context.slot(self.record.store_id),
                 self.record.store_id,
             )?;
-            Ok(Account::new(
+            Ok(Account::open(
                 self.client.clone(),
-                path.clone(),
-                self.context.session_store.clone(),
+                &self.context,
+                self.record.store_id,
                 gate,
-            )
-            .with_certificate(self.context.root_certificate.clone()))
+            ))
         }
         .await;
         if result.is_err() {
@@ -172,8 +153,7 @@ impl SsoLogin {
             }
             drop(self.client);
             if self.recovery.is_none() {
-                let _ = self.context.session_store.delete().await;
-                let _ = remove_store(&path).await;
+                self.context.abandon(&self.record).await;
             }
         }
         result
@@ -255,7 +235,7 @@ mod tests {
         assert!(browser.await.expect("browser task").0.success());
         assert!(account.user_id().ends_with(":sso.twayblade.test"));
         account.client.whoami().await.expect("SSO session accepted");
-        let store = account.session_store.clone();
+        let store = account.base_store.clone();
         let path = account.store_path.clone();
         let device = account.client.device_id().expect("device").to_string();
         drop(account);
@@ -280,8 +260,7 @@ mod tests {
         restored.logout().await.expect("SSO logout");
         assert!(
             context
-                .session_store
-                .load()
+                .saved_credential()
                 .await
                 .expect("Keychain load")
                 .is_none()

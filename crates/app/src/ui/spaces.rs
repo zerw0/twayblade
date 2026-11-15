@@ -32,6 +32,8 @@ pub(crate) enum ManageKind {
     LeaveRoom(String),
     /// Share your matrix.to link so someone can message you.
     InviteContact,
+    /// Confirm signing the open account out of this device.
+    SignOut,
 }
 impl ManageKind {
     /// Short forms open as a small centred dialog; browsing and leaving keep
@@ -45,6 +47,7 @@ impl ManageKind {
                 | Self::InviteMember(_)
                 | Self::LeaveRoom(_)
                 | Self::InviteContact
+                | Self::SignOut
         )
     }
 }
@@ -141,7 +144,7 @@ impl MatrixApp {
                 | ManageKind::InviteMember(_) => {
                     page.name.update(cx, |state, cx| state.focus(window, cx))
                 }
-                ManageKind::LeaveRoom(_) | ManageKind::InviteContact => {
+                ManageKind::LeaveRoom(_) | ManageKind::InviteContact | ManageKind::SignOut => {
                     page.focus.focus(window, cx)
                 }
                 _ => {}
@@ -406,6 +409,7 @@ impl MatrixApp {
             ManageKind::InviteMember(_) => "Invite People",
             ManageKind::LeaveRoom(_) => "Leave Room",
             ManageKind::InviteContact => "Invite a Contact",
+            ManageKind::SignOut => "Sign Out",
         }
     }
 
@@ -753,6 +757,48 @@ impl MatrixApp {
                                 );
                             })),
                     );
+            }
+            ManageKind::SignOut => {
+                let security = &self.snapshot.security;
+                let others = self.snapshot.accounts.len() > 1;
+                let mut text = format!(
+                    "{} will be signed out of this device, and its messages and encryption keys will be removed from this computer.",
+                    self.snapshot.user_id
+                );
+                if security.ready && !security.backup_exists {
+                    text.push_str(" Secure backup is off: encrypted history you can’t read on another device will be lost. Set up backup in Settings › Security first.");
+                }
+                if others {
+                    text.push_str(" Your other accounts stay signed in.");
+                }
+                body = body.child(text).child(
+                    h_flex()
+                        .w_full()
+                        .justify_end()
+                        .gap(px(8.))
+                        .child(
+                            Button::new("sign-out-cancel")
+                                .ghost()
+                                .label("Cancel")
+                                .disabled(self.busy)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.management = None;
+                                    this.restore_focus(window, cx);
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Button::new("sign-out-confirm")
+                                .danger()
+                                .icon(gpui_kit::assets::IconName::LogOut)
+                                .label("Sign Out")
+                                .disabled(self.preview || self.busy)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.management = None;
+                                    this.logout(window, cx);
+                                })),
+                        ),
+                );
             }
             ManageKind::InviteContact => {
                 let user = self.snapshot.user_id.clone();

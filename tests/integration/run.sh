@@ -115,6 +115,7 @@ case "${1:-test}" in
                 scripts/cargo-pruned test --locked -p twayblade-core --all-features secure_backup_fresh_store_recovery_and_sas -- --ignored --nocapture
             elif [[ "${1:-test}" == keychain ]]; then
                 scripts/cargo-pruned test --locked --workspace --all-features keychain_session_lifecycle_across_processes -- --ignored --nocapture
+                scripts/cargo-pruned test --locked -p twayblade-core --all-features -- --ignored --nocapture single_session_slot_migrates two_saved_accounts_switch
             elif [[ "${1:-test}" == services ]]; then
                 for test_name in encrypted_message_editing_sources_navigation_and_threads encrypted_delivery_profile_and_same_device_store_restore timeline_metadata_and_send_queue_actions members_typing_and_read_receipts pagination_preserves_message_identity room_list_service_tracks_recency_and_details; do
                     scripts/cargo-pruned test --locked -p twayblade-core --all-features "$test_name" -- --ignored --nocapture

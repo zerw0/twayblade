@@ -403,6 +403,93 @@ fn keychain_session_lifecycle_across_processes() {
     eprintln!("PASS: OS Keychain persistence across processes, same device, logout/store deletion");
 }
 
+/// Two accounts side by side in their own credential slots: adding, refusing
+/// a duplicate, opening either one, and signing one out without the other.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+#[ignore = "requires isolated Synapse and an unlocked macOS Keychain"]
+async fn two_saved_accounts_switch_and_sign_out_independently() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-data/local/integration");
+    let fixture: Fixture = checked(
+        serde_json::from_slice(&checked(
+            tokio::fs::read(root.join("fixture.json")).await,
+            "read fixture",
+        )),
+        "parse fixture",
+    );
+    assert!(
+        fixture.homeserver == "https://127.0.0.1:18448",
+        "Only loopback fixture allowed"
+    );
+    let certificate = checked(
+        Certificate::from_pem(&checked(
+            tokio::fs::read(root.join("ca.crt")).await,
+            "test CA",
+        )),
+        "parse test CA",
+    );
+    let run_id = Uuid::new_v4();
+    let context = AuthContext {
+        session_store: secrets::SessionStore::new(&format!("twayblade.integration.two.{run_id}")),
+        data_dir: root.join(format!("two-accounts-{run_id}")),
+        root_certificate: Some(certificate),
+    };
+    let sign_in = |user: &'static str, password: String| {
+        login_password_in(
+            &context,
+            fixture.homeserver.clone(),
+            user.into(),
+            Zeroizing::new(password),
+        )
+    };
+    let alice = checked(sign_in("alice", fixture.alice.clone()).await, "alice");
+    let bob = checked(sign_in("bob", fixture.bob.clone()).await, "bob");
+    let alice_device = alice.client.device_id().expect("device").to_owned();
+    let users = |context: &AuthContext| {
+        checked(saved_accounts_in(context), "list")
+            .into_iter()
+            .map(|account| account.user_id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(users(&context).len(), 2);
+    assert!(
+        matches!(
+            sign_in("alice", fixture.alice.clone()).await,
+            Err(AuthError::DuplicateAccount)
+        ),
+        "the same user is not saved twice"
+    );
+    assert_eq!(users(&context).len(), 2, "the refused sign-in left nothing");
+    let (alice_id, bob_id) = (alice.id(), bob.id());
+    drop((alice, bob));
+
+    // Launch opens the account added last; either can then be opened.
+    let launched = checked(restore_in(&context).await, "launch").expect("saved");
+    assert_eq!(launched.id(), bob_id);
+    drop(launched);
+    let store_id = checked(Uuid::parse_str(&alice_id), "id");
+    let alice = checked(restore_entry(&context, store_id).await, "switch").expect("alice");
+    assert_eq!(alice.client.device_id(), Some(alice_device.as_ref()));
+    checked(alice.client.whoami().await, "alice session accepted");
+    drop(alice);
+    let launched = checked(restore_in(&context).await, "relaunch").expect("saved");
+    assert_eq!(launched.id(), alice_id, "the switch is remembered");
+
+    // Signing Bob out keeps Alice.
+    let bob_store = checked(Uuid::parse_str(&bob_id), "id");
+    let bob = checked(restore_entry(&context, bob_store).await, "bob").expect("bob");
+    checked(bob.logout().await, "bob sign-out");
+    assert!(checked(context.slot(bob_store).load().await, "bob slot").is_none());
+    assert!(!context.store_path(bob_store).exists());
+    assert_eq!(users(&context), [launched.user_id()]);
+    checked(launched.client.whoami().await, "alice still signed in");
+    checked(launched.logout().await, "alice sign-out");
+    assert!(users(&context).is_empty());
+    assert!(checked(restore_in(&context).await, "empty").is_none());
+    let _ = tokio::fs::remove_dir_all(&context.data_dir).await;
+    eprintln!("PASS: two accounts, duplicate refusal, switching and independent sign-out");
+}
+
 #[cfg(target_os = "macos")]
 #[derive(Serialize, Deserialize)]
 struct LifecycleEvidence {
@@ -464,7 +551,7 @@ async fn keychain_session_lifecycle_phase() {
             );
             assert!(
                 checked(
-                    context.session_store.load().await,
+                    context.saved_credential().await,
                     "failed login Keychain cleanup"
                 )
                 .is_none()
@@ -555,7 +642,7 @@ async fn keychain_session_lifecycle_phase() {
                 "Logout retained the store directory"
             );
             assert!(
-                checked(context.session_store.load().await, "Keychain after logout").is_none(),
+                checked(context.saved_credential().await, "Keychain after logout").is_none(),
                 "Logout retained credentials"
             );
             assert!(
@@ -1366,7 +1453,7 @@ async fn revoked_device_and_soft_logout_recovery() {
         );
         let path = account.store_path.clone();
         let device = checked(account.client.device_id().ok_or(()), "device").to_owned();
-        let before = checked(context.session_store.load().await, "saved session").unwrap();
+        let before = checked(context.saved_credential().await, "saved session").unwrap();
         let mut changes = account.session_state();
         let stream = account.room_updates();
         let sync = tokio::spawn(async move {
@@ -1461,7 +1548,7 @@ async fn revoked_device_and_soft_logout_recovery() {
             path.exists(),
             "store must be retained before recovery/confirmation"
         );
-        assert!(checked(context.session_store.load().await, "retained credential").is_some());
+        assert!(checked(context.saved_credential().await, "retained credential").is_some());
         if soft {
             assert!(
                 account
@@ -1470,7 +1557,7 @@ async fn revoked_device_and_soft_logout_recovery() {
                     .is_err()
             );
             assert!(
-                checked(context.session_store.load().await, "failed reauth record")
+                checked(context.saved_credential().await, "failed reauth record")
                     .unwrap()
                     .as_str()
                     == before.as_str(),
@@ -1494,7 +1581,7 @@ async fn revoked_device_and_soft_logout_recovery() {
             checked(second.logout().await, "second client logout");
         }
         assert!(!path.exists());
-        assert!(checked(context.session_store.load().await, "credential cleanup").is_none());
+        assert!(checked(context.saved_credential().await, "credential cleanup").is_none());
     }
 }
 

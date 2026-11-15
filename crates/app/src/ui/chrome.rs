@@ -567,6 +567,8 @@ impl MatrixApp {
             .as_ref()
             .and_then(|presence| presence.status_msg.clone());
         let has_archive = self.snapshot.rooms.iter().any(|room| room.archived);
+        let accounts = self.snapshot.accounts.clone();
+        let sign_out_label = format!("Sign Out of {}…", account_label(&user, &accounts));
         let weak = cx.entity().downgrade();
         Button::new("my-profile")
             .ghost()
@@ -576,6 +578,31 @@ impl MatrixApp {
             .tooltip(user.clone())
             .child(self.with_presence(avatar.into_any_element(), own.as_ref(), 22., cx))
             .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, _| {
+                // Saved accounts first, the open one checked (shown once there
+                // is more than one), then Add Account….
+                if accounts.len() > 1 {
+                    for account in &accounts {
+                        let switch = weak.clone();
+                        let id = account.id.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(account.user_id.clone())
+                                .checked(account.active)
+                                .on_click(move |_, window, cx| {
+                                    let _ = switch.update(cx, |this, cx| {
+                                        this.switch_account(id.clone(), window, cx)
+                                    });
+                                }),
+                        );
+                    }
+                }
+                let add = weak.clone();
+                menu = menu
+                    .item(
+                        PopupMenuItem::new("Add Account…").on_click(move |_, window, cx| {
+                            let _ = add.update(cx, |this, cx| this.begin_add_account(window, cx));
+                        }),
+                    )
+                    .separator();
                 let profile = weak.clone();
                 let id = user.clone();
                 menu = menu.item(PopupMenuItem::new("Your Profile").on_click(
@@ -625,6 +652,7 @@ impl MatrixApp {
                 let archive = weak.clone();
                 let invite = weak.clone();
                 let settings = weak.clone();
+                let sign_out = weak.clone();
                 menu.separator()
                     .item(
                         PopupMenuItem::new("Create Room…").on_click(move |_, window, cx| {
@@ -671,6 +699,17 @@ impl MatrixApp {
                             });
                         }),
                     )
+                    .item(PopupMenuItem::new(sign_out_label.clone()).on_click(
+                        move |_, window, cx| {
+                            let _ = sign_out.update(cx, |this, cx| {
+                                this.open_management(
+                                    crate::ui::spaces::ManageKind::SignOut,
+                                    window,
+                                    cx,
+                                )
+                            });
+                        },
+                    ))
             })
             .into_any_element()
     }
@@ -1102,6 +1141,27 @@ pub(crate) fn room_label(room: &Room, selected: bool) -> String {
         label.push_str(&format!(", {} unread", room.unread));
     }
     label
+}
+
+/// How the account menu names a user: the local part (`alice`) while it is
+/// unique among saved accounts, else the full Matrix ID.
+pub(crate) fn account_label(user_id: &str, accounts: &[crate::backend::AccountEntry]) -> String {
+    let local = |id: &str| {
+        id.strip_prefix('@')
+            .and_then(|rest| rest.split(':').next())
+            .unwrap_or(id)
+            .to_owned()
+    };
+    let mine = local(user_id);
+    let shared = accounts
+        .iter()
+        .filter(|account| account.user_id != user_id && local(&account.user_id) == mine)
+        .count();
+    if shared == 0 && !mine.is_empty() {
+        mine
+    } else {
+        user_id.to_owned()
+    }
 }
 
 #[cfg(test)]

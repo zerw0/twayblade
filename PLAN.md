@@ -23,13 +23,14 @@ Element Call.
 | Calls | Native (decision 2026-11-11, replacing the Element Call web runtime): MatrixRTC signalling in `core` through the Matrix SDK (call membership, call-key exchange over encrypted to-device messages), media through the LiveKit Rust SDK with end-to-end frame encryption, and a GPUI call interface. Interoperates with Element Call. Legacy `m.call.*` is out of scope for 1.0. |
 | Appearance | Default: system light/dark and system accent, neutral surfaces, contrasting foregrounds. Users can override scheme, accent, fonts, scale and chat style in Settings (M4). |
 | Settings | A native-style Settings window (⌘,) with sections. Preferences are stored locally as plain JSON, never with credentials. Notification rules are Matrix push rules on the server, so they sync with other clients. |
+| Accounts | Several saved accounts with switching (decision 2026-11-15, moved into 1.0 from the deferred list): one OS credential slot per account plus a non-secret index. Phase 1 syncs only the open account. |
 | Signing | No paid signing (decision 2026-11-15): no Apple Developer Program, no paid Windows certificate. macOS builds stay ad hoc signed and Windows/Linux packages unsigned, with first-launch instructions on the download page. Free OSS signing for Windows (SignPath Foundation) may be applied for once an unsigned release exists. |
 | Toolchain | Rust minimum = the version actually built and tested (1.99). Nix shell is optional. |
 
 ## 1.0 scope
 
 In:
-- One account; password, OAuth/OIDC and legacy SSO; refresh, restore, logout.
+- Several saved accounts with switching; password, OAuth/OIDC and legacy SSO; refresh, restore, logout.
 - Rooms and DMs: history, pagination, send queue, replies, edits, reactions,
   redactions, typing, read receipts; images/files with encrypted transfer;
   a full-size image viewer.
@@ -48,7 +49,7 @@ Deferred past 1.0 (cut from the earlier plan):
 - An Element-like fourth chat style and per-room style overrides.
 - Inline audio/video playback (save/open only in 1.0).
 - Space management beyond join/leave (create, edit, permissions UI).
-- Multi-account, widgets, bots, moderation tooling, legacy calls.
+- Widgets, bots, moderation tooling, legacy calls.
 
 ## Milestones
 

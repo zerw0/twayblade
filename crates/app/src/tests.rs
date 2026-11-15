@@ -2700,6 +2700,117 @@ fn invite_contact_copies_a_matrix_to_link(cx: &mut TestAppContext) {
     .expect("copy the contact link");
 }
 
+fn two_accounts(app: &mut MatrixApp) {
+    let me = app.snapshot.user_id.clone();
+    app.snapshot.accounts = vec![
+        crate::backend::AccountEntry {
+            id: "one".into(),
+            user_id: me,
+            homeserver: "https://matrix.example.org/".into(),
+            active: true,
+        },
+        crate::backend::AccountEntry {
+            id: "two".into(),
+            user_id: "@sam:example.com".into(),
+            homeserver: "https://example.com/".into(),
+            active: false,
+        },
+    ];
+}
+
+#[gpui_kit::test]
+fn add_account_sheet_keeps_the_workspace_and_cancels_with_escape(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestEventExt;
+    let (window, app) = preview_window(cx);
+    cx.update(|cx| cx.bind_keys(crate::shortcuts::bindings()));
+    let user = cx.update(|cx| app.read(cx).snapshot.user_id.clone());
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            two_accounts(app);
+            app.begin_add_account(window, cx)
+        });
+        window.render_frame(cx);
+        assert!(window.find("add-account-backdrop").visible());
+        assert!(
+            window.find("cancel-add-account").visible(),
+            "the server step offers Cancel instead of Back"
+        );
+        assert!(window.try_find("back-to-welcome").is_none());
+        // Escape closes the sheet; the open account is untouched.
+        window.key_down("escape", false, cx);
+        window.render_frame(cx);
+        assert!(window.try_find("add-account-backdrop").is_none());
+    })
+    .expect("open and cancel the sheet");
+    cx.update(|cx| {
+        let app = app.read(cx);
+        assert!(!app.adding_account);
+        assert!(app.options.is_none());
+        assert_eq!(app.snapshot.user_id, user);
+    });
+}
+
+#[gpui_kit::test]
+fn add_account_options_step_offers_cancel_next_to_sign_in(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.begin_add_account(window, cx);
+            app.choosing_server = false;
+            app.options = Some(crate::backend::LoginOptions {
+                homeserver: "matrix.example.org".into(),
+                password: true,
+                browser: true,
+                sso: false,
+                providers: Vec::new(),
+            });
+        });
+        window.render_frame(cx);
+        assert!(window.find("browser-sign-in").visible());
+        assert!(window.find("add-account-backdrop").visible());
+        assert!(window.find("cancel-add-account").visible());
+    })
+    .expect("options step");
+}
+
+#[gpui_kit::test]
+fn sign_out_dialog_names_the_account_and_mentions_other_accounts(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            two_accounts(app);
+            app.open_management(crate::ui::spaces::ManageKind::SignOut, window, cx)
+        });
+        window.render_frame(cx);
+        assert!(window.find("sign-out-confirm").visible());
+        assert!(window.find("sign-out-cancel").visible());
+    })
+    .expect("open the sign-out dialog");
+    cx.update(|cx| {
+        let page = app.read(cx).management.as_ref().expect("dialog");
+        assert!(page.kind.is_dialog());
+    });
+}
+
+#[test]
+fn account_menu_uses_the_local_part_unless_it_is_ambiguous() {
+    use crate::backend::AccountEntry;
+    let entry = |user: &str| AccountEntry {
+        user_id: user.into(),
+        ..Default::default()
+    };
+    let one = [entry("@alice:example.org")];
+    assert_eq!(
+        crate::ui::account_label("@alice:example.org", &one),
+        "alice"
+    );
+    let clash = [entry("@alice:example.org"), entry("@alice:matrix.org")];
+    assert_eq!(
+        crate::ui::account_label("@alice:example.org", &clash),
+        "@alice:example.org"
+    );
+}
+
 #[gpui_kit::test]
 fn direct_downloads_offer_a_checked_installer_and_package_installs_do_not(cx: &mut TestAppContext) {
     use crate::backend::UpdateDownload;

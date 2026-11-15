@@ -318,6 +318,10 @@ pub(super) struct MatrixApp {
     pub(super) choosing_server: bool,
     pub status: String,
     pub busy: bool,
+    /// The sign-in flow is open as a sheet over the workspace, adding another
+    /// account; Cancel returns to the open one.
+    pub(super) adding_account: bool,
+    pub(super) add_account_focus: FocusHandle,
     /// The title-bar notifications popover.
     pub(crate) notifications_open: bool,
     pub(crate) notifications_closed_at: Option<std::time::Instant>,
@@ -723,6 +727,8 @@ impl MatrixApp {
             choosing_server: false,
             status: String::new(),
             busy: !preview,
+            adding_account: false,
+            add_account_focus: cx.focus_handle(),
             notifications_open: false,
             notifications_closed_at: None,
             notifications_focus: cx.focus_handle(),
@@ -1041,6 +1047,9 @@ impl MatrixApp {
             self.security_input = cx.new(|cx| InputState::new(window, cx).masked(true));
             // Status from sign-in or a previous account must not enter this workspace.
             self.status.clear();
+            self.adding_account = false;
+            self.options = None;
+            self.choosing_server = false;
             self.reset_pagination();
             self.navigation = Navigation::default();
             self.composers.clear();
@@ -1318,7 +1327,8 @@ impl MatrixApp {
         let (cancel, receiver) = tokio::sync::watch::channel(false);
         self.oauth_cancel = Some(cancel);
         let address = self.homeserver.read(cx).value().to_string();
-        self.job(window, cx, move |backend| backend.begin_oauth(address, sso, provider), move |this, result, window, cx| {
+        let add = self.adding_account;
+        self.job(window, cx, move |backend| backend.begin_oauth(address, sso, provider, add), move |this, result, window, cx| {
             match result {
                 Ok(url) => {
                     // Never retain the authorization URL in a snapshot or diagnostics.
@@ -1374,10 +1384,11 @@ impl MatrixApp {
             .update(cx, |state, cx| state.set_value("", window, cx));
         self.busy = true;
         self.status = "Signing in…".into();
+        let add = self.adding_account;
         self.job(
             window,
             cx,
-            move |backend| backend.login(address, username, password),
+            move |backend| backend.login(address, username, password, add),
             |this, result, _, _| {
                 this.busy = false;
                 if let Err(error) = result {
@@ -2019,6 +2030,66 @@ impl MatrixApp {
     pub fn close_profile(&mut self, cx: &mut Context<Self>) {
         self.profile_request = self.profile_request.wrapping_add(1);
         self.profile = None;
+        cx.notify();
+    }
+
+    /// Add Account…: the sign-in flow as a sheet, starting at the server step.
+    pub fn begin_add_account(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        self.adding_account = true;
+        self.options = None;
+        self.choosing_server = true;
+        self.status.clear();
+        for input in [&self.homeserver, &self.username, &self.password] {
+            input.update(cx, |state, cx| state.set_value("", window, cx));
+        }
+        self.homeserver
+            .update(cx, |state, cx| state.focus(window, cx));
+        cx.notify();
+    }
+
+    /// Cancel in the Add Account sheet; the open account is untouched.
+    pub fn cancel_add_account(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        self.adding_account = false;
+        self.options = None;
+        self.choosing_server = false;
+        self.status.clear();
+        self.password
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.restore_focus(window, cx);
+        cx.notify();
+    }
+
+    pub fn switch_account(&mut self, id: String, window: &Window, cx: &mut Context<Self>) {
+        if self.busy
+            || self.preview
+            || self
+                .snapshot
+                .accounts
+                .iter()
+                .any(|account| account.active && account.id == id)
+        {
+            return;
+        }
+        self.busy = true;
+        self.status = "Switching account…".into();
+        self.job(
+            window,
+            cx,
+            move |backend| backend.switch_account(id),
+            |this, result, _, _| {
+                this.busy = false;
+                match result {
+                    Ok(()) => this.status.clear(),
+                    Err(error) => this.status = error.to_string(),
+                }
+            },
+        );
         cx.notify();
     }
 

@@ -6,6 +6,8 @@
 // Areas of the main window.
 mod activity;
 mod chrome;
+#[cfg(all(test, feature = "capture"))]
+pub(crate) use chrome::account_label;
 pub(crate) mod conversation;
 mod panels;
 pub(crate) mod selection_bar;
@@ -446,6 +448,8 @@ impl Render for MatrixApp {
             .on_action(cx.listener(|this, _: &CloseProfile, window, cx| {
                 if this.notifications_open {
                     this.close_notifications(window, cx);
+                } else if this.adding_account {
+                    this.cancel_add_account(window, cx);
                 } else if this.call_fills_window() {
                     this.toggle_call_full_screen(window, cx);
                 } else if this.call_focus.is_some() && this.live_call().is_some() {
@@ -531,6 +535,9 @@ impl Render for MatrixApp {
                     .flex_1()
                     .min_h_0()
                     .child(content)
+                    .when(self.adding_account && workspace, |view| {
+                        view.child(self.add_account_sheet(cx))
+                    })
                     .children(overlay)
                     .when(self.notification_sample, |view| {
                         view.child(self.notification_sample_view(cx))

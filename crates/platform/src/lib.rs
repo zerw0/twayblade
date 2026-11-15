@@ -37,6 +37,9 @@ pub struct SecretStoreError;
 #[derive(Clone)]
 pub struct SessionStore {
     service: String,
+    /// The credential's account name inside the service: the original
+    /// single-session slot, or one slot per saved account.
+    account: String,
     /// Only the application's own slot migrates from the pre-rename service.
     legacy: Option<String>,
 }
@@ -45,6 +48,7 @@ impl Default for SessionStore {
     fn default() -> Self {
         Self {
             service: SERVICE.into(),
+            account: ACCOUNT.into(),
             legacy: Some(LEGACY_SERVICE.into()),
         }
     }
@@ -54,12 +58,23 @@ impl SessionStore {
     pub fn new(service: &str) -> Self {
         Self {
             service: service.into(),
+            account: ACCOUNT.into(),
+            legacy: None,
+        }
+    }
+
+    /// The slot of one saved account, in the same service. `id` is a
+    /// non-secret identifier (the account's store ID).
+    pub fn slot(&self, id: &str) -> Self {
+        Self {
+            service: self.service.clone(),
+            account: format!("session-{id}"),
             legacy: None,
         }
     }
 
     fn entry(&self) -> Result<keyring::Entry, SecretStoreError> {
-        keyring::Entry::new(&self.service, ACCOUNT).map_err(|_| SecretStoreError)
+        keyring::Entry::new(&self.service, &self.account).map_err(|_| SecretStoreError)
     }
 
     /// Synchronous SDK session callbacks must finish persisting rotated tokens

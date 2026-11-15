@@ -1,7 +1,5 @@
 //! Revocation projection and same-device recovery. The SDK owns token semantics.
-use super::{
-    Account, AuthContext, AuthError, SavedSession, client, install_session_callbacks, remove_store,
-};
+use super::{Account, AuthContext, AuthError, SavedSession, client, install_session_callbacks};
 use matrix_sdk::{Client, SessionChange};
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -52,13 +50,8 @@ impl Account {
 
     pub(super) fn recovery_context(&self) -> Result<AuthContext, AuthError> {
         Ok(AuthContext {
-            session_store: self.session_store.clone(),
-            data_dir: self
-                .store_path
-                .parent()
-                .and_then(|path| path.parent())
-                .ok_or(AuthError::Storage)?
-                .to_owned(),
+            session_store: self.base_store.clone(),
+            data_dir: self.data_dir.clone(),
             root_certificate: self.root_certificate.clone(),
         })
     }
@@ -103,7 +96,7 @@ impl Account {
         let mut record = self.recovery_record().await?;
         let old = record.session.as_ref().ok_or(AuthError::Login)?;
         let meta = old.meta.clone();
-        let (client, path) = client(&context, &record).await?;
+        let (client, _) = client(&context, &record).await?;
         client
             .matrix_auth()
             .login_username(meta.user_id.as_str(), &password)
@@ -117,9 +110,8 @@ impl Account {
         record.update(client.session().ok_or(AuthError::Login)?)?;
         self.persist_reauthentication(&mut record)?;
         let gate =
-            install_session_callbacks(&client, context.session_store.clone(), record.store_id)?;
-        Ok(Account::new(client, path, context.session_store, gate)
-            .with_certificate(context.root_certificate))
+            install_session_callbacks(&client, context.slot(record.store_id), record.store_id)?;
+        Ok(Account::open(client, &context, record.store_id, gate))
     }
 
     /// Called only after a hard-logout confirmation in the frontend.
@@ -136,7 +128,7 @@ impl Account {
                 .delete_sync()
                 .map_err(|_| AuthError::Storage)?;
         }
-        remove_store(&self.store_path).await
+        self.forget().await
     }
 
     pub fn homeserver(&self) -> String {
