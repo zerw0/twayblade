@@ -1,8 +1,9 @@
 name: Rust checks
-# Documentation-only changes (Markdown, docs/, licences) start no pipeline.
-# Such a pull request has no required checks reporting, so it is merged by an
-# admin (`gh pr merge --admin`); a pull request that also touches code runs
-# everything as usual.
+# Documentation-only changes (Markdown, docs/, licences) skip the Rust steps.
+# Pushes simply don't start. Pull requests always start, because main requires
+# the three `check (...)` results: for a documentation-only pull request the
+# `changes` job says so, and each check job skips its steps and passes in
+# seconds, so auto-merge works without an admin.
 on:
   push:
     paths-ignore:
@@ -10,10 +11,6 @@ on:
       - 'docs/**'
       - 'LICENSE*'
   pull_request:
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'LICENSE*'
   workflow_dispatch:
 
 permissions:
@@ -28,16 +25,45 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.files.outputs.code }}
+    steps:
+      - id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          if [[ -z "$PR" ]]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Anything outside Markdown, docs/ and licences needs the Rust checks.
+          if gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR}/files" --jq '.[].filename' \
+              | grep -qvE '(\.md$|^docs/|^LICENSE)'; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   check:
+    needs: changes
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, macos-15, windows-2022]
     runs-on: ${{ matrix.os }}
+    env:
+      CODE: ${{ needs.changes.outputs.code }}
     steps:
       - uses: actions/checkout@v7
+        if: env.CODE == 'true'
       - name: Install Linux build dependencies
-        if: runner.os == 'Linux'
+        if: env.CODE == 'true' && runner.os == 'Linux'
         run: >-
           sudo apt-get update && sudo apt-get install -y
           pkg-config cmake libdbus-1-dev libwayland-dev libxkbcommon-dev
@@ -46,7 +72,7 @@ jobs:
           libxkbcommon-x11-dev libvulkan-dev libglib2.0-dev libpulse-dev
       # libwebrtc's bundled libc++ needs clang 21+; Ubuntu 24.04 ships 18.
       - name: Install clang 21
-        if: runner.os == 'Linux'
+        if: env.CODE == 'true' && runner.os == 'Linux'
         run: |
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
           echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-21 main" | sudo tee /etc/apt/sources.list.d/llvm-21.list
@@ -54,15 +80,23 @@ jobs:
           echo "CC=clang-21" >> "$GITHUB_ENV"
           echo "CXX=clang++-21" >> "$GITHUB_ENV"
       - name: Install Rust
+        if: env.CODE == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.99.0'
           components: rustfmt, clippy
       - name: Format
+        if: env.CODE == 'true'
         run: cargo fmt --all -- --check
       - name: Lint
+        if: env.CODE == 'true'
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - name: Test
+        if: env.CODE == 'true'
         run: cargo test --locked --workspace --all-features
       - name: Build native desktop
+        if: env.CODE == 'true'
         run: cargo build --locked -p twayblade
+      - name: Documentation only
+        if: env.CODE != 'true'
+        run: echo "Documentation-only change; Rust checks skipped."
