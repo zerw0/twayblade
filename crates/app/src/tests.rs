@@ -913,6 +913,30 @@ fn member_actions_follow_power_levels_and_confirm_destructive_steps(cx: &mut Tes
 }
 
 #[gpui_kit::test]
+fn message_search_can_be_limited_to_one_sender(cx: &mut TestAppContext) {
+    use gpui_kit::test::{TestEventExt, TestQueryExt};
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.within("title-search").click("input-state", cx);
+        window.input("rust", cx);
+        window.render_frame(cx);
+        window.key_down("enter", false, cx);
+    })
+    .expect("open message search");
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("search-from").visible());
+        window.click("search-from", cx);
+        window.render_frame(cx);
+        assert!(window.find_by_label("Anyone").visible());
+    })
+    .expect("sender menu");
+    cx.update(|cx| assert!(app.read(cx).search_sender.is_none()));
+}
+
+#[gpui_kit::test]
 fn title_search_offers_message_search_and_opens_the_panel(cx: &mut TestAppContext) {
     use gpui_kit::test::TestEventExt;
     let (window, app) = preview_window(cx);

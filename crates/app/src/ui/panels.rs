@@ -158,6 +158,7 @@ impl MatrixApp {
                 this.search_has_file = !this.search_has_file;
                 this.run_message_search(window, cx);
             }));
+        let from = self.search_from_menu(cx);
         let mut list = v_flex().px(px(8.)).py(px(6.)).gap(px(2.));
         if self.preview {
             list = list.child(
@@ -359,7 +360,7 @@ impl MatrixApp {
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .child(scope)
-                    .child(h_flex().child(files)),
+                    .child(h_flex().gap(px(4.)).child(files).child(from)),
             )
             .child(
                 div()
@@ -1250,6 +1251,75 @@ impl MatrixApp {
             .child(body)
             .when(!own, |panel| {
                 panel.child(self.member_actions(&profile_id, cx))
+            })
+            .into_any_element()
+    }
+}
+
+impl MatrixApp {
+    /// "From" filter for message search: anyone, or one of the people in the
+    /// room you're looking at. The filter stays until you pick Anyone.
+    fn search_from_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+        use gpui_kit::component::menu::DropdownMenu;
+        let mut people: Vec<(String, String)> = self
+            .snapshot
+            .members
+            .iter()
+            .map(|member| (member.user_id.clone(), member.display_name.clone()))
+            .collect();
+        people.sort_by_key(|(_, name)| name.to_lowercase());
+        people.truncate(60);
+        let chosen = self.search_sender.clone();
+        let chosen_name = chosen.as_ref().map(|user| {
+            people
+                .iter()
+                .find(|(id, _)| id == user)
+                .map_or_else(|| user.clone(), |(_, name)| name.clone())
+        });
+        let weak = cx.entity().downgrade();
+        let label = match &chosen_name {
+            Some(name) => format!("From {name}"),
+            None => "From".to_owned(),
+        };
+        Button::new("search-from")
+            .ghost()
+            .xsmall()
+            .icon(IconName::UserRound)
+            .label(label.clone())
+            .selected(chosen.is_some())
+            .accessibility_label(match &chosen_name {
+                Some(name) => format!("Only messages from {name}"),
+                None => "Filter by sender".to_owned(),
+            })
+            .tooltip("Only show messages from one person")
+            .dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
+                let pick = |user: Option<String>| {
+                    let weak = weak.clone();
+                    move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                        let user = user.clone();
+                        let _ = weak.update(cx, |this, cx| {
+                            this.search_sender = user;
+                            this.run_message_search(window, cx);
+                        });
+                    }
+                };
+                menu = menu.item(
+                    PopupMenuItem::new("Anyone")
+                        .checked(chosen.is_none())
+                        .on_click(pick(None)),
+                );
+                if people.is_empty() {
+                    return menu.label("Open a room to choose from its people");
+                }
+                menu = menu.separator();
+                for (id, name) in &people {
+                    menu = menu.item(
+                        PopupMenuItem::new(name.clone())
+                            .checked(chosen.as_deref() == Some(id))
+                            .on_click(pick(Some(id.clone()))),
+                    );
+                }
+                menu
             })
             .into_any_element()
     }

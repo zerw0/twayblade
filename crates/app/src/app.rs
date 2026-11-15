@@ -277,6 +277,8 @@ pub(super) struct MatrixApp {
     pub(super) search_open: bool,
     pub(super) search_all_rooms: bool,
     pub(super) search_has_file: bool,
+    /// Only messages from this user (Matrix ID), chosen from the From menu.
+    pub(super) search_sender: Option<String>,
     /// The last focused event scrolled into view, and the one highlighted.
     pub(super) revealed_event: Option<String>,
     /// The DM partners and members last handed to the presence observer.
@@ -641,6 +643,7 @@ impl MatrixApp {
             search_open: false,
             search_all_rooms: true,
             search_has_file: false,
+            search_sender: None,
             revealed_event: None,
             presence_observed: Vec::new(),
             member_confirm: None,
@@ -2252,7 +2255,10 @@ impl MatrixApp {
             twayblade_core::search::SearchQuery {
                 text,
                 room,
-                sender: None,
+                sender: self
+                    .search_sender
+                    .clone()
+                    .and_then(|user| user.try_into().ok()),
                 has_file: self.search_has_file,
             },
             window,
