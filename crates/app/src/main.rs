@@ -172,7 +172,7 @@ fn main() {
                         view.options = Some(backend::LoginOptions { homeserver: "matrix.example.org".into(), password: false, browser: false, sso: true, providers: vec![twayblade_core::IdentityProvider { id: "sample".into(), name: "Example Identity".into(), icon_png: None }] });
                         view.status = "Sample data · Choose your identity provider.".into();
                     }
-                    if args.iter().any(|arg| arg == "--preview-update-download") {
+                    if args.iter().any(|arg| arg == "--preview-update-download" || arg == "--preview-update-notice") {
                         // Sample data: an available release with this Mac's installer downloaded and checked.
                         view.snapshot.updater = twayblade_platform::updates::Snapshot { phase: twayblade_platform::updates::Phase::Available, available: Some(twayblade_platform::updates::Available { version: "0.2.0".into(), prerelease: true, changelog: "Sample release notes.".into(), release_url: "https://github.com/zerw0/twayblade/releases/tag/v0.2.0".into(), upgrade_command: None, download: Some(twayblade_platform::updates::Download { file: "Twayblade-0.2.0-arm64.dmg".into(), size: 1, url: String::new(), sums_url: String::new() }) }), ..Default::default() };
                         view.snapshot.update_download = backend::UpdateDownload::Ready { version: "0.2.0".into(), path: "Twayblade-0.2.0-arm64.dmg".into() };

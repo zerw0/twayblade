@@ -1131,6 +1131,7 @@ impl MatrixApp {
                                 })
                         })
                     })
+                    .children(self.update_available_button(cx))
                     .child(self.notifications_button(cx))
                     .child(
                         Button::new("open-settings")
@@ -1151,6 +1152,47 @@ impl MatrixApp {
                     ),
             )
             .into_any_element()
+    }
+}
+
+impl MatrixApp {
+    /// A quiet title-bar notice while a newer release is available (#56); it
+    /// opens Settings › General, where the notes and the download are.
+    fn update_available_button(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use twayblade_platform::updates::Phase;
+        let updater = &self.snapshot.updater;
+        let available = updater
+            .available
+            .as_ref()
+            .filter(|_| updater.phase == Phase::Available)?;
+        let label = format!("Twayblade {} is available", available.version);
+        Some(
+            Button::new("update-available")
+                .toolbar_control()
+                .ghost()
+                .xsmall()
+                .h(px(24.))
+                .px(px(8.))
+                .accessibility_label(format!("{label}. Open update settings"))
+                .tooltip(label)
+                .child(
+                    h_flex()
+                        .gap(px(6.))
+                        .text_size(px(12.))
+                        .child(
+                            div()
+                                .flex_none()
+                                .size(px(6.))
+                                .rounded_full()
+                                .bg(cx.theme().primary),
+                        )
+                        .child("Update"),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.open_settings(crate::ui::settings::Section::General, cx)
+                }))
+                .into_any_element(),
+        )
     }
 }
 

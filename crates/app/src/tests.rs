@@ -3291,3 +3291,38 @@ fn the_popover_lists_missed_calls_previews_and_marks_all_read(cx: &mut TestAppCo
         assert!(app.snapshot.rooms.iter().all(|room| room.unread == 0));
     });
 }
+
+#[gpui_kit::test]
+fn an_available_update_shows_a_title_bar_notice_that_opens_settings(cx: &mut TestAppContext) {
+    use twayblade_platform::updates::{Available, Phase, Snapshot};
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window.try_find("update-available").is_none(),
+            "no notice while up to date"
+        );
+        app.update(cx, |app, cx| {
+            app.snapshot.updater = Snapshot {
+                phase: Phase::Available,
+                available: Some(Available {
+                    version: "9.0.0".into(),
+                    prerelease: false,
+                    changelog: String::new(),
+                    release_url: String::new(),
+                    upgrade_command: None,
+                    download: None,
+                }),
+                ..Default::default()
+            };
+            cx.notify();
+        });
+        window.render_frame(cx);
+        window.click("update-available", cx);
+    })
+    .expect("update notice");
+    cx.update(|cx| {
+        let app = app.read(cx);
+        assert!(app.settings.is_some(), "the notice opens Settings");
+    });
+}
