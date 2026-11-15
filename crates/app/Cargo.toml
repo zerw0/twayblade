@@ -47,9 +47,12 @@ priority = "optional"
 extended-description = """\
 A native Matrix client with end-to-end encrypted messages, spaces, threads \
 and MatrixRTC voice and video calls."""
-depends = "$auto"
-# A Secret Service provider keeps the session; the portal enables screen sharing on Wayland.
-recommends = "gnome-keyring | kwalletmanager | keepassxc, xdg-desktop-portal"
+# $auto covers linked libraries. The rest are opened at run time: Wayland,
+# EGL/Vulkan (rendering), X11 and GBM/DRM.
+depends = "$auto, libwayland-client0, libwayland-egl1, libegl1, libvulkan1, libx11-6, libgbm1, libdrm2"
+# A Secret Service provider keeps the session; the portal and PipeWire enable
+# screen sharing on Wayland; Mesa provides the Vulkan driver on most systems.
+recommends = "gnome-keyring | kwalletmanager | keepassxc, xdg-desktop-portal, libpipewire-0.3-0t64 | libpipewire-0.3-0, libasound2t64 | libasound2, mesa-vulkan-drivers"
 assets = [
   ["target/release/twayblade", "usr/bin/", "755"],
   ["../../packaging/linux/com.twayblade.desktop.desktop", "usr/share/applications/", "644"],
@@ -75,5 +78,17 @@ assets = [
 ]
 auto-req = "auto"
 
+# Libraries opened at run time, by soname so Fedora and openSUSE both resolve them.
+[package.metadata.generate-rpm.requires]
+"libwayland-client.so.0()(64bit)" = "*"
+"libwayland-egl.so.1()(64bit)" = "*"
+"libEGL.so.1()(64bit)" = "*"
+"libvulkan.so.1()(64bit)" = "*"
+"libX11.so.6()(64bit)" = "*"
+"libgbm.so.1()(64bit)" = "*"
+"libdrm.so.2()(64bit)" = "*"
+
 [package.metadata.generate-rpm.recommends]
 xdg-desktop-portal = "*"
+"libpipewire-0.3.so.0()(64bit)" = "*"
+"libasound.so.2()(64bit)" = "*"

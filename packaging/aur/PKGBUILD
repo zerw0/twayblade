@@ -9,13 +9,14 @@ pkgdesc='Native Matrix client with encrypted messages and calls'
 arch=('x86_64')
 url='https://github.com/zerw0/twayblade'
 license=('MIT')
-depends=('dbus' 'fontconfig' 'freetype2' 'gcc-libs' 'glib2' 'glibc' 'libpulse'
-         'libx11' 'libxcb' 'libxkbcommon' 'libxkbcommon-x11' 'vulkan-icd-loader'
-         'wayland')
+depends=('alsa-lib' 'dbus' 'gcc-libs' 'glib2' 'glibc' 'libdrm' 'libglvnd'
+         'libpulse' 'libx11' 'libxcb' 'libxkbcommon' 'libxkbcommon-x11' 'mesa'
+         'vulkan-icd-loader' 'wayland')
 optdepends=('gnome-keyring: Secret Service to keep you signed in'
             'kwallet: Secret Service to keep you signed in'
             'keepassxc: Secret Service to keep you signed in'
-            'xdg-desktop-portal: screen sharing on Wayland')
+            'xdg-desktop-portal: screen sharing on Wayland'
+            'pipewire: screen sharing on Wayland')
 provides=('twayblade')
 conflicts=('twayblade')
 source=("https://github.com/zerw0/twayblade/releases/download/v${pkgver}/twayblade-linux-x86_64.tar.gz")

@@ -8,9 +8,13 @@ Branch `feature/linux-packages`.
   - `twayblade_<version>_amd64.deb` (`cargo deb`) and
     `twayblade-<version>-1.x86_64.rpm` (`cargo generate-rpm`), configured in
     `crates/app/Cargo.toml`. Library dependencies are detected from the
-    binary (`dpkg-shlibdeps`, `find-requires`/`ldd`). Both recommend a Secret
-    Service provider (GNOME Keyring, KWallet or KeePassXC), which keeps the
-    session, and `xdg-desktop-portal` for screen sharing on Wayland.
+    binary (`dpkg-shlibdeps`, `find-requires`/`ldd`). Libraries the app opens
+    at run time are declared explicitly, found by inspecting the CI binary:
+    Wayland client and EGL, EGL/Vulkan for rendering, X11, GBM and DRM (rpm
+    requires them by soname, so Fedora and openSUSE both resolve them). Both
+    recommend a Secret Service provider (GNOME Keyring, KWallet or KeePassXC),
+    which keeps the session, plus `xdg-desktop-portal`, PipeWire and ALSA for
+    screen sharing and calls.
   - `Twayblade-<version>-x86_64.AppImage` with
     `packaging/linux/build-appimage.sh`, using linuxdeploy pinned by tag and
     SHA-256 and run without FUSE.
@@ -39,7 +43,10 @@ Branch `feature/linux-packages`.
   container on arm64 with a stand-in binary: file lists, permissions,
   recommends and metadata are as intended. This does not check the real
   binary's library dependencies or the x86_64 build.
-- Not verified: the AppImage build (x86_64 only), the CI job itself (the build
-  workflow runs on `main`, tags and manual runs), installing, launching,
+- The build workflow, run manually on this branch, produced the deb, rpm,
+  AppImage and tarball (x86_64). The deb's detected dependencies were
+  inspected: libc, D-Bus, GLib, PulseAudio, XCB and xkbcommon; the runtime-
+  opened libraries above were missing and are now declared.
+- Not verified: installing, launching,
   upgrading and removing on Debian/Ubuntu, Fedora, openSUSE and Arch, icon and
   dock matching on GNOME and KDE (Wayland and X11).
