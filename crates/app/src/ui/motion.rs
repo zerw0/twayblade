@@ -61,6 +61,29 @@ where
         .into_any_element()
 }
 
+/// Fade content in or out as `visible` changes (the id must change with it, so
+/// each change plays once). Instant under Reduce Motion.
+pub(crate) fn fade_toggle<E>(
+    element: E,
+    id: impl Into<ElementId> + Clone,
+    visible: bool,
+    reduce: bool,
+) -> AnyElement
+where
+    E: IntoElement + Styled + 'static,
+{
+    if reduce || SETTLED {
+        return element
+            .opacity(if visible { 1. } else { 0. })
+            .into_any_element();
+    }
+    element
+        .with_animation(id.clone(), entering(id), move |element, t| {
+            element.opacity(if visible { t } else { 1. - t })
+        })
+        .into_any_element()
+}
+
 /// A short crossfade for content that replaces itself (switching rooms).
 pub(crate) fn fade_in<E>(element: E, id: impl Into<ElementId> + Clone, reduce: bool) -> AnyElement
 where
