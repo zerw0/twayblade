@@ -66,6 +66,34 @@ impl MatrixApp {
         cx.notify();
     }
 
+    /// Starts the installer download for a direct-download install.
+    pub fn download_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.job(
+            window,
+            cx,
+            |backend| backend.download_update(),
+            |this, result, _, _| {
+                if let Err(error) = result {
+                    this.status = error.to_string();
+                }
+            },
+        );
+    }
+
+    /// Opens the downloaded, checked installer (not during a call).
+    pub fn open_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.job(
+            window,
+            cx,
+            |backend| backend.open_update(),
+            |this, result, _, _| {
+                if let Err(error) = result {
+                    this.status = error.to_string();
+                }
+            },
+        );
+    }
+
     pub fn start_call(
         &self,
         room_id: String,

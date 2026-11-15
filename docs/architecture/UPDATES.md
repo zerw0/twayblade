@@ -39,6 +39,34 @@ still unimplemented. Treat changelog Markdown as untrusted content; never execut
 it or automatically follow its links. Offline previews and backend fixtures
 leave network checks disabled.
 
+## Checksum-verified download (implemented, #56)
+
+Builds are unsigned (PLAN.md: no paid signing), so there is no signature to
+check yet. For direct-download installs (`Direct` or `Unknown` ownership,
+never a package manager), a release that carries this machine's installer and
+a `SHA256SUMS` file offers **Download Update** in Settings › General. The
+installers are:
+
+- macOS: the DMG whose `lipo` arch list matches the CPU;
+- Windows x86_64: the MSI;
+- Linux x86_64: the AppImage, only when running from one.
+
+- URLs are built from the validated tag and a plain file name (letters,
+  digits, `.-_+`), never taken from the API response. Redirects may only go
+  over HTTPS to `github.com`, `objects.githubusercontent.com` or
+  `release-assets.githubusercontent.com`, at most five times.
+- `SHA256SUMS` is read up to 64 KiB. The installer streams into a hidden
+  `.partial` file in the Downloads folder and must match the size the API
+  reported (at most 1 GiB) and the listed SHA-256. Only then is it renamed to
+  its final name; on any failure the partial file is deleted.
+- **Open Installer** hands the verified file to the OS: macOS opens the DMG,
+  Windows runs `msiexec /i`, Linux marks the AppImage executable and opens
+  its folder. It is refused during a call. The app never replaces itself.
+
+Trust: the checksum comes from the same release as the installer. It detects
+a corrupt or truncated download, not a compromised release or account. The
+signed-manifest design below remains the target once a release key exists.
+
 ## Installation ownership
 
 Detection is read-only. Package builders can stamp

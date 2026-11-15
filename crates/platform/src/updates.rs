@@ -1,5 +1,9 @@
-//! Public-release notices only. No account/SDK inputs, downloads or installation.
+//! Public-release notices and, for direct downloads, a checksum-verified
+//! installer download (`download`). No account/SDK inputs; nothing installs
+//! itself.
+pub mod download;
 mod install;
+pub use download::{Download, DownloadError};
 pub use install::{Installation, PackageManager};
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -54,6 +58,8 @@ pub struct Available {
     pub release_url: String,
     /// Display only. No command is ever executed by the updater.
     pub upgrade_command: Option<String>,
+    /// This machine's installer in the release, for direct-download installs.
+    pub download: Option<Download>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Phase {
@@ -141,7 +147,13 @@ impl Checker {
                 serde_json::from_slice(&bytes).map_err(|_| UpdateError::InvalidResponse)?
             }
         };
-        Ok(select(releases, channel, &self.current, installation))
+        Ok(select(
+            releases,
+            channel,
+            &self.current,
+            installation,
+            download::Target::current(),
+        ))
     }
 }
 #[derive(Deserialize)]
@@ -150,12 +162,15 @@ struct Release {
     draft: bool,
     prerelease: bool,
     body: Option<String>,
+    #[serde(default)]
+    assets: Vec<download::Asset>,
 }
 fn select(
     releases: Vec<Release>,
     channel: Channel,
     current: &Version,
     installation: &Installation,
+    target: download::Target,
 ) -> Option<Available> {
     let (version, release) = releases
         .into_iter()
@@ -196,6 +211,7 @@ fn select(
         ),
         changelog,
         upgrade_command: installation.upgrade_command(),
+        download: download::pick(&release.tag_name, &release.assets, target, installation),
     })
 }
 

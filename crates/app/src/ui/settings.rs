@@ -1365,18 +1365,25 @@ impl MatrixApp {
                         .child(
                             div()
                                 .id("update-command")
+                                .test_support()
                                 .rounded(px(8.))
                                 .bg(cx.theme().secondary)
                                 .p(px(10.))
                                 .font_family("monospace")
                                 .text_size(px(12.))
                                 .child(command),
-                        ),
-                    None => div()
-                        .px(px(4.))
-                        .text_size(px(12.))
-                        .text_color(muted)
-                        .child("Download the new version from the release page."),
+                        )
+                        .into_any_element(),
+                    None => match available.download.as_ref() {
+                        Some(_) => self.update_download_view(&available.version, cx),
+                        None => div()
+                            .px(px(4.))
+                            .text_size(px(12.))
+                            .text_color(muted)
+                            .child("Download the new version from the release page.")
+                            .into_any_element(),
+                    }
+                    .into_any_element(),
                 })
                 .child(
                     h_flex().child(
@@ -1393,8 +1400,109 @@ impl MatrixApp {
                     .px(px(4.))
                     .text_size(px(11.))
                     .text_color(muted)
-                    .child("Twayblade only checks public release information and never installs updates on its own."),
+                    .child("Twayblade checks public release information. It downloads an update only when you ask and never installs one on its own."),
             )
+            .into_any_element()
+    }
+
+    /// Download, then Open Installer, for a direct-download install (#56).
+    fn update_download_view(&self, version: &str, cx: &mut Context<Self>) -> AnyElement {
+        use crate::backend::UpdateDownload;
+        let muted = cx.theme().muted_foreground;
+        let note = |text: String| {
+            div()
+                .id("update-download-status")
+                .role(Role::Label)
+                .aria_label(text.clone())
+                .px(px(4.))
+                .text_size(px(12.))
+                .text_color(muted)
+                .child(text)
+        };
+        let in_call = self.live_call().is_some();
+        let download_button = |label: &'static str, cx: &mut Context<Self>| {
+            Button::new("update-download")
+                .primary()
+                .icon(gpui_kit::assets::IconName::Download)
+                .label(label)
+                .disabled(self.preview)
+                .on_click(cx.listener(|this, _, window, cx| this.download_update(window, cx)))
+        };
+        let state = &self.snapshot.update_download;
+        let (status, action): (String, Option<AnyElement>) = match state {
+            UpdateDownload::Downloading { received, total, .. } => {
+                let percent = received.saturating_mul(100) / (*total).max(1);
+                (format!("Downloading version {version}… {percent}%"), None)
+            }
+            UpdateDownload::Ready { version: ready, .. } if ready == version => (
+                if in_call {
+                    "Downloaded and checked. Leave the call to install it.".into()
+                } else {
+                    "Downloaded and checked against the release checksum. Quit Twayblade before you replace it.".into()
+                },
+                Some(
+                    Button::new("update-open")
+                        .primary()
+                        .icon(IconName::ExternalLink)
+                        .label("Open Installer")
+                        .disabled(in_call || self.preview)
+                        .on_click(cx.listener(|this, _, window, cx| this.open_update(window, cx)))
+                        .into_any_element(),
+                ),
+            ),
+            UpdateDownload::Failed(error) => (
+                match error {
+                    twayblade_platform::updates::DownloadError::ChecksumMismatch
+                    | twayblade_platform::updates::DownloadError::Size => {
+                        "The download didn't match the release checksum and was deleted. Try again.".into()
+                    }
+                    twayblade_platform::updates::DownloadError::NoChecksum => {
+                        "This release has no checksum for the installer, so it can't be checked.".into()
+                    }
+                    twayblade_platform::updates::DownloadError::Disk => {
+                        "The update couldn't be saved to your Downloads folder.".into()
+                    }
+                    _ => "The download failed. Check your connection and try again.".into(),
+                },
+                Some(download_button("Try Again", cx).into_any_element()),
+            ),
+            _ => (
+                "Download the installer for this computer. Builds are not signed, so Twayblade checks it against the release checksum.".into(),
+                Some(download_button("Download Update", cx).into_any_element()),
+            ),
+        };
+        v_flex()
+            .gap(px(8.))
+            .child(note(status))
+            .when_some(
+                match state {
+                    UpdateDownload::Downloading {
+                        received, total, ..
+                    } => Some(*received as f32 / (*total).max(1) as f32),
+                    _ => None,
+                },
+                |column, fraction| {
+                    column.child(
+                        div()
+                            .id("update-download-progress")
+                            .test_support()
+                            .mx(px(4.))
+                            .h(px(4.))
+                            .rounded_full()
+                            .bg(cx.theme().secondary)
+                            .child(
+                                div()
+                                    .h_full()
+                                    .rounded_full()
+                                    .bg(cx.theme().primary)
+                                    .w(relative(fraction.clamp(0., 1.))),
+                            ),
+                    )
+                },
+            )
+            .when_some(action, |column, action| {
+                column.child(h_flex().child(action))
+            })
             .into_any_element()
     }
 

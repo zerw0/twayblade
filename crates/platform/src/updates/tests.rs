@@ -11,6 +11,7 @@ fn release(tag: &str, prerelease: bool, draft: bool) -> Release {
         prerelease,
         draft,
         body: Some("Changes".into()),
+        assets: Vec::new(),
     }
 }
 fn chosen(releases: Vec<Release>, channel: Channel, current: &str) -> Option<Available> {
@@ -19,6 +20,7 @@ fn chosen(releases: Vec<Release>, channel: Channel, current: &str) -> Option<Ava
         channel,
         &Version::parse(current).unwrap(),
         &Installation::default(),
+        download::Target::Other,
     )
 }
 #[test]
@@ -103,6 +105,7 @@ fn bounds_changelog_on_a_unicode_boundary_and_supplies_managed_command() {
         Channel::Stable,
         &Version::new(1, 0, 0),
         &installation,
+        download::Target::MacOs { arm: true },
     )
     .unwrap();
     assert_eq!(result.changelog.len(), MAX_CHANGELOG);
@@ -110,6 +113,10 @@ fn bounds_changelog_on_a_unicode_boundary_and_supplies_managed_command() {
     assert_eq!(
         result.upgrade_command.as_deref(),
         Some("brew upgrade --cask twayblade")
+    );
+    assert!(
+        result.download.is_none(),
+        "Homebrew installs never download"
     );
 }
 #[test]
@@ -345,4 +352,52 @@ async fn checks_at_launch_then_daily_and_same_config_does_not_repeat() {
     assert_eq!(status.borrow_and_update().phase, Phase::Checking);
     drop(config);
     task.await.unwrap();
+}
+
+#[tokio::test]
+async fn download_is_kept_only_when_size_and_checksum_match() {
+    use sha2::Digest;
+    let installer = b"sample installer bytes".to_vec();
+    let digest = sha2::Sha256::digest(&installer);
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    let directory = std::env::temp_dir().join(format!("twayblade-update-{}", uuid::Uuid::new_v4()));
+    for (sums, ok) in [
+        (format!("{hex}  Twayblade-0.2.0-arm64.dmg\n"), true),
+        (
+            format!("{}  Twayblade-0.2.0-arm64.dmg\n", "00".repeat(32)),
+            false,
+        ),
+    ] {
+        let (listener, base) = listener().await;
+        let body = String::from_utf8(installer.clone()).unwrap();
+        let server = tokio::spawn({
+            let listener = listener.clone();
+            async move {
+                reply(listener.clone(), "200 OK", "", &sums).await;
+                reply(listener, "200 OK", "", &body).await;
+            }
+        });
+        let download = Download {
+            file: "Twayblade-0.2.0-arm64.dmg".into(),
+            size: installer.len() as u64,
+            url: format!("{base}/installer"),
+            sums_url: format!("{base}/SHA256SUMS"),
+        };
+        let mut seen = 0;
+        let result = download::fetch(&download, &directory, |received| seen = received).await;
+        server.await.unwrap();
+        let target = directory.join(&download.file);
+        if ok {
+            assert_eq!(result.unwrap(), target);
+            assert_eq!(std::fs::read(&target).unwrap(), installer);
+            assert_eq!(seen, installer.len() as u64);
+            std::fs::remove_file(&target).unwrap();
+        } else {
+            assert_eq!(result, Err(DownloadError::ChecksumMismatch));
+            assert!(!target.exists(), "a mismatched download is not kept");
+        }
+        let leftovers = std::fs::read_dir(&directory).unwrap().count();
+        assert_eq!(leftovers, 0, "no partial file is left behind");
+    }
+    let _ = std::fs::remove_dir_all(&directory);
 }

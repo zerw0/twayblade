@@ -2694,3 +2694,98 @@ fn invite_contact_copies_a_matrix_to_link(cx: &mut TestAppContext) {
     })
     .expect("copy the contact link");
 }
+
+#[gpui_kit::test]
+fn direct_downloads_offer_a_checked_installer_and_package_installs_do_not(cx: &mut TestAppContext) {
+    use crate::backend::UpdateDownload;
+    use twayblade_platform::updates::{Available, Download, DownloadError, Phase, Snapshot};
+    let (_main_window, app) = preview_window(cx);
+    let available = |command: Option<&str>| Snapshot {
+        phase: Phase::Available,
+        available: Some(Available {
+            version: "9.0.0".into(),
+            prerelease: false,
+            changelog: String::new(),
+            release_url: "https://github.com/zerw0/twayblade/releases/tag/v9.0.0".into(),
+            upgrade_command: command.map(str::to_owned),
+            download: command.is_none().then(|| Download {
+                file: "Twayblade-9.0.0-arm64.dmg".into(),
+                size: 10,
+                url: String::new(),
+                sums_url: String::new(),
+            }),
+        }),
+        ..Default::default()
+    };
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            app.snapshot.updater = available(None);
+            app.open_settings(crate::ui::settings::Section::General, cx)
+        })
+    });
+    let window = cx.update(|cx| app.read(cx).settings.as_ref().unwrap().0);
+    let set = |cx: &mut TestAppContext, state: UpdateDownload| {
+        cx.update(|cx| {
+            app.update(cx, |app, cx| {
+                app.snapshot.update_download = state;
+                cx.notify();
+            })
+        })
+    };
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("update-download").visible());
+        assert!(window.try_find("update-open").is_none());
+    })
+    .expect("download offered");
+    set(
+        cx,
+        UpdateDownload::Downloading {
+            version: "9.0.0".into(),
+            received: 5,
+            total: 10,
+        },
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("update-download-progress").visible());
+        assert!(window.try_find("update-download").is_none());
+    })
+    .expect("downloading");
+    set(
+        cx,
+        UpdateDownload::Ready {
+            version: "9.0.0".into(),
+            path: "Twayblade-9.0.0-arm64.dmg".into(),
+        },
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("update-open").visible());
+    })
+    .expect("ready to open");
+    set(cx, UpdateDownload::Failed(DownloadError::ChecksumMismatch));
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window.find("update-download").visible(),
+            "a failed check can be retried"
+        );
+        assert!(window.try_find("update-open").is_none());
+    })
+    .expect("mismatch");
+    // A package-managed install shows its command and offers no download.
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            app.snapshot.updater = available(Some("brew upgrade --cask twayblade"));
+            app.snapshot.update_download = UpdateDownload::Idle;
+            cx.notify();
+        })
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("update-command").visible());
+        assert!(window.try_find("update-download").is_none());
+    })
+    .expect("package manager");
+}

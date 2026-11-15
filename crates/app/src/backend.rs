@@ -38,6 +38,8 @@ pub(super) use twayblade_core::{
 #[derive(Clone, Default)]
 pub(super) struct Snapshot {
     pub(super) updater: twayblade_platform::updates::Snapshot,
+    /// The installer download offered for direct-download installs (#56).
+    pub(super) update_download: UpdateDownload,
     pub(super) editing: Option<Editing>,
     pub(super) edit_error: Option<String>,
     pub(super) edit_saving: bool,
@@ -221,6 +223,7 @@ impl Snapshot {
     fn clear_account(&mut self, preview_size: previews::PreviewSize) {
         *self = Self {
             updater: self.updater.clone(),
+            update_download: self.update_download.clone(),
             revision: self.revision,
             reduce_motion: self.reduce_motion,
             preview_size,
@@ -241,6 +244,7 @@ pub(super) struct Backend {
     // Serialize lifecycle changes. GPUI invokes operations only on background workers.
     lifecycle: Mutex<()>,
     oauth: Mutex<Option<BrowserLogin>>,
+    update_download: Mutex<Option<JoinHandle<()>>>,
 }
 
 pub(super) fn render_viewer_image(
@@ -261,6 +265,24 @@ fn publish(sender: &watch::Sender<Snapshot>, update: impl FnOnce(&mut Snapshot))
         snapshot.reduce_motion = twayblade_platform::reduce_motion();
         snapshot.revision = snapshot.revision.wrapping_add(1);
     });
+}
+
+/// The direct-download installer, from the user's Download to Open Installer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) enum UpdateDownload {
+    #[default]
+    Idle,
+    Downloading {
+        version: String,
+        received: u64,
+        total: u64,
+    },
+    /// Size and SHA-256 matched the release.
+    Ready {
+        version: String,
+        path: std::path::PathBuf,
+    },
+    Failed(twayblade_platform::updates::DownloadError),
 }
 
 fn publish_updater(
@@ -510,7 +532,91 @@ impl Backend {
             state: Arc::new(Mutex::new(State::default())),
             lifecycle: Mutex::new(()),
             oauth: Mutex::new(None),
+            update_download: Mutex::new(None),
         }))
+    }
+
+    /// Downloads the available release's installer for this machine and checks
+    /// it against the release's checksum; a new request replaces an older one.
+    pub(super) fn download_update(&self) -> Result<(), ServiceError> {
+        use twayblade_platform::updates::download;
+        let (version, target) = {
+            let snapshot = self.updates.borrow();
+            let available = snapshot
+                .updater
+                .available
+                .as_ref()
+                .ok_or_else(|| failure("No update is available."))?;
+            let target = available
+                .download
+                .clone()
+                .ok_or_else(|| failure("This release has no installer for this computer."))?;
+            (available.version.clone(), target)
+        };
+        let directory =
+            download::directory().ok_or_else(|| failure("No folder to save the update in."))?;
+        let mut task = self
+            .update_download
+            .lock()
+            .map_err(|_| failure("The update download is unavailable."))?;
+        if let Some(previous) = task.take() {
+            previous.abort();
+        }
+        let updates = self.updates.clone();
+        let total = target.size;
+        publish(&updates, |view| {
+            view.update_download = UpdateDownload::Downloading {
+                version: version.clone(),
+                received: 0,
+                total,
+            }
+        });
+        *task = Some(self.runtime.spawn(async move {
+            let mut shown = 0u64;
+            let result = download::fetch(&target, &directory, |received| {
+                // About once per percent.
+                if received.saturating_sub(shown) >= (total / 100).max(1) || received == total {
+                    shown = received;
+                    publish(&updates, |view| {
+                        if let UpdateDownload::Downloading { received: now, .. } =
+                            &mut view.update_download
+                        {
+                            *now = received;
+                        }
+                    });
+                }
+            })
+            .await;
+            publish(&updates, |view| {
+                view.update_download = match result {
+                    Ok(path) => UpdateDownload::Ready { version, path },
+                    Err(error) => UpdateDownload::Failed(error),
+                }
+            });
+        }));
+        Ok(())
+    }
+
+    /// Opens the verified installer. Not during a call: installing replaces the
+    /// app the call runs in.
+    pub(super) fn open_update(&self) -> Result<(), ServiceError> {
+        let (in_call, path) = {
+            let snapshot = self.updates.borrow();
+            let in_call = snapshot.call.as_ref().is_some_and(|call| {
+                !matches!(call.phase, twayblade_core::calls::CallPhase::Ended(_))
+            });
+            let path = match &snapshot.update_download {
+                UpdateDownload::Ready { path, .. } => Some(path.clone()),
+                _ => None,
+            };
+            (in_call, path)
+        };
+        if in_call {
+            return Err(failure("Leave the call before installing the update."));
+        }
+        let path = path.ok_or_else(|| failure("Download the update first."))?;
+        twayblade_platform::updates::download::open(&path)
+            .map_err(|_| failure("The installer could not be opened."))
     }
 
     pub(super) fn configure_updates(&self, preferences: twayblade_platform::updates::Preferences) {
@@ -1890,6 +1996,7 @@ mod tests {
                 changelog: "Fixture release changes".into(),
                 release_url: "https://github.com/zerw0/twayblade/releases/tag/v2.0.0".into(),
                 upgrade_command: Some("brew upgrade --cask twayblade".into()),
+                download: None,
             }),
             ..Default::default()
         };
