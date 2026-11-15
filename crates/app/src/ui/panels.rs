@@ -41,7 +41,7 @@ impl MatrixApp {
                     .icon(IconName::X)
                     .accessibility_label("Close panel")
                     .tooltip("Close · Escape")
-                    .on_click(cx.listener(|this, _, _, cx| this.dismiss_panel(cx))),
+                    .on_click(cx.listener(|this, _, window, cx| this.dismiss_panel(window, cx))),
             )
     }
 
@@ -320,11 +320,13 @@ impl MatrixApp {
             list = list.child(
                 v_flex()
                     .p(px(8.))
+                    .items_start()
                     .gap(px(6.))
                     .text_color(muted)
                     .child("Search failed. Check your connection and try again.")
                     .child(
                         Button::new("search-retry")
+                            .icon(IconName::RefreshCw)
                             .small()
                             .label("Try Again")
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -341,12 +343,14 @@ impl MatrixApp {
             );
         } else if search.query.is_some() && !search.exhausted {
             list = list.child(
-                Button::new("search-more")
-                    .ghost()
-                    .small()
-                    .w_full()
-                    .label("Load More Results")
-                    .on_click(cx.listener(|this, _, window, cx| this.search_more(window, cx))),
+                h_flex().justify_center().py(px(4.)).child(
+                    Button::new("search-more")
+                        .ghost()
+                        .small()
+                        .icon(IconName::ChevronDown)
+                        .label("Load More Results")
+                        .on_click(cx.listener(|this, _, window, cx| this.search_more(window, cx))),
+                ),
             );
         }
         self.panel(cx)
@@ -876,11 +880,13 @@ impl MatrixApp {
         } else if current && media.error.is_some() {
             body = body.child(
                 v_flex()
+                    .items_start()
                     .gap(px(6.))
                     .text_color(muted)
                     .child("The room's files could not be loaded. Check your connection.")
                     .child(
                         Button::new("gallery-retry")
+                            .icon(IconName::RefreshCw)
                             .small()
                             .label("Try Again")
                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -896,12 +902,16 @@ impl MatrixApp {
             }));
         } else if current && !media.exhausted {
             body = body.child(
-                Button::new("gallery-more")
-                    .ghost()
-                    .small()
-                    .w_full()
-                    .label("Load Older")
-                    .on_click(cx.listener(|this, _, window, cx| this.load_more_media(window, cx))),
+                h_flex().justify_center().py(px(4.)).child(
+                    Button::new("gallery-more")
+                        .ghost()
+                        .small()
+                        .icon(IconName::ChevronDown)
+                        .label("Load Older")
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.load_more_media(window, cx)),
+                        ),
+                ),
             );
         }
         v_flex()
@@ -1025,10 +1035,8 @@ impl MatrixApp {
         let action = |id: String, icon: IconName, label: String, danger: bool| {
             Button::new(SharedString::from(id))
                 .ghost()
-                .w_full()
                 .h(px(32.))
                 .px(px(10.))
-                .justify_start()
                 .accessibility_label(label.clone())
                 .child(
                     h_flex()
@@ -1041,8 +1049,10 @@ impl MatrixApp {
         let confirming =
             |kind: MemberAction| self.member_confirm.as_ref() == Some(&(user.to_owned(), kind));
         let user_owned = user.to_owned();
+        // Content-width actions, aligned with the panel's leading edge.
         let mut list = v_flex()
             .w_full()
+            .items_start()
             .px(px(8.))
             .py(px(6.))
             .gap(px(1.))
@@ -1235,6 +1245,7 @@ impl MatrixApp {
                 .child(div().text_color(palette.error).child(page.error.clone()))
                 .child(
                     Button::new("retry-profile")
+                        .icon(IconName::RefreshCw)
                         .small()
                         .label("Try again")
                         .on_click(cx.listener(move |this, _, window, cx| {

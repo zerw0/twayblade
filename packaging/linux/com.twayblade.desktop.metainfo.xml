@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.twayblade.desktop</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Twayblade</name>
+  <summary>Native Matrix client with encrypted messages and calls</summary>
+  <description>
+    <p>Twayblade is a native Matrix client for desktop. It supports end-to-end encrypted rooms, spaces, threads and MatrixRTC voice and video calls.</p>
+  </description>
+  <launchable type="desktop-id">com.twayblade.desktop.desktop</launchable>
+  <url type="homepage">https://github.com/zerw0/twayblade</url>
+  <url type="bugtracker">https://github.com/zerw0/twayblade/issues</url>
+  <categories>
+    <category>Network</category>
+    <category>InstantMessaging</category>
+  </categories>
+  <provides>
+    <binary>twayblade</binary>
+  </provides>
+  <content_rating type="oars-1.1"/>
+  <!-- Releases and screenshots are added by the release flow (#55). -->
+</component>

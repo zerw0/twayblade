@@ -161,7 +161,11 @@ impl MatrixApp {
     pub(crate) fn security_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let security = &self.snapshot.security;
         let muted = cx.theme().muted_foreground;
-        let mut body = v_flex().id("security-content").w_full().gap(px(12.));
+        let mut body = v_flex()
+            .id("security-content")
+            .w_full()
+            .items_start()
+            .gap(px(12.));
         if self.preview {
             body = body.child(
                 div()
@@ -185,7 +189,7 @@ impl MatrixApp {
             body = body.child(div().font_weight(FontWeight::SEMIBOLD).child("Recover encrypted conversations"))
                 .child(div().text_color(muted).child("Enter your recovery key or recovery passphrase to verify this device and restore backed-up room keys."))
                 .child(div().child("Recovery key or passphrase"))
-                .child(Input::new(&self.security_input).aria_label("Recovery key or passphrase").disabled(self.busy))
+                .child(div().w_full().child(Input::new(&self.security_input).aria_label("Recovery key or passphrase").disabled(self.busy)))
                 .child(Button::new("restore-recovery").primary().label("Recover").disabled(self.busy || self.preview).on_click(cx.listener(|this, _, window, cx| {
                     let key = this.take_security_input(window, cx); this.perform_security(SecurityAction::Recover(key), window, cx);
                 })))
@@ -235,9 +239,11 @@ impl MatrixApp {
                         .child("Enter your account password to confirm."),
                 )
                 .child(
-                    Input::new(&self.security_input)
-                        .aria_label("Account password")
-                        .disabled(self.busy),
+                    div().w_full().child(
+                        Input::new(&self.security_input)
+                            .aria_label("Account password")
+                            .disabled(self.busy),
+                    ),
                 )
                 .child(
                     Button::new("confirm-device-signout")
@@ -318,6 +324,7 @@ impl MatrixApp {
                 if security.backup_exists {
                     body = body.child(
                         Button::new("enter-recovery-key")
+                            .icon(gpui_kit::assets::IconName::KeyRound)
                             .label("Enter recovery key or passphrase")
                             .disabled(self.busy)
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -334,6 +341,7 @@ impl MatrixApp {
                     } else {
                         body = body.child(
                             Button::new("change-recovery")
+                                .icon(gpui_kit::assets::IconName::KeyRound)
                                 .label("Change or reset recovery")
                                 .disabled(self.busy)
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -343,61 +351,91 @@ impl MatrixApp {
                         );
                     }
                 }
-                body = body.child(
-                    div()
-                        .pt(px(8.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child("Your devices"),
-                );
-                body = body.child(
-                    Button::new("refresh-devices")
-                        .label("Refresh devices")
+            }
+        }
+        if self.busy {
+            body = body.child(div().text_color(muted).child("Working securely…"));
+        }
+        if !self.status.is_empty() {
+            body = body.child(div().text_color(muted).child(self.status.clone()));
+        }
+        body.into_any_element()
+    }
+
+    /// The Devices settings section: this account's sessions. Signing one out
+    /// reuses the confirmation flow in `security_view`.
+    pub(crate) fn devices_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.security_device.is_some() {
+            return self.security_view(cx);
+        }
+        let security = &self.snapshot.security;
+        let muted = cx.theme().muted_foreground;
+        let mut body = v_flex()
+            .id("devices-content")
+            .w_full()
+            .items_start()
+            .gap(px(12.));
+        if self.preview {
+            body = body.child(
+                div()
+                    .text_color(muted)
+                    .child("Sample data · Offline devices preview"),
+            );
+        }
+        body = body.child(
+            div()
+                .pt(px(8.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child("Your devices"),
+        );
+        body = body.child(
+            Button::new("refresh-devices")
+                .icon(gpui_kit::assets::IconName::RefreshCw)
+                .label("Refresh devices")
+                .disabled(self.busy || self.preview)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.perform_security(SecurityAction::Refresh, window, cx)
+                })),
+        );
+        for device in &security.devices {
+            let id = device.id.clone();
+            let mut row = h_flex().w_full().gap(px(12.)).child(
+                v_flex()
+                    .flex_1()
+                    .child(device.name.clone().unwrap_or_else(|| device.id.clone()))
+                    .child(div().text_color(muted).child(format!(
+                        "{}{}",
+                        if device.current {
+                            "This device · "
+                        } else {
+                            ""
+                        },
+                        if device.verified && security.verified {
+                            "Verified"
+                        } else if device.current {
+                            "Not verified"
+                        } else if !security.verified {
+                            // Trust in other sessions comes from this one's;
+                            // until it is verified, their status is unknown.
+                            "Unknown until this device is verified"
+                        } else {
+                            "Not verified"
+                        }
+                    ))),
+            );
+            if !device.current && (security.password_devices || security.oauth_management) {
+                row = row.child(
+                    Button::new(SharedString::from(format!("sign-out-device-{id}")))
+                        .small()
+                        .label("Sign out")
                         .disabled(self.busy || self.preview)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.perform_security(SecurityAction::Refresh, window, cx)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.security_device = Some(id.clone());
+                            cx.notify();
                         })),
                 );
-                for device in &security.devices {
-                    let id = device.id.clone();
-                    let mut row = h_flex().gap(px(12.)).child(
-                        v_flex()
-                            .flex_1()
-                            .child(device.name.clone().unwrap_or_else(|| device.id.clone()))
-                            .child(div().text_color(muted).child(format!(
-                                "{}{}",
-                                if device.current {
-                                    "This device · "
-                                } else {
-                                    ""
-                                },
-                                if device.verified && security.verified {
-                                    "Verified"
-                                } else if device.current {
-                                    "Not verified"
-                                } else if !security.verified {
-                                    // Trust in other sessions comes from this one's;
-                                    // until it is verified, their status is unknown.
-                                    "Unknown until this device is verified"
-                                } else {
-                                    "Not verified"
-                                }
-                            ))),
-                    );
-                    if !device.current && (security.password_devices || security.oauth_management) {
-                        row = row.child(
-                            Button::new(SharedString::from(format!("sign-out-device-{id}")))
-                                .small()
-                                .label("Sign out")
-                                .disabled(self.busy || self.preview)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.security_device = Some(id.clone());
-                                    cx.notify();
-                                })),
-                        );
-                    }
-                    body = body.child(row);
-                }
             }
+            body = body.child(row);
         }
         if self.busy {
             body = body.child(div().text_color(muted).child("Working securely…"));

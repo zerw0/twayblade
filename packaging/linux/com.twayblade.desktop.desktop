@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Twayblade
+GenericName=Matrix client
+Comment=Native Matrix messaging and calls
+Exec=twayblade
+Icon=com.twayblade.desktop
+Terminal=false
+Categories=Network;InstantMessaging;Chat;
+Keywords=matrix;chat;messaging;calls;
+StartupWMClass=twayblade

@@ -291,6 +291,10 @@ impl Render for MatrixApp {
                 .management
                 .as_ref()
                 .is_some_and(|page| page.kind.is_dialog());
+            let sheet_focus = self
+                .management
+                .as_ref()
+                .map_or_else(|| self.focus.clone(), |page| page.focus.clone());
             v_flex()
                 .size_full()
                 .child(self.window_titlebar(cx))
@@ -332,28 +336,35 @@ impl Render for MatrixApp {
                                     .items_start()
                                     .justify_center()
                                     .pt(px(72.))
-                                    .on_click(cx.listener(|this, _, _, cx| {
+                                    .on_click(cx.listener(|this, _, window, cx| {
                                         this.management = None;
+                                        this.restore_focus(window, cx);
                                         cx.notify();
                                     }))
                                     .child(motion::rise(
-                                        div()
-                                            .id("management-dialog")
-                                            .role(Role::Dialog)
-                                            .aria_label(
-                                                self.management.as_ref().map_or("Dialog", |page| {
-                                                    Self::management_title(&page.kind)
-                                                }),
-                                            )
-                                            .w(px(440.))
-                                            .rounded(px(12.))
-                                            .overflow_hidden()
-                                            .border_1()
-                                            .border_color(cx.theme().border)
-                                            .shadow_lg()
-                                            // Clicks inside the sheet must not close it.
-                                            .on_click(|_, _, cx| cx.stop_propagation())
-                                            .child(self.management_view(cx)),
+                                        div().child(
+                                            div()
+                                                .id("management-sheet")
+                                                .role(Role::Dialog)
+                                                .aria_label(
+                                                    self.management
+                                                        .as_ref()
+                                                        .map_or("Dialog", |page| {
+                                                            Self::management_title(&page.kind)
+                                                        }),
+                                                )
+                                                .w(px(440.))
+                                                .rounded(px(12.))
+                                                .overflow_hidden()
+                                                .border_1()
+                                                .border_color(cx.theme().border)
+                                                .shadow_lg()
+                                                // Clicks inside the sheet must not close it.
+                                                .on_click(|_, _, cx| cx.stop_propagation())
+                                                .child(self.management_view(cx))
+                                                // Tab cycles inside the sheet; the trap also tracks its focus.
+                                                .focus_trap("management-dialog", &sheet_focus),
+                                        ),
                                         "management-dialog-motion",
                                         reduce,
                                     )),
@@ -434,12 +445,15 @@ impl Render for MatrixApp {
                     .is_some_and(|page| page.kind.is_dialog())
                 {
                     this.management = None;
+                    this.restore_focus(window, cx);
                     cx.notify();
                 } else {
-                    this.dismiss_panel(cx);
+                    this.dismiss_panel(window, cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &ToggleDetails, _, cx| this.toggle_details(cx)))
+            .on_action(
+                cx.listener(|this, _: &ToggleDetails, window, cx| this.toggle_details(window, cx)),
+            )
             .on_action(cx.listener(
                 |this, _: &crate::shortcuts::ToggleCallFullScreen, window, cx| {
                     this.toggle_call_full_screen(window, cx)

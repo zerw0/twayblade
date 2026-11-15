@@ -363,6 +363,8 @@ impl MatrixApp {
             }));
         let room_id = room.id.clone();
         let favourite = room.favourite;
+        let archived = room.archived;
+        let has_unread = room.unread > 0 || room.mentions > 0;
         let weak = cx.entity().downgrade();
         let available = self.preview || self.snapshot.notifications.ready;
         let selected_mode = self.snapshot.notifications.room_mode(&room.id);
@@ -386,6 +388,44 @@ impl MatrixApp {
                             });
                         }),
                     )
+                    .separator();
+                if !has_unread {
+                    let unread_view = weak.clone();
+                    let unread_room = room_id.clone();
+                    menu = menu.item(PopupMenuItem::new("Mark as unread").on_click(
+                        move |_, window, cx| {
+                            let _ = unread_view.update(cx, |this, cx| {
+                                this.set_unread(unread_room.clone(), window, cx)
+                            });
+                        },
+                    ));
+                }
+                let archive_view = weak.clone();
+                let archive_room = room_id.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(if archived {
+                        "Move out of Archive"
+                    } else {
+                        "Archive"
+                    })
+                    .on_click(move |_, window, cx| {
+                        let _ = archive_view.update(cx, |this, cx| {
+                            this.set_archived(archive_room.clone(), !archived, window, cx)
+                        });
+                    }),
+                );
+                let leave_view = weak.clone();
+                let leave_room = room_id.clone();
+                menu = menu
+                    .item(PopupMenuItem::new("Leave…").on_click(move |_, window, cx| {
+                        let _ = leave_view.update(cx, |this, cx| {
+                            this.open_management(
+                                crate::ui::spaces::ManageKind::LeaveRoom(leave_room.clone()),
+                                window,
+                                cx,
+                            )
+                        });
+                    }))
                     .separator();
                 if !available {
                     return menu;
@@ -524,6 +564,7 @@ impl MatrixApp {
         let status_msg = own
             .as_ref()
             .and_then(|presence| presence.status_msg.clone());
+        let has_archive = self.snapshot.rooms.iter().any(|room| room.archived);
         let weak = cx.entity().downgrade();
         Button::new("my-profile")
             .ghost()
@@ -577,8 +618,50 @@ impl MatrixApp {
                         ));
                     }
                 }
+                let create = weak.clone();
+                let dm = weak.clone();
+                let archive = weak.clone();
+                let invite = weak.clone();
                 let settings = weak.clone();
                 menu.separator()
+                    .item(
+                        PopupMenuItem::new("Create Room…").on_click(move |_, window, cx| {
+                            let _ = create.update(cx, |this, cx| {
+                                this.open_management(
+                                    crate::ui::spaces::ManageKind::Create,
+                                    window,
+                                    cx,
+                                )
+                            });
+                        }),
+                    )
+                    .item(PopupMenuItem::new("Start a Direct Message…").on_click(
+                        move |_, window, cx| {
+                            let _ = dm.update(cx, |this, cx| {
+                                this.open_management(crate::ui::spaces::ManageKind::Dm, window, cx)
+                            });
+                        },
+                    ))
+                    .item(
+                        PopupMenuItem::new("Invite a Contact…").on_click(move |_, window, cx| {
+                            let _ = invite.update(cx, |this, cx| {
+                                this.open_management(
+                                    crate::ui::spaces::ManageKind::InviteContact,
+                                    window,
+                                    cx,
+                                )
+                            });
+                        }),
+                    )
+                    .item(
+                        PopupMenuItem::new("Archive")
+                            .disabled(!has_archive)
+                            .on_click(move |_, window, cx| {
+                                let _ =
+                                    archive.update(cx, |this, cx| this.show_archive(window, cx));
+                            }),
+                    )
+                    .separator()
                     .item(
                         PopupMenuItem::new("Account Settings…").on_click(move |_, _, cx| {
                             let _ = settings.update(cx, |this, cx| {
@@ -721,15 +804,19 @@ impl MatrixApp {
         if !self.snapshot.invites.is_empty() {
             list = list.child(self.invite_section(cx));
         }
-        let favourites: Vec<&Room> = visible.iter().filter(|room| room.favourite).collect();
+        let favourites: Vec<&Room> = visible
+            .iter()
+            .filter(|room| room.favourite && !room.archived)
+            .collect();
         let channels: Vec<&Room> = visible
             .iter()
-            .filter(|room| !room.favourite && !room.direct)
+            .filter(|room| !room.favourite && !room.archived && !room.direct)
             .collect();
         let direct: Vec<&Room> = visible
             .iter()
-            .filter(|room| !room.favourite && room.direct)
+            .filter(|room| !room.favourite && !room.archived && room.direct)
             .collect();
+        let archived: Vec<&Room> = visible.iter().filter(|room| room.archived).collect();
         if !favourites.is_empty() {
             list =
                 list.child(self.sidebar_section("favourites", "Favourites", favourites, None, cx));
@@ -751,6 +838,9 @@ impl MatrixApp {
                 Some(("New Direct Message…", crate::ui::spaces::ManageKind::Dm)),
                 cx,
             ));
+        }
+        if !archived.is_empty() {
+            list = list.child(self.sidebar_section("archive", "Archive", archived, None, cx));
         }
         if visible.is_empty() {
             let empty = if !query.is_empty() {

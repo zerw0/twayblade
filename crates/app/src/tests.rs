@@ -154,7 +154,10 @@ fn details_panel_toggles_and_yields_to_profile(cx: &mut TestAppContext) {
         assert!(app.profile.is_some() && app.details_open);
     });
     // Escape closes the profile first, revealing details, then details.
-    cx.update(|cx| app.update(cx, |app, cx| app.dismiss_panel(cx)));
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| app.dismiss_panel(window, cx))
+    })
+    .expect("dismiss the profile");
     cx.update(|cx| assert!(app.read(cx).profile.is_none() && app.read(cx).details_open));
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
@@ -2536,4 +2539,158 @@ fn invite_tile_opens_the_invite_dialog_for_the_selected_room(cx: &mut TestAppCon
             crate::ui::spaces::ManageKind::InviteMember(room) if *room == app.snapshot.selected_room
         ));
     });
+}
+
+#[gpui_kit::test]
+fn leave_room_dialog_names_itself_and_waits_for_confirmation(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    let room = cx.update(|cx| app.read(cx).snapshot.selected_room.clone());
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_management(
+                crate::ui::spaces::ManageKind::LeaveRoom(room.clone()),
+                window,
+                cx,
+            )
+        });
+        window.render_frame(cx);
+        // The confirm button exists but a preview never leaves a real room.
+        assert!(window.find("leave-room-confirm").visible());
+    })
+    .expect("open the leave dialog");
+    cx.update(|cx| {
+        let page = app.read(cx).management.as_ref().expect("dialog");
+        assert!(page.kind.is_dialog());
+        assert_eq!(
+            crate::app::MatrixApp::management_title(&page.kind),
+            "Leave Room"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn text_dialogs_focus_their_field_and_hand_focus_back_on_close(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestEventExt;
+    let (window, app) = preview_window(cx);
+    cx.update(|cx| cx.bind_keys(crate::shortcuts::bindings()));
+    let composer_focused =
+        |app: &gpui_kit::Entity<MatrixApp>, window: &gpui_kit::Window, cx: &gpui_kit::App| {
+            let composer = app.read(cx).composer.clone();
+            gpui::Focusable::focus_handle(composer.read(cx), cx).is_focused(window)
+        };
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        for close in ["close-management", "escape"] {
+            app.update(cx, |app, cx| {
+                app.open_management(crate::ui::spaces::ManageKind::Dm, window, cx)
+            });
+            window.render_frame(cx);
+            let (field, sheet) = {
+                let page = app.read(cx).management.as_ref().expect("dialog");
+                (page.name.clone(), page.focus.clone())
+            };
+            assert!(
+                gpui::Focusable::focus_handle(field.read(cx), cx).is_focused(window),
+                "the dialog's text field takes focus when it opens"
+            );
+            for _ in 0..6 {
+                window.key_down("tab", false, cx);
+                window.render_frame(cx);
+                assert!(
+                    sheet.contains_focused(window, cx),
+                    "Tab stays inside the open dialog"
+                );
+            }
+            if close == "escape" {
+                window.key_down("escape", false, cx);
+            } else {
+                window.click(close, cx);
+            }
+            window.render_frame(cx);
+            assert!(app.read(cx).management.is_none());
+            assert!(
+                composer_focused(&app, window, cx),
+                "closing the dialog with {close} returns focus to the composer"
+            );
+        }
+        // The same holds for a side panel closed with Escape.
+        window.click("details", cx);
+        window.render_frame(cx);
+        assert!(app.read(cx).details_open);
+        app.update(cx, |app, cx| app.focus.focus(window, cx));
+        window.key_down("escape", false, cx);
+        window.render_frame(cx);
+        assert!(!app.read(cx).details_open);
+        assert!(
+            composer_focused(&app, window, cx),
+            "closing a side panel with Escape returns focus to the composer"
+        );
+    })
+    .expect("open and close the dialog");
+}
+
+#[gpui_kit::test]
+fn archive_moves_a_room_out_of_its_section_and_lists_it_from_home(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        app.update(cx, |app, cx| {
+            app.set_archived("announcements".into(), true, window, cx)
+        });
+        let space = app.read(cx).navigation.selected_space.clone();
+        assert!(space.is_some(), "the sample opens inside a space");
+        window.render_frame(cx);
+        assert!(
+            app.read(cx).collapsed_sections.contains("archive"),
+            "the Archive starts collapsed"
+        );
+        // The avatar menu's Archive opens Home with the section expanded,
+        // listing a room that lives in a space.
+        app.update(cx, |app, cx| app.show_archive(window, cx));
+        window.render_frame(cx);
+        let app_state = app.read(cx);
+        assert!(app_state.navigation.selected_space.is_none());
+        assert!(!app_state.collapsed_sections.contains("archive"));
+        assert!(
+            app_state
+                .navigation
+                .room_visible("announcements", &app_state.snapshot),
+            "Home shows archived rooms from every space"
+        );
+        // Favouriting restores it, as the SDK clears the other tag.
+        app.update(cx, |app, cx| {
+            app.set_favourite("announcements".into(), true, window, cx)
+        });
+        let room = app
+            .read(cx)
+            .snapshot
+            .rooms
+            .iter()
+            .find(|room| room.id == "announcements")
+            .cloned()
+            .expect("room");
+        assert!(room.favourite && !room.archived);
+    })
+    .expect("archive and restore");
+}
+
+#[gpui_kit::test]
+fn invite_contact_copies_a_matrix_to_link(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        app.update(cx, |app, cx| {
+            app.open_management(crate::ui::spaces::ManageKind::InviteContact, window, cx)
+        });
+        window.render_frame(cx);
+        let user = app.read(cx).snapshot.user_id.clone();
+        window.click("contact-copy", cx);
+        window.render_frame(cx);
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|item| item.text()),
+            Some(format!("https://matrix.to/#/{user}"))
+        );
+        assert!(app.read(cx).management.as_ref().expect("dialog").copied);
+    })
+    .expect("copy the contact link");
 }

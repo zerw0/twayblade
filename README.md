@@ -16,13 +16,20 @@
 
 - **End-to-end encryption** with device verification, secure backup and recovery
 - **Sign in** with a password, OAuth or single sign-on; sessions live in your OS keychain
-- **Spaces, rooms and direct messages**, with favourites and invites
+- **Spaces, rooms and direct messages**, with favourites, invites and a public room directory
 - **Threads, replies, reactions**, formatted messages, images and files
-- **Search** across conversations and messages
+- **Voice and video calls** on native MatrixRTC (LiveKit media, end-to-end encrypted, interoperable with Element Call), with screen sharing
+- **Search** across conversations and messages, including by sender
 - **Native notifications** that follow your Matrix settings
+- **Offline mode**: saved conversations stay readable without a connection
 - **Themes, scaling and chat styles**: Bubbles, IRC or Minimal
 
-Coming next: voice and video calls, and a public room directory.
+Calls are tested most on macOS. Webcam capture on Linux and Windows is
+implemented but has not been tried on real hardware, and calls there still need
+physical checks. Old-style `m.call.*` calls are not planned for 1.0. See the
+[compatibility status](docs/compatibility/STATUS.md) for what has been verified.
+
+Coming next: installers and signed packages, and in-app updates.
 
 ## Install
 

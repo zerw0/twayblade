@@ -2905,3 +2905,132 @@ async fn encrypted_message_editing_sources_navigation_and_threads() {
         task.abort();
     }
 }
+
+#[tokio::test]
+#[ignore = "requires isolated Synapse fixture"]
+async fn archive_tag_round_trips_and_excludes_favourite() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-data/local/integration");
+    let fixture: Fixture = checked(
+        serde_json::from_slice(&checked(
+            tokio::fs::read(root.join("fixture.json")).await,
+            "fixture",
+        )),
+        "parse fixture",
+    );
+    assert!(fixture.homeserver == "https://127.0.0.1:18448");
+    let cert = checked(
+        Certificate::from_pem(&checked(
+            tokio::fs::read(root.join("ca.crt")).await,
+            "test CA",
+        )),
+        "parse CA",
+    );
+    let run = root.join(format!("archive-{}", Uuid::new_v4()));
+    // Two devices of one user: Twayblade changes the tag, the other stands in
+    // for Element and must see the same standard tag.
+    let mut accounts = Vec::new();
+    for store in ["twayblade", "other"] {
+        let client = test_client(&run, store, &Uuid::new_v4().to_string(), &cert).await;
+        checked(
+            client
+                .matrix_auth()
+                .login_username("alice", &fixture.alice)
+                .await,
+            "isolated login",
+        );
+        accounts.push(Account::new(
+            client,
+            run.join(store),
+            secrets::SessionStore::new("twayblade.integration.unused"),
+            Arc::new(Mutex::new(())),
+        ));
+    }
+    let (app, other) = (&accounts[0], &accounts[1]);
+    let (updates_tx, mut updates_rx) = tokio::sync::watch::channel(None);
+    let stream_account = app.clone();
+    let app_sync = tokio::spawn(async move {
+        let stream = stream_account.room_updates();
+        tokio::pin!(stream);
+        while let Some(snapshot) = stream.next().await {
+            updates_tx.send_replace(Some(snapshot));
+        }
+    });
+    let other_sync = sync(other);
+    let room = checked(
+        app.client
+            .create_room(create_room::v3::Request::new())
+            .await,
+        "room",
+    );
+    let id = room.room_id().to_owned();
+    wait_for_room(other, &id).await;
+    // Wait until the app's own room list projects (favourite, archived).
+    let mut projected = async |stage: &'static str, want: (bool, bool)| {
+        checked(
+            tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    if updates_rx
+                        .borrow_and_update()
+                        .as_ref()
+                        .is_some_and(|snapshot| {
+                            snapshot
+                                .rooms
+                                .iter()
+                                .any(|r| r.id == id.as_str() && (r.favourite, r.archived) == want)
+                        })
+                    {
+                        return;
+                    }
+                    checked(updates_rx.changed().await, "room list update");
+                }
+            })
+            .await,
+            stage,
+        )
+    };
+    let seen_by_other = async |stage: &'static str, want: (bool, bool)| {
+        checked(
+            tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    let tags = other
+                        .client
+                        .get_room(&id)
+                        .map(|room| (room.is_favourite(), room.is_low_priority()));
+                    if tags == Some(want) {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            })
+            .await,
+            stage,
+        )
+    };
+    checked(app.set_favourite(id.as_str(), true).await, "favourite");
+    projected("favourite projected", (true, false)).await;
+    seen_by_other("favourite synced", (true, false)).await;
+    checked(app.set_archived(id.as_str(), true).await, "archive");
+    projected("archive projected, favourite cleared", (false, true)).await;
+    seen_by_other("archive synced as m.lowpriority", (false, true)).await;
+    let tags = checked(
+        other.client.get_room(&id).expect("other room").tags().await,
+        "read tags",
+    )
+    .unwrap_or_default();
+    let names: Vec<String> = tags.keys().map(|tag| tag.to_string()).collect();
+    assert_eq!(names, ["m.lowpriority"], "only the standard tag is stored");
+    checked(app.set_archived(id.as_str(), false).await, "restore");
+    projected("restore projected", (false, false)).await;
+    seen_by_other("restore synced", (false, false)).await;
+    // Favouriting an archived room moves it out of the Archive.
+    checked(app.set_archived(id.as_str(), true).await, "archive again");
+    projected("archived again", (false, true)).await;
+    checked(
+        app.set_favourite(id.as_str(), true).await,
+        "favourite archived",
+    );
+    projected("favourite clears archive", (true, false)).await;
+    seen_by_other("favourite clears archive for other clients", (true, false)).await;
+    app_sync.abort();
+    other_sync.abort();
+}

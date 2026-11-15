@@ -28,6 +28,10 @@ pub(crate) enum ManageKind {
     JoinSpace,
     /// Invite someone to this room (room ID).
     InviteMember(String),
+    /// Leave this room or direct message (room ID).
+    LeaveRoom(String),
+    /// Share your matrix.to link so someone can message you.
+    InviteContact,
 }
 impl ManageKind {
     /// Short forms open as a small centred dialog; browsing and leaving keep
@@ -35,7 +39,12 @@ impl ManageKind {
     pub fn is_dialog(&self) -> bool {
         matches!(
             self,
-            Self::Create | Self::Dm | Self::JoinSpace | Self::InviteMember(_)
+            Self::Create
+                | Self::Dm
+                | Self::JoinSpace
+                | Self::InviteMember(_)
+                | Self::LeaveRoom(_)
+                | Self::InviteContact
         )
     }
 }
@@ -52,6 +61,10 @@ pub(crate) struct Management {
     pub topic: Entity<InputState>,
     pub encrypted: bool,
     pub parent: Option<String>,
+    /// The dialog sheet: Tab stays inside it while it is open.
+    pub focus: FocusHandle,
+    /// The contact link was copied; the button says so until the dialog closes.
+    pub copied: bool,
 }
 impl MatrixApp {
     pub fn open_management(
@@ -114,7 +127,26 @@ impl MatrixApp {
             topic,
             encrypted: true,
             parent: initial_parent,
+            focus: cx.focus_handle(),
+            copied: false,
         });
+        // Dialogs with a text field start in it, so typing works at once. The
+        // leave confirmation starts on the sheet itself, not on its
+        // destructive button, so Return alone never leaves a room.
+        if let Some(page) = &self.management {
+            match page.kind {
+                ManageKind::Create
+                | ManageKind::Dm
+                | ManageKind::JoinSpace
+                | ManageKind::InviteMember(_) => {
+                    page.name.update(cx, |state, cx| state.focus(window, cx))
+                }
+                ManageKind::LeaveRoom(_) | ManageKind::InviteContact => {
+                    page.focus.focus(window, cx)
+                }
+                _ => {}
+            }
+        }
         if self.preview {
             if let Some(page) = &mut self.management {
                 match &page.kind {
@@ -255,7 +287,11 @@ impl MatrixApp {
                         if matches!(page.kind, ManageKind::InviteMember(_)) {
                             this.status = "Invitation sent.".into();
                         }
+                        if matches!(page.kind, ManageKind::LeaveRoom(_)) {
+                            this.status = "You left the room.".into();
+                        }
                         this.management = None;
+                        this.restore_focus(window, cx);
                     }
                     Err(error) => page.status = error.to_string(),
                 }
@@ -368,6 +404,8 @@ impl MatrixApp {
             ManageKind::Dm => "Start a Direct Message",
             ManageKind::JoinSpace => "Join a Space",
             ManageKind::InviteMember(_) => "Invite People",
+            ManageKind::LeaveRoom(_) => "Leave Room",
+            ManageKind::InviteContact => "Invite a Contact",
         }
     }
 
@@ -376,6 +414,7 @@ impl MatrixApp {
         let title = Self::management_title(&page.kind);
         let mut body = v_flex()
             .id("management-body")
+            .items_start()
             .flex_1()
             .min_h_0()
             .p(px(20.))
@@ -410,6 +449,7 @@ impl MatrixApp {
                         let via = room.via.clone();
                         let directory_id = id.clone();
                         let mut row = h_flex()
+                            .w_full()
                             .gap(px(12.))
                             .py(px(8.))
                             .border_b_1()
@@ -530,6 +570,7 @@ impl MatrixApp {
                         let id = space.clone();
                         body = body.child(
                             Button::new("directory-retry")
+                                .icon(assets::IconName::RefreshCw)
                                 .small()
                                 .self_start()
                                 .label("Try Again")
@@ -615,9 +656,17 @@ impl MatrixApp {
             ManageKind::Create => {
                 body = body
                     .child("Room name")
-                    .child(Input::new(&page.name).aria_label("Room name"))
+                    .child(
+                        div()
+                            .w_full()
+                            .child(Input::new(&page.name).aria_label("Room name")),
+                    )
                     .child("Topic (optional)")
-                    .child(Input::new(&page.topic).aria_label("Room topic"));
+                    .child(
+                        div()
+                            .w_full()
+                            .child(Input::new(&page.topic).aria_label("Room topic")),
+                    );
                 body = body.child(
                     Button::new("room-encryption")
                         .outline()
@@ -686,12 +735,100 @@ impl MatrixApp {
                         })),
                 );
             }
+            ManageKind::LeaveRoom(room) => {
+                let room = room.clone();
+                body = body
+                    .child("You will stop receiving messages from this conversation. You can rejoin a public room later; private rooms need a new invitation.")
+                    .child(
+                        Button::new("leave-room-confirm")
+                            .danger()
+                            .icon(gpui_kit::assets::IconName::LogOut)
+                            .label("Leave")
+                            .disabled(self.preview || page.busy)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.run_space_action(
+                                    SpaceAction::LeaveRoom(room.clone()),
+                                    window,
+                                    cx,
+                                );
+                            })),
+                    );
+            }
+            ManageKind::InviteContact => {
+                let user = self.snapshot.user_id.clone();
+                let link = contact_link(&user);
+                let copied = page.copied;
+                let copy = link.clone();
+                body = body
+                    .child("Send this link to someone you want to talk to. It opens in any Matrix app, such as Element, and starts a conversation with you.")
+                    .child(
+                        v_flex()
+                            .id("contact-link")
+                            .w_full()
+                            .gap(px(2.))
+                            .px(px(10.))
+                            .py(px(8.))
+                            .rounded(px(6.))
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .bg(cx.theme().secondary.opacity(0.4))
+                            .child(div().font_weight(FontWeight::MEDIUM).child(user.clone()))
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .text_color(cx.theme().muted_foreground)
+                                    .truncate()
+                                    .child(link.clone()),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .justify_end()
+                            .gap(px(8.))
+                            .child(
+                                Button::new("contact-dm")
+                                    .ghost()
+                                    .label("Start a Direct Message…")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_management(ManageKind::Dm, window, cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("contact-copy")
+                                    .primary()
+                                    // Same width for "Copy Link" and "Copied",
+                                    // so the row doesn't shift when it changes.
+                                    .min_w(px(112.))
+                                    .icon(if copied {
+                                        assets::IconName::Check
+                                    } else {
+                                        assets::IconName::Copy
+                                    })
+                                    .label(if copied { "Copied" } else { "Copy Link" })
+                                    .disabled(user.is_empty())
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            copy.clone(),
+                                        ));
+                                        if let Some(page) = &mut this.management {
+                                            page.copied = true;
+                                        }
+                                        cx.notify();
+                                    })),
+                            ),
+                    );
+            }
             ManageKind::InviteMember(room) => {
                 let room = room.clone();
                 let input = page.name.clone();
                 body = body
                     .child("Matrix ID (for example, @name:example.org)")
-                    .child(Input::new(&page.name).aria_label("Matrix ID"))
+                    .child(
+                        div()
+                            .w_full()
+                            .child(Input::new(&page.name).aria_label("Matrix ID")),
+                    )
                     .child(
                         Button::new("invite-submit")
                             .primary()
@@ -713,17 +850,19 @@ impl MatrixApp {
             }
             ManageKind::Dm | ManageKind::JoinSpace => {
                 let dm = matches!(page.kind, ManageKind::Dm);
-                body = body
-                    .child(if dm {
+                body =
+                    body.child(if dm {
                         "Matrix ID (for example, @name:example.org)"
                     } else {
                         "Space ID or alias"
                     })
-                    .child(Input::new(&page.name).aria_label(if dm {
-                        "Matrix ID"
-                    } else {
-                        "Space ID or alias"
-                    }));
+                    .child(div().w_full().child(
+                        Input::new(&page.name).aria_label(if dm {
+                            "Matrix ID"
+                        } else {
+                            "Space ID or alias"
+                        }),
+                    ));
                 let input = page.name.clone();
                 body = body.child(
                     Button::new("membership-submit")
@@ -786,8 +925,9 @@ impl MatrixApp {
                             .icon(assets::IconName::X)
                             .accessibility_label("Close")
                             .tooltip("Close · Escape")
-                            .on_click(cx.listener(|this, _, _, cx| {
+                            .on_click(cx.listener(|this, _, window, cx| {
                                 this.management = None;
+                                this.restore_focus(window, cx);
                                 cx.notify();
                             })),
                     ),
@@ -795,4 +935,9 @@ impl MatrixApp {
             .child(body)
             .into_any_element()
     }
+}
+
+/// A matrix.to link to a user, the address every Matrix client opens.
+pub(crate) fn contact_link(user: &str) -> String {
+    format!("https://matrix.to/#/{user}")
 }

@@ -144,6 +144,12 @@ fn main() {
                         view.groups.clear();
                         view.status = "Offline sign-in preview".into();
                     }
+                    if args.iter().any(|arg| arg == "--preview-servers") {
+                        view.snapshot = backend::Snapshot::default();
+                        view.groups.clear();
+                        view.choosing_server = true;
+                        view.status = "Offline sign-in preview".into();
+                    }
                     if args.iter().any(|arg| arg == "--preview-oauth-wait") {
                         view.snapshot = backend::Snapshot::default();
                         view.groups.clear();
@@ -207,6 +213,9 @@ fn main() {
                         }
                     }
                     if args.iter().any(|arg| arg == "--preview-viewer") { view.preview_viewer(window,cx); }
+                    if args.iter().any(|arg| arg == "--preview-leave") { view.open_management(ui::spaces::ManageKind::LeaveRoom("general".into()),window,cx); }
+                    if args.iter().any(|arg| arg == "--preview-invite-contact") { view.open_management(ui::spaces::ManageKind::InviteContact,window,cx); }
+                    if args.iter().any(|arg| arg == "--preview-archive") { for room in view.snapshot.rooms.iter_mut().filter(|room| room.id == "announcements") { room.archived = true; } view.show_archive(window, cx); }
                     if args.iter().any(|arg| arg == "--preview-directory") { view.open_management(ui::spaces::ManageKind::Directory("design".into()),window,cx); }
                     if args.iter().any(|arg| arg == "--preview-invites") { view.status = "Sample data · Invitations preview".into(); view.snapshot.invites = vec![twayblade_core::space_actions::Invite { id: "sample-room".into(), name: "Planning".into(), ..Default::default() },twayblade_core::space_actions::Invite { id: "sample-dm".into(), name: "Sam".into(), direct: true, ..Default::default() },twayblade_core::space_actions::Invite { id: "sample-space".into(), name: "Product team".into(), space: true, ..Default::default() }]; }
                     if args.iter().any(|arg| arg == "--preview-notification") { view.notification_sample = true;

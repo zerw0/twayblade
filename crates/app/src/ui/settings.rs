@@ -24,28 +24,31 @@ pub(crate) enum Section {
     Appearance,
     Chat,
     Keyboard,
+    Devices,
     Security,
     Account,
 }
 impl Section {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::General,
         Self::Notifications,
         Self::Appearance,
         Self::Chat,
         Self::Keyboard,
+        Self::Devices,
         Self::Security,
         Self::Account,
     ];
-    /// Sections with working settings.
+    /// Sections listed in the sidebar. Account is opened from the profile
+    /// header above the list instead.
     pub const VISIBLE: [Self; 7] = [
         Self::General,
         Self::Notifications,
         Self::Appearance,
         Self::Chat,
         Self::Keyboard,
+        Self::Devices,
         Self::Security,
-        Self::Account,
     ];
     fn icon(self) -> gpui_kit::assets::IconName {
         use gpui_kit::assets::IconName;
@@ -55,6 +58,7 @@ impl Section {
             Self::Appearance => IconName::Palette,
             Self::Chat => IconName::MessagesSquare,
             Self::Keyboard => IconName::Keyboard,
+            Self::Devices => IconName::MonitorSmartphone,
             Self::Security => IconName::ShieldCheck,
             Self::Account => IconName::UserRound,
         }
@@ -66,6 +70,7 @@ impl Section {
             Self::Appearance => "Appearance",
             Self::Chat => "Chat",
             Self::Keyboard => "Keyboard",
+            Self::Devices => "Devices",
             Self::Security => "Security",
             Self::Account => "Account",
         }
@@ -160,22 +165,25 @@ impl MatrixApp {
             )
             .when(permission == Permission::Denied, |view| {
                 view.child(
-                    Button::new("open-notification-system-settings")
-                        .small()
-                        .label("Open System Settings")
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.job(
-                                window,
-                                cx,
-                                |backend| backend.open_notification_settings(),
-                                |this, result, _, cx| {
-                                    if let Err(error) = result {
-                                        this.settings_status = error.to_string();
-                                        cx.notify();
-                                    }
-                                },
-                            )
-                        })),
+                    h_flex().child(
+                        Button::new("open-notification-system-settings")
+                            .icon(IconName::ExternalLink)
+                            .small()
+                            .label("Open System Settings")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.job(
+                                    window,
+                                    cx,
+                                    |backend| backend.open_notification_settings(),
+                                    |this, result, _, cx| {
+                                        if let Err(error) = result {
+                                            this.settings_status = error.to_string();
+                                            cx.notify();
+                                        }
+                                    },
+                                )
+                            })),
+                    ),
                 )
             })
             .when(self.snapshot.notification_failed, |view| {
@@ -222,20 +230,22 @@ impl MatrixApp {
                 "New message"
             }))
             .child(
-                Button::new("sample-notification-open")
-                    .small()
-                    .label("Open conversation")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.activate_notification(
-                            twayblade_platform::notifications::Activation {
-                                account: this.snapshot.account_instance,
-                                room: "general".into(),
-                                thread: Some("$sample-0:preview.invalid".into()),
-                            },
-                            window,
-                            cx,
-                        );
-                    })),
+                h_flex().child(
+                    Button::new("sample-notification-open")
+                        .small()
+                        .label("Open conversation")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.activate_notification(
+                                twayblade_platform::notifications::Activation {
+                                    account: this.snapshot.account_instance,
+                                    room: "general".into(),
+                                    thread: Some("$sample-0:preview.invalid".into()),
+                                },
+                                window,
+                                cx,
+                            );
+                        })),
+                ),
             )
             .into_any_element()
     }
@@ -1370,6 +1380,7 @@ impl MatrixApp {
                 .child(
                     h_flex().child(
                         Button::new("update-release-page")
+                            .icon(IconName::ExternalLink)
                             .label("View Release on GitHub")
                             .on_click(move |_, _, cx| cx.open_url(&url)),
                     ),
@@ -1566,16 +1577,20 @@ impl MatrixApp {
         let disabled =
             self.preview || self.busy || self.account_edit_busy || self.snapshot.user_id.is_empty();
         v_flex()
+            .items_start()
             .gap_3()
             .child(div().child(self.snapshot.user_id.clone()))
             .child(div().child("Display name"))
             .child(
-                Input::new(self.account_name.as_ref().unwrap())
-                    .aria_label("Display name")
-                    .disabled(disabled),
+                div().w_full().child(
+                    Input::new(self.account_name.as_ref().unwrap())
+                        .aria_label("Display name")
+                        .disabled(disabled),
+                ),
             )
             .child(
                 Button::new("save-account-name")
+                    .icon(gpui_kit::assets::IconName::Check)
                     .label("Save display name")
                     .disabled(disabled)
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -1590,12 +1605,14 @@ impl MatrixApp {
             .child(div().child("Avatar"))
             .child(
                 Button::new("change-account-avatar")
+                    .icon(gpui_kit::assets::IconName::Image)
                     .label("Choose avatar…")
                     .disabled(disabled)
                     .on_click(cx.listener(|this, _, window, cx| this.choose_avatar(window, cx))),
             )
             .child(
                 Button::new("remove-account-avatar")
+                    .icon(gpui_kit::assets::IconName::Trash)
                     .label("Remove avatar")
                     .disabled(disabled)
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -1604,6 +1621,7 @@ impl MatrixApp {
             )
             .child(
                 Button::new("account-sign-out")
+                    .icon(gpui_kit::assets::IconName::LogOut)
                     .label("Sign Out")
                     .disabled(disabled)
                     .on_click(cx.listener(|this, _, window, cx| this.logout(window, cx))),
@@ -1660,7 +1678,9 @@ impl Render for SettingsWindow {
                         )
                         .on_click(cx.listener(move |this, _, window, cx| {
                             if this.main.read(cx).security_key.is_none() {
-                                if this.section == Section::Security && item != Section::Security {
+                                if matches!(this.section, Section::Security | Section::Devices)
+                                    && !matches!(item, Section::Security | Section::Devices)
+                                {
                                     this.main.update(cx, |main, cx| {
                                         main.security_input =
                                             cx.new(|cx| InputState::new(window, cx).masked(true));
@@ -1696,6 +1716,7 @@ impl Render for SettingsWindow {
                 );
             let body = match section {
                 Section::Security => main.security_view(cx),
+                Section::Devices => main.devices_view(cx),
                 Section::Account => main.account_settings(window, cx),
                 Section::Appearance => main.appearance_settings(cx),
                 Section::Chat => main.chat_settings(cx),
@@ -1753,6 +1774,68 @@ impl Render for SettingsWindow {
                 );
             (sidebar_bar, content_bar, panel)
         });
+        let (own_name, own_id, own_avatar) = self.main.update(cx, |main, cx| {
+            let id = main.snapshot.user_id.clone();
+            let name = main.own_name.clone().unwrap_or_else(|| {
+                id.trim_start_matches('@')
+                    .split(':')
+                    .next()
+                    .unwrap_or("")
+                    .to_owned()
+            });
+            let avatar = main.avatar_image(main.own_avatar.as_deref(), &id, &name, 40., 20., cx);
+            (name, id, avatar)
+        });
+        let muted_color = cx.theme().muted_foreground;
+        let profile_selected = section == Section::Account;
+        let profile = div().px(px(8.)).pb(px(8.)).child(
+            Button::new("settings-profile")
+                .ghost()
+                .w_full()
+                .h(px(56.))
+                .p_0()
+                .rounded(px(8.))
+                .selected(profile_selected)
+                .bg(gpui_kit::transparent_black())
+                .accessibility_label(if profile_selected {
+                    format!("Profile: {own_name}, selected")
+                } else {
+                    format!("Profile: {own_name}")
+                })
+                .child(
+                    h_flex()
+                        .size_full()
+                        .px(px(8.))
+                        .gap(px(10.))
+                        .rounded(px(8.))
+                        .when(profile_selected, |row| row.bg(cx.theme().secondary))
+                        .child(own_avatar)
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(own_name.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_size(px(11.))
+                                        .text_color(muted_color)
+                                        .child(own_id.clone()),
+                                ),
+                        ),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if this.main.read(cx).security_key.is_none() {
+                        this.section = Section::Account;
+                        cx.notify();
+                    }
+                })),
+        );
         let sidebar = v_flex()
             .w(px(200.))
             .flex_none()
@@ -1761,6 +1844,7 @@ impl Render for SettingsWindow {
             .border_r_1()
             .border_color(cx.theme().border)
             .child(sidebar_bar)
+            .child(profile)
             .child(rows);
         v_flex()
             .size_full()

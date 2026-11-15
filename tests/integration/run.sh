@@ -71,7 +71,7 @@ case "${1:-test}" in
             scripts/cargo-pruned test --locked -p twayblade-core --all-features oauth_keychain_lifecycle_across_processes -- --ignored --nocapture
         fi
         ;;
-    up|test|keychain|services|security|media|threads|spaces|viewer|search|directory|notifications|notification-delivery|room-open)
+    up|test|keychain|services|archive|security|media|threads|spaces|viewer|search|directory|notifications|notification-delivery|room-open)
         mkdir -p test-data/local/integration
         "${compose[@]}" run --rm --no-deps --entrypoint python synapse /bootstrap.py generate
         if [[ "${1:-test}" == spaces ]]; then
@@ -95,6 +95,8 @@ case "${1:-test}" in
                 scripts/cargo-pruned test --locked -p twayblade-core --all-features search_server_cached_encryption_pagination_and_event_context -- --ignored --nocapture
             elif [[ "${1:-test}" == notification-delivery ]]; then
                 scripts/cargo-pruned test --locked -p twayblade-core --all-features encrypted_notification_delivery_and_private_preview -- --ignored --nocapture
+            elif [[ "${1:-test}" == archive ]]; then
+                scripts/cargo-pruned test --locked -p twayblade-core --all-features archive_tag_round_trips_and_excludes_favourite -- --ignored --nocapture
             elif [[ "${1:-test}" == notifications ]]; then
                 scripts/cargo-pruned test --locked -p twayblade-core --all-features notification_rules_round_trip_and_second_client_changes -- --ignored --nocapture
             elif [[ "${1:-test}" == viewer ]]; then

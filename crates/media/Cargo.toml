@@ -27,9 +27,11 @@ url.workspace = true
 # Screen sharing through xdg-desktop-portal needs a GLib main loop on Linux.
 [target.'cfg(target_os = "linux")'.dependencies]
 livekit = { version = "=0.10.1", features = ["rustls-tls-native-roots", "glib-main-loop"] }
+# Webcams through Video4Linux2.
+v4l = { version = "=0.14.0", default-features = false, features = ["v4l2"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "=0.62.2", features = ["Graphics_Capture", "Win32_System_WinRT"] }
+windows = { version = "=0.62.2", features = ["Graphics_Capture", "Win32_System_WinRT", "Win32_Foundation", "Win32_System_Com", "Win32_Media_MediaFoundation"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "=0.6.5"

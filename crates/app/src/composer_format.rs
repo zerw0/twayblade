@@ -10,6 +10,8 @@ pub enum Format {
     Code,
     Quote,
     Link,
+    BulletList,
+    NumberedList,
 }
 
 /// A caret inside a grapheme snaps left; a selection expands to contain whole
@@ -105,6 +107,56 @@ fn quote(text: &str, range: Range<usize>) -> (String, Range<usize>) {
         } else {
             relative + 2
         };
+        offset..offset
+    } else {
+        0..output.len()
+    };
+    replace(text, range, &output, selected)
+}
+
+/// The list marker a line starts with: `- `, `* ` or `N. `.
+fn list_marker(line: &str) -> Option<(usize, bool)> {
+    if line.starts_with("- ") || line.starts_with("* ") {
+        return Some((2, false));
+    }
+    let digits = line.bytes().take_while(u8::is_ascii_digit).count();
+    (digits > 0 && line[digits..].starts_with(". ")).then_some((digits + 2, true))
+}
+
+/// Makes whole lines a bulleted or numbered list, or removes the list when
+/// every line already is one of that kind. Lines of the other kind switch.
+fn list(text: &str, range: Range<usize>, numbered: bool) -> (String, Range<usize>) {
+    let caret = range.is_empty().then_some(range.start);
+    let range = lines(text, range);
+    let body = &text[range.clone()];
+    let remove = body
+        .split('\n')
+        .all(|l| list_marker(l).is_some_and(|(_, n)| n == numbered));
+    let mut shift = 0isize;
+    let output = body
+        .split('\n')
+        .enumerate()
+        .map(|(index, line)| {
+            let old = list_marker(line).map_or(0, |(len, _)| len);
+            let marker = if remove {
+                String::new()
+            } else if numbered {
+                format!("{}. ", index + 1)
+            } else {
+                "- ".to_owned()
+            };
+            if index == 0 {
+                shift = marker.len() as isize - old as isize;
+            }
+            format!("{marker}{}", &line[old..])
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let selected = if let Some(caret) = caret {
+        // A caret inside the old marker lands at the start of the text.
+        let old = list_marker(body).map_or(0, |(len, _)| len);
+        let relative = (caret - range.start).max(old) as isize + shift;
+        let offset = relative.max(0) as usize;
         offset..offset
     } else {
         0..output.len()
@@ -228,6 +280,8 @@ pub fn transform(format: Format, text: &str, range: Range<usize>) -> (String, Ra
         Format::Code => code(text, range),
         Format::Quote => quote(text, range),
         Format::Link => link(text, range),
+        Format::BulletList => list(text, range, false),
+        Format::NumberedList => list(text, range, true),
     }
 }
 
@@ -274,6 +328,8 @@ mod tests {
             (Format::Code, "``", 1),
             (Format::Quote, "> ", 2),
             (Format::Link, "[](url)", 1),
+            (Format::BulletList, "- ", 2),
+            (Format::NumberedList, "1. ", 3),
         ] {
             assert_eq!(transform(format, "", 0..0), (expected.into(), caret..caret));
             assert_eq!(transform(format, expected, caret..caret), ("".into(), 0..0));
@@ -290,6 +346,35 @@ mod tests {
         assert_eq!(transform(Format::Quote, &s, r).0, "first\nsecond\nlast");
         assert_eq!(transform(Format::Quote, "a\nb", 0..2).0, "> a\nb");
         assert_eq!(transform(Format::Quote, "> a\nb", 0..5).0, "> > a\n> b");
+    }
+    #[test]
+    fn lists_number_whole_lines_toggle_and_switch_kind() {
+        let (s, r) = transform(Format::BulletList, "first\nsecond\nlast", 2..13);
+        assert_eq!(s, "- first\n- second\nlast");
+        assert_eq!(
+            transform(Format::BulletList, &s, r.clone()).0,
+            "first\nsecond\nlast"
+        );
+        let (n, r) = transform(Format::NumberedList, &s, r);
+        assert_eq!(n, "1. first\n2. second\nlast");
+        assert_eq!(
+            transform(Format::NumberedList, &n, r).0,
+            "first\nsecond\nlast"
+        );
+        assert_eq!(
+            transform(Format::BulletList, "* a\n- b", 0..7).0,
+            "a\nb",
+            "either bullet marker counts as a bulleted list"
+        );
+        // A caret keeps its place in the text as the marker changes.
+        assert_eq!(
+            transform(Format::NumberedList, "- item", 4..4),
+            ("1. item".into(), 5..5)
+        );
+        assert_eq!(
+            transform(Format::NumberedList, "12. item", 1..1),
+            ("item".into(), 0..0)
+        );
     }
     #[test]
     fn fenced_code_and_literal_backticks() {
@@ -331,6 +416,8 @@ mod tests {
             Format::Code,
             Format::Quote,
             Format::Link,
+            Format::BulletList,
+            Format::NumberedList,
         ] {
             for start in 0..text.len() + 3 {
                 for end in start..text.len() + 3 {
@@ -349,6 +436,8 @@ mod tests {
             Format::Code,
             Format::Quote,
             Format::Link,
+            Format::BulletList,
+            Format::NumberedList,
         ] {
             for original in ["Български 👩🏽‍💻 e\u{301}", "α\n🦀\ne\u{301}"] {
                 let (text, range) = transform(format, original, 0..original.len());
@@ -372,6 +461,8 @@ mod tests {
             Format::Code,
             Format::Quote,
             Format::Link,
+            Format::BulletList,
+            Format::NumberedList,
         ] {
             let (s, _) = transform(format, "hello", 0..5);
             let content = twayblade_core::rich_text::compose(s.clone()).unwrap();

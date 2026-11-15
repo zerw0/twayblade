@@ -283,6 +283,8 @@ pub(super) struct MatrixApp {
     pub scroller: Entity<MessageScrollerState>,
     pub focus: FocusHandle,
     pub options: Option<LoginOptions>,
+    /// The sign-in screen moved past the welcome step to choose a server.
+    pub(super) choosing_server: bool,
     pub status: String,
     pub busy: bool,
     /// The room list column; the space rail stays visible (⌃⌘S).
@@ -319,6 +321,8 @@ pub(super) struct MatrixApp {
     pub(super) avatars: crate::ui::avatars::AvatarCache,
     /// The signed-in user's avatar URL, fetched once per account.
     pub own_avatar: Option<String>,
+    /// The signed-in user's display name, for the Settings sidebar header.
+    pub own_name: Option<String>,
     /// Pressed inside a toolbar row; the next mouse move starts a window drag.
     pub window_drag: bool,
     /// The security reminder strip was dismissed for this session.
@@ -665,13 +669,15 @@ impl MatrixApp {
             scroller,
             focus: cx.focus_handle(),
             options: None,
+            choosing_server: false,
             status: String::new(),
             busy: !preview,
             sidebar_open: true,
             history_back: Vec::new(),
             history_forward: Vec::new(),
             navigating_history: false,
-            collapsed_sections: Default::default(),
+            // Archived conversations stay out of the way until asked for.
+            collapsed_sections: ["archive"].into_iter().collect(),
             info_tab: InfoTab::About,
             composer_placeholder: "Message".into(),
             gallery_requested: String::new(),
@@ -686,6 +692,7 @@ impl MatrixApp {
             latest_cache: Default::default(),
             avatars: Default::default(),
             own_avatar: None,
+            own_name: None,
             window_drag: false,
             security_notice_dismissed: false,
             oauth_cancel: None,
@@ -930,17 +937,27 @@ impl MatrixApp {
         {
             self.notification_thread = None;
             self.own_avatar = None;
+            self.own_name = None;
             if !snapshot.user_id.is_empty()
                 && let Some(backend) = self.backend.clone()
             {
                 let account = snapshot.account_instance;
+                let user = snapshot.user_id.clone();
                 cx.spawn(async move |this, cx| {
-                    let url = cx
-                        .background_spawn(async move { backend.own_avatar_url() })
+                    let (url, name) = cx
+                        .background_spawn(async move {
+                            let name = backend
+                                .profile(user, None)
+                                .ok()
+                                .map(|profile| profile.display_name)
+                                .filter(|name| !name.is_empty());
+                            (backend.own_avatar_url(), name)
+                        })
                         .await;
                     let _ = this.update(cx, |this, cx| {
                         if this.snapshot.account_instance == account {
                             this.own_avatar = url;
+                            this.own_name = name;
                             cx.notify();
                         }
                     });
@@ -1327,6 +1344,15 @@ impl MatrixApp {
             self.scroller.update(cx, |state, cx| state.reset(0, cx));
             self.queue_selection(None, window, cx);
         }
+        cx.notify();
+    }
+
+    /// The avatar menu's Archive: Home lists every archived conversation.
+    pub(crate) fn show_archive(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.navigation.selected_space.is_some() {
+            self.select_space(None, window, cx);
+        }
+        self.collapsed_sections.remove("archive");
         cx.notify();
     }
 
@@ -1842,43 +1868,71 @@ impl MatrixApp {
         cx.notify();
     }
 
-    pub fn toggle_details(&mut self, cx: &mut Context<Self>) {
+    pub fn toggle_details(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.thread.is_some() {
             self.close_thread(cx);
             self.details_open = true;
-            cx.notify();
-            return;
-        }
-        if self.profile.is_some() {
+        } else if self.profile.is_some() {
             self.close_profile(cx);
             self.details_open = true;
         } else {
             self.details_open = !self.details_open;
         }
+        if !self.details_open {
+            self.restore_focus(window, cx);
+        }
         cx.notify();
     }
 
-    /// Escape: close the profile first, then the details panel.
-    pub fn dismiss_panel(&mut self, cx: &mut Context<Self>) {
+    /// Escape: close the profile first, then the details panel. Focus goes
+    /// back to where typing continues, since the closed panel held it.
+    pub fn dismiss_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.management.is_some() {
             self.management = None;
-            cx.notify();
-            return;
-        }
-        if self.search_open {
+        } else if self.search_open {
             self.search_open = false;
-            cx.notify();
-            return;
-        }
-        if self.thread.is_some() {
+        } else if self.thread.is_some() {
             self.close_thread(cx);
-            return;
-        }
-        if self.profile.is_some() {
+        } else if self.profile.is_some() {
             self.close_profile(cx);
         } else if self.details_open {
             self.details_open = false;
-            cx.notify();
+        } else {
+            return;
+        }
+        self.restore_focus(window, cx);
+        cx.notify();
+    }
+
+    /// Whether the conversation, and so its composer, is on screen.
+    fn composer_shown(&self) -> bool {
+        !self.snapshot.user_id.is_empty()
+            && !self.call_fills_window()
+            && !self
+                .management
+                .as_ref()
+                .is_some_and(|page| !page.kind.is_dialog())
+            && self
+                .snapshot
+                .rooms
+                .iter()
+                .any(|room| self.navigation.selected_room.as_ref() == Some(&room.id))
+    }
+
+    /// Puts keyboard focus back after a panel or dialog closes: the open
+    /// thread's composer, else the conversation's, else the window itself so
+    /// shortcuts and Tab keep working. Without this focus stays on a handle
+    /// that is no longer drawn.
+    pub fn restore_focus(&self, window: &mut Window, cx: &mut App) {
+        if let Some(thread) = &self.thread {
+            thread
+                .composer
+                .update(cx, |state, cx| state.focus(window, cx));
+        } else if self.composer_shown() {
+            self.composer
+                .update(cx, |state, cx| state.focus(window, cx));
+        } else {
+            self.focus.focus(window, cx);
         }
     }
 
@@ -2010,6 +2064,65 @@ impl MatrixApp {
         }
     }
 
+    pub(super) fn set_unread(&mut self, room: String, window: &Window, cx: &mut Context<Self>) {
+        if self.preview {
+            if let Some(entry) = self
+                .snapshot
+                .rooms
+                .iter_mut()
+                .find(|entry| entry.id == room)
+            {
+                entry.unread = entry.unread.max(1);
+            }
+            cx.notify();
+            return;
+        }
+        self.job(
+            window,
+            cx,
+            move |backend| backend.set_unread(room, true),
+            |this, result, _, cx| {
+                if let Err(error) = result {
+                    this.status = error.to_string();
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    pub(super) fn set_archived(
+        &mut self,
+        room: String,
+        archived: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.preview {
+            if let Some(entry) = self
+                .snapshot
+                .rooms
+                .iter_mut()
+                .find(|entry| entry.id == room)
+            {
+                entry.archived = archived;
+                entry.favourite &= !archived;
+            }
+            cx.notify();
+            return;
+        }
+        self.job(
+            window,
+            cx,
+            move |backend| backend.set_archived(room, archived),
+            |this, result, _, cx| {
+                if let Err(error) = result {
+                    this.status = error.to_string();
+                }
+                cx.notify();
+            },
+        );
+    }
+
     pub(super) fn set_favourite(
         &mut self,
         room: String,
@@ -2025,6 +2138,7 @@ impl MatrixApp {
                 .find(|entry| entry.id == room)
             {
                 entry.favourite = favourite;
+                entry.archived &= !favourite;
             }
             cx.notify();
             return;

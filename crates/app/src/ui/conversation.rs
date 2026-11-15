@@ -220,7 +220,7 @@ impl MatrixApp {
                     .accessibility_label("Room info")
                     .tooltip("Room Info  ⌥⌘I")
                     .selected(details_shown)
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_details(cx))),
+                    .on_click(cx.listener(|this, _, window, cx| this.toggle_details(window, cx))),
             );
 
         let call_banner = self.call_banner(&room.id, cx);
@@ -614,6 +614,7 @@ impl MatrixApp {
             )
             .child(
                 Button::new("room-retry")
+                    .icon(IconName::RefreshCw)
                     .outline()
                     .mt(px(8.))
                     .h(px(28.))

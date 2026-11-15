@@ -370,6 +370,16 @@ impl Account {
         }
         Ok(id)
     }
+    /// Leaves one joined room or direct message. The room list updates through sync.
+    pub async fn leave_room(&self, room_id: &str) -> Result<(), SpaceError> {
+        let room_id =
+            matrix_sdk::ruma::RoomId::parse(room_id).map_err(|_| SpaceError::InvalidId)?;
+        let room = self
+            .client
+            .get_room(&room_id)
+            .ok_or(SpaceError::Unavailable)?;
+        room.leave().await.map_err(|_| SpaceError::Leave)
+    }
     /// Invites one user to a room this account is in. The room's power levels
     /// decide who may invite; `InviteDenied` reports a missing permission.
     pub async fn invite_user(&self, room_id: &str, user_id: &str) -> Result<(), SpaceError> {

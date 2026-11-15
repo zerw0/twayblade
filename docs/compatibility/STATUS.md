@@ -17,7 +17,7 @@ listed separately. Earlier Iced/SwiftUI evidence was removed with those frontend
 | `.well-known` discovery against real servers | Pending | Not run | Not run |
 | OAuth/OIDC (Task 1) | SDK discovery/registration/PKCE, callback state, cancellation, atomic Keychain session/refresh; isolated MAS lifecycle passes | Not run | Not run |
 | OAuth offline UI (Task 1) | Kit control tests pass; sample waiting screen captured/reviewed light/dark in `captures/oauth-wait-{light,dark}.png` | Not run | Not run |
-| OAuth physical system browser / real homeserver (Task 1) | Operator check pending: browser opens, completes callback and relaunch restores on matrix.org or another OAuth server | Not run | Not run |
+| OAuth physical system browser / real homeserver (Task 1) | Owner confirmed on macOS 2026-11-15 (#31): OAuth/OIDC sign-in in the system browser works; cancellation, invalid callback and relaunch were not itemised separately | Not run | Not run |
 | Legacy SSO (Task 2) | Provider names/icons, shared loopback/state/cancel, SDK loginToken exchange; full local OIDC flow/restore/logout passes | Not run | Not run |
 | Legacy SSO offline UI (Task 2) | Provider controls and callback/icon-limit tests pass; reviewed `captures/sso-{light,dark}.png` samples | Not run | Not run |
 | Legacy SSO physical browser / real IdP (Task 2) | Operator check pending: provider button, system browser, callback completion on a real SSO server | Not run | Not run |
@@ -64,7 +64,7 @@ listed separately. Earlier Iced/SwiftUI evidence was removed with those frontend
 | Notification rules (Notifications Task 2) | SDK defaults/keywords/room modes and cross-client subscription; real unread/mute exclusion, SDK count fallback and sync-safe retries; stage fmt/strict Clippy/92 tests pass (final suite: 97) | Not run | Not run |
 | Rules offline UI (Notifications Task 2) | Settings/keywords/details/context-menu controls pass; reviewed release `captures/notification-{rules,room}-{light,dark}.png` samples | Not run | Not run |
 | Rules physical checks (Notifications Task 2) | Pending: Element rules comparison, real room details/menu, keyboard/VoiceOver | Not run | Not run |
-| Notification delivery (Notifications Task 3) | SDK NotificationClient decryption, bounded intake/responses, own/mute/focus suppression; locked fmt/strict Clippy/97 workspace tests pass | D-Bus source typechecked on macOS; Linux build/runtime not run | Toast adapter source; not compiled/run |
+| Notification delivery (Notifications Task 3) | SDK NotificationClient decryption, bounded intake/responses, own/mute/focus suppression; owner confirmed native notification delivery on macOS 2026-11-15 (#34); locked fmt/strict Clippy/97 workspace tests pass | D-Bus source typechecked on macOS; Linux build/runtime not run | Toast adapter source; not compiled/run |
 | Delivery offline UI (Notifications Task 3) | Device switches/persistence, private preview, stale-account guards and thread click pass; reviewed release `captures/notification-{delivery,private,device}-{light,dark}.png` samples | Not run | Not run |
 | Delivery physical checks (Notifications Task 3) | Pending: release .app permission grant/deny, System Settings, real room/thread click, sound, previews, Focus and Dock badge | Pending: daemon/actions, desktop badge support and permissions | Pending: installed app identity, toast activation and taskbar badge |
 | Notification activation after process exit (Notifications Task 3) | Pending release work; callbacks currently belong to the running account/process | Pending | Pending |

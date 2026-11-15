@@ -30,6 +30,9 @@ pub struct RoomSummary {
     pub public: bool,
     /// Tagged `m.favourite` (syncs across Matrix clients).
     pub favourite: bool,
+    /// Archived: tagged `m.lowpriority`, which Element shows as Low priority.
+    /// Exclusive with `favourite`; the SDK removes the other tag.
+    pub archived: bool,
     pub pinned: usize,
     /// Server-provided activity ordering (sliding sync `bump_stamp`).
     pub recency: u64,
@@ -109,6 +112,7 @@ fn summary(room: Room) -> RoomSummary {
         mentions: room.unread_notification_counts().highlight_count,
         public: room.is_public().unwrap_or(false),
         favourite: room.is_favourite(),
+        archived: room.is_low_priority(),
         pinned: room.pinned_event_ids().map_or(0, |ids| ids.len()),
     }
 }
@@ -385,6 +389,27 @@ impl Account {
             .and_then(|id| self.client.get_room(&id))
             .ok_or(RoomError::Unavailable)?;
         room.set_is_favourite(favourite, None)
+            .await
+            .map_err(|_| RoomError::Tag)
+    }
+    /// Archive (tag `m.lowpriority`) or restore a room; archiving clears
+    /// `m.favourite`. The room list updates through sync.
+    pub async fn set_archived(&self, room_id: &str, archived: bool) -> Result<(), RoomError> {
+        let room = matrix_sdk::ruma::RoomId::parse(room_id)
+            .ok()
+            .and_then(|id| self.client.get_room(&id))
+            .ok_or(RoomError::Unavailable)?;
+        room.set_is_low_priority(archived, None)
+            .await
+            .map_err(|_| RoomError::Tag)
+    }
+    /// Set or clear the manual unread marker (`m.marked_unread`).
+    pub async fn set_unread(&self, room_id: &str, unread: bool) -> Result<(), RoomError> {
+        let room = matrix_sdk::ruma::RoomId::parse(room_id)
+            .ok()
+            .and_then(|id| self.client.get_room(&id))
+            .ok_or(RoomError::Unavailable)?;
+        room.set_unread_flag(unread)
             .await
             .map_err(|_| RoomError::Tag)
     }

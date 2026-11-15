@@ -1,7 +1,9 @@
 name: Build binaries
 # Release binaries for macOS, Linux and Windows. Every push to main and every
-# manual run uploads them as workflow artifacts; a `v*` tag also publishes a
-# GitHub release with the same files. Builds are unsigned (macOS ad hoc).
+# manual run uploads them as workflow artifacts; a `v*` tag also creates a
+# draft GitHub pre-release with the same files, checksums and drafted notes.
+# Nothing becomes public until a person reviews and publishes the draft.
+# Builds are unsigned (macOS ad hoc).
 on:
   push:
     branches: [main]
@@ -72,6 +74,8 @@ jobs:
           mkdir -p dist
           # ditto keeps the bundle's symlinks, metadata and signature intact.
           ditto -c -k --keepParent "target/release/bundle/Twayblade.app" "dist/twayblade-${{ matrix.name }}.zip"
+          # The disk image for direct downloads and the Homebrew cask (#52).
+          bash macos/make-dmg.sh target/release/bundle/Twayblade.app
 
       - name: Build Linux binary
         if: runner.os == 'Linux'
@@ -97,6 +101,7 @@ jobs:
           name: twayblade-${{ matrix.name }}
           path: |
             dist/*.zip
+            dist/*.dmg
             dist/*.tar.gz
           if-no-files-found: error
 
@@ -106,14 +111,32 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      pull-requests: read
     steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS
+      # Notes from the pull requests merged since the previous tag (or since
+      # the first commit), grouped as New, Improved and Fixed with stated gaps.
+      - name: Draft release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          previous="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null \
+            || git log --max-parents=0 --format=%cs HEAD | tail -n 1)"
+          python3 scripts/release-notes.py --version "${GITHUB_REF_NAME#v}" \
+            --since "$previous" --gh gh > notes.md
+      # Always a draft pre-release: a person rewords the notes and publishes
+      # it, and stable is a separate, explicit promotion (#55).
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          generate_release_notes: true
+          body_path: notes.md
+          draft: true
+          prerelease: true

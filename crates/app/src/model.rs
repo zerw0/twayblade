@@ -23,11 +23,17 @@ impl Navigation {
                 .find(|space| &space.id == selected)
                 .is_some_and(|space| space.room_ids.contains(id));
         }
+        // Home holds rooms outside any space, plus every archived
+        // conversation so the Archive has one place that lists them all.
         snapshot.spaces_loaded
-            && !snapshot
-                .spaces
+            && (snapshot
+                .rooms
                 .iter()
-                .any(|space| space.room_ids.contains(id))
+                .any(|room| room.id == id && room.archived)
+                || !snapshot
+                    .spaces
+                    .iter()
+                    .any(|space| space.room_ids.contains(id)))
     }
 
     pub fn reconcile(&mut self, snapshot: &Snapshot) -> bool {

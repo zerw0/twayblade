@@ -284,6 +284,7 @@ pub(super) enum SpaceAction {
     Create(twayblade_core::space_actions::CreateRoom),
     Dm(String),
     InviteMember(String, String),
+    LeaveRoom(String),
 }
 pub(super) enum SpaceOutcome {
     Directory(twayblade_core::space_actions::DirectorySnapshot),
@@ -1133,6 +1134,11 @@ impl Backend {
                     .await
                     .map(|_| SpaceOutcome::Done)
                     .map_err(space_failure),
+                LeaveRoom(room) => account
+                    .leave_room(&room)
+                    .await
+                    .map(|_| SpaceOutcome::Done)
+                    .map_err(space_failure),
             };
             if self
                 .state
@@ -1197,6 +1203,38 @@ impl Backend {
         self.runtime
             .block_on(account.set_favourite(&room, favourite))
             .map_err(|_| failure("Favourite could not be changed. Try again."))
+    }
+
+    pub(super) fn set_archived(&self, room: String, archived: bool) -> Result<(), ServiceError> {
+        let account = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?
+            .account
+            .clone()
+            .ok_or_else(|| failure("Sign in first."))?;
+        self.runtime
+            .block_on(account.set_archived(&room, archived))
+            .map_err(|_| {
+                failure(if archived {
+                    "The conversation could not be archived. Try again."
+                } else {
+                    "The conversation could not be restored. Try again."
+                })
+            })
+    }
+
+    pub(super) fn set_unread(&self, room: String, unread: bool) -> Result<(), ServiceError> {
+        let account = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?
+            .account
+            .clone()
+            .ok_or_else(|| failure("Sign in first."))?;
+        self.runtime
+            .block_on(account.set_unread(&room, unread))
+            .map_err(|_| failure("The unread marker could not be changed. Try again."))
     }
 
     /// Square avatar PNG for `mxc` at `size` physical pixels. Bounded in core.

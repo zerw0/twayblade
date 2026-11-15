@@ -2,7 +2,8 @@
 use super::*;
 use crate::composer_format::{self, Format};
 use crate::shortcuts::{
-    FormatBold, FormatCode, FormatItalic, FormatLink, FormatQuote, HistoryNext, HistoryPrevious,
+    FormatBold, FormatBulletList, FormatCode, FormatItalic, FormatLink, FormatNumberedList,
+    FormatQuote, HistoryNext, HistoryPrevious,
 };
 use gpui_kit::component::native_menu::NativeMenu;
 
@@ -21,7 +22,10 @@ pub(crate) fn composer_context_menu(
             .menu("Italic", Box::new(FormatItalic))
             .menu("Code", Box::new(FormatCode))
             .menu("Link", Box::new(FormatLink))
-            .menu("Quote", Box::new(FormatQuote));
+            .menu("Quote", Box::new(FormatQuote))
+            .separator()
+            .menu("Bulleted List", Box::new(FormatBulletList))
+            .menu("Numbered List", Box::new(FormatNumberedList));
         menu.menu_with_disabled("Cut", !selected, Box::new(Cut))
             .menu_with_disabled("Copy", !selected, Box::new(Copy))
             .menu("Paste", Box::new(Paste))
@@ -57,6 +61,14 @@ impl MatrixApp {
             .on_action(cx.listener(move |this, _: &FormatLink, window, cx| {
                 this.format_composer(Format::Link, in_thread, window, cx)
             }))
+            .on_action(cx.listener(move |this, _: &FormatBulletList, window, cx| {
+                this.format_composer(Format::BulletList, in_thread, window, cx)
+            }))
+            .on_action(
+                cx.listener(move |this, _: &FormatNumberedList, window, cx| {
+                    this.format_composer(Format::NumberedList, in_thread, window, cx)
+                }),
+            )
             .on_action(cx.listener(move |this, _: &HistoryPrevious, window, cx| {
                 this.composer_history(true, in_thread, window, cx)
             }))
