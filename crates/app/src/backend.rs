@@ -738,6 +738,12 @@ impl Backend {
         self.updates.subscribe()
     }
 
+    /// The revision of the newest published snapshot, without cloning it. The
+    /// window compares it with what it has applied to notice a missed update.
+    pub(super) fn revision(&self) -> u64 {
+        self.updates.borrow().revision
+    }
+
     pub(super) fn select_room(&self, room_id: String) -> Result<(), ServiceError> {
         self.select_room_focus(room_id, None)
     }

@@ -24,6 +24,15 @@ update fails while the view is alive it retries the latest snapshot every 50 ms
 `ui_snapshot_apply_retry` and `ui_updates_loop_end_*` so any future stop is
 visible.
 
+**Safety net (added after "Try again" did nothing on the frozen window).** Once
+the loop is dead no button can recover the window, because every retry reaches the
+backend and nothing reaches the screen (log at 13:16:56: `ui_room_retry`, selection
+finished, `first_snapshot success=true`, no snapshot applied). A watchdog now checks
+once a second whether the backend has published a revision the window has not
+applied, waits half a second for the normal path, and otherwise applies the latest
+snapshot directly (`ui_snapshot_pulled`). So a missed update or a dead loop heals
+itself within about 1.5 s whatever caused it.
+
 **Verified:** compilation, strict Clippy and the existing tests; the diagnosis
 from the live log. **Not verified:** that this fixes it. The transient failure has not
 been reproduced on purpose, so the loop's retry path has no automated test. Next

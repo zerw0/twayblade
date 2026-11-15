@@ -805,6 +805,42 @@ impl MatrixApp {
                             tracing::warn!(name: "ui_updates_loop_end_backend_closed", failures);
                         })
                         .detach();
+                        // Safety net: if the backend has published something this
+                        // window has not applied for a while (a dead loop, a missed
+                        // wake-up), apply the latest directly instead of staying frozen.
+                        let watched = backend.clone();
+                        cx.spawn_in(window, async move |view, cx| {
+                            loop {
+                                cx.background_executor()
+                                    .timer(std::time::Duration::from_secs(1))
+                                    .await;
+                                let behind = view
+                                    .update_in(cx, |this, _, _| {
+                                        watched.revision() > this.snapshot.revision
+                                    })
+                                    .ok();
+                                match behind {
+                                    None => return,
+                                    Some(false) => continue,
+                                    Some(true) => {}
+                                }
+                                // Give the normal path a moment before stepping in.
+                                cx.background_executor()
+                                    .timer(std::time::Duration::from_millis(500))
+                                    .await;
+                                let latest = watched.snapshot();
+                                let pulled = view.update_in(cx, |this, window, cx| {
+                                    if latest.revision > this.snapshot.revision {
+                                        tracing::warn!(name: "ui_snapshot_pulled", revision = latest.revision);
+                                        this.apply(latest, window, cx);
+                                    }
+                                });
+                                if pulled.is_err() && view.upgrade().is_none() {
+                                    return;
+                                }
+                            }
+                        })
+                        .detach();
                     }
                     Err(error) => this.status = error,
                 }
