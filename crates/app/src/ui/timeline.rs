@@ -744,6 +744,10 @@ impl MatrixApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let text = membership_text(message, &self.snapshot.user_id);
+        // Minimal and IRC drop the centred pause markers (their rows carry a
+        // time), so a membership line shows its own time in passing.
+        let time = (self.preferences.chat.style != ChatStyle::Bubbles)
+            .then(|| time_label(message.timestamp_ms));
         h_flex()
             .id(SharedString::from(format!("message-row-{}", message.id)))
             .role(Role::Group)
@@ -751,11 +755,12 @@ impl MatrixApp {
             .relative()
             .w_full()
             .pl(px(self.membership_indent()))
-            .py(px(2.))
+            .py(px(1.))
             .gap(px(6.))
             .text_size(px(11.5))
             .text_color(cx.theme().muted_foreground)
             .child(div().truncate().child(text))
+            .children(time.map(|time| div().flex_none().text_size(px(10.5)).child(time)))
             .children(self.latest_visibility(message, in_thread, cx))
             .test_support()
             .into_any_element()
@@ -801,9 +806,10 @@ impl MatrixApp {
         let new_day = previous
             .is_none_or(|previous| day_of(previous.timestamp_ms) != day_of(first.timestamp_ms));
         // Messages-style time markers: one centred label for a new day or after a
-        // long silence, instead of a timestamp row above every group.
+        // long silence, instead of a timestamp row above every group. Only
+        // Bubbles needs the pause marker: Minimal and IRC rows show their time.
         let day_marker = new_day.then(|| day_label(first.timestamp_ms));
-        let marker = if new_day {
+        let marker = if new_day || self.preferences.chat.style != ChatStyle::Bubbles {
             None
         } else {
             previous
