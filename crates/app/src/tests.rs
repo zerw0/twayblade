@@ -1690,6 +1690,29 @@ fn viewer_pinch_double_click_pan_outside_click_and_stale_loads(cx: &mut TestAppC
 }
 
 #[gpui_kit::test]
+fn room_rows_track_the_hovered_row_and_the_one_it_left(cx: &mut TestAppContext) {
+    let (main_window, app) = preview_window(cx);
+    cx.update_window(main_window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("home", cx);
+        window.hover("room-notes", cx);
+    })
+    .unwrap();
+    cx.update(|cx| assert_eq!(app.read(cx).hovered_room.as_deref(), Some("notes")));
+    cx.update_window(main_window, |_, window, cx| {
+        window.render_frame(cx);
+        window.hover("room-alex", cx);
+    })
+    .unwrap();
+    cx.update(|cx| {
+        let app = app.read(cx);
+        // Only these two rows paint a fill: one fading in, one fading out.
+        assert_eq!(app.hovered_room.as_deref(), Some("alex"));
+        assert_eq!(app.unhovered_room.as_deref(), Some("notes"));
+    });
+}
+
+#[gpui_kit::test]
 fn command_w_closes_settings_unless_a_recovery_key_is_shown(cx: &mut TestAppContext) {
     let (main_window, app) = preview_window(cx);
     cx.update_window(main_window, |_, window, cx| {

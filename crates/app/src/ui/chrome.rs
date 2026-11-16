@@ -384,10 +384,27 @@ impl MatrixApp {
             .then(|| self.snapshot.activity_previews.get(&room.id))
             .flatten()
             .map(|preview| crate::ui::activity::preview_line(preview, room.direct));
+        let hover_fill = {
+            let accent = cx.theme().accent;
+            if cx.theme().is_dark() {
+                accent.opacity(0.5)
+            } else {
+                accent
+            }
+        };
+        let hovered = self.hovered_room.as_ref() == Some(&room.id);
+        let leaving = self.unhovered_room.as_ref() == Some(&room.id);
+        let reduce = self.snapshot.reduce_motion;
         let row = Button::new(SharedString::from(format!("room-{}", room.id)))
             // A known handle, so F6 and the Archive menu item can focus the row.
             .track_focus(&self.room_focus(&room.id, cx))
-            .ghost()
+            // The row paints its own hover fill so it can fade (#179); the
+            // button keeps the ghost press colour.
+            .custom(
+                gpui_kit::component::button::ButtonCustomVariant::new(cx)
+                    .hover(gpui_kit::transparent_black())
+                    .active(hover_fill),
+            )
             .w_full()
             .h(px(if two_lines {
                 density.preview_row()
@@ -404,7 +421,7 @@ impl MatrixApp {
                 Some(line) => format!("{}, {line}", room_label(room, selected)),
                 None => room_label(room, selected),
             })
-            .child(
+            .child(crate::ui::motion::hover_fill(
                 h_flex()
                     .size_full()
                     .px(px(8.))
@@ -446,7 +463,12 @@ impl MatrixApp {
                             }),
                     )
                     .children(badge),
-            )
+                SharedString::from(format!("room-hover-{}", room.id)),
+                hovered && !selected,
+                leaving && !selected,
+                hover_fill,
+                reduce,
+            ))
             .on_click(cx.listener(move |this, _, window, cx| {
                 // Choosing a search result ends the conversation search.
                 if !this.search.read(cx).value().is_empty() && !this.search_open {
@@ -464,6 +486,20 @@ impl MatrixApp {
         let selected_mode = self.snapshot.notifications.room_mode(&room.id);
         div()
             .id(SharedString::from(format!("room-context-{}", room.id)))
+            .on_hover({
+                let room_id = room.id.clone();
+                cx.listener(move |this, hovered: &bool, _, cx| {
+                    if *hovered {
+                        if this.hovered_room.as_ref() != Some(&room_id) {
+                            this.unhovered_room = this.hovered_room.replace(room_id.clone());
+                            cx.notify();
+                        }
+                    } else if this.hovered_room.as_ref() == Some(&room_id) {
+                        this.unhovered_room = this.hovered_room.take();
+                        cx.notify();
+                    }
+                })
+            })
             .child(row)
             .context_menu(move |mut menu, _, _| {
                 use twayblade_core::notifications::{RoomMode, RuleChange};

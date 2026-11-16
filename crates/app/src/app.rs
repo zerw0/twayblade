@@ -523,6 +523,10 @@ pub(super) struct MatrixApp {
     pub(super) call_controls_timer: Option<Task<()>>,
     /// The pointer or focus is on the full-screen controls.
     pub(super) call_controls_pinned: bool,
+    /// The room row under the pointer and the one it just left, so only
+    /// those two animate their hover fill.
+    pub(super) hovered_room: Option<String>,
+    pub(super) unhovered_room: Option<String>,
     /// One volume slider per remote participant, by participant ID.
     pub(super) call_volume: HashMap<
         String,
@@ -920,6 +924,8 @@ impl MatrixApp {
             call_controls: Default::default(),
             call_controls_timer: None,
             call_controls_pinned: false,
+            hovered_room: None,
+            unhovered_room: None,
             call_volume: HashMap::new(),
             call_volume_sent: None,
             call_stage_size: Default::default(),
