@@ -4,6 +4,7 @@
     <key>CFBundleExecutable</key><string>twayblade</string>
     <key>CFBundleIdentifier</key><string>com.twayblade.desktop.development</string>
     <key>CFBundleName</key><string>Twayblade</string>
+    <key>CFBundleIconFile</key><string>Twayblade.icns</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.1.0</string>
     <key>CFBundleVersion</key><string>1</string>

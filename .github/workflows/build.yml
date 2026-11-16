@@ -107,7 +107,6 @@ jobs:
           cp target/release/twayblade README.md LICENSE \
             packaging/linux/com.twayblade.desktop.desktop \
             packaging/linux/com.twayblade.desktop.metainfo.xml \
-            packaging/icons/com.twayblade.desktop.svg \
             packaging/icons/com.twayblade.desktop.png dist/twayblade/
           cp crates/media/licenses/libwebrtc-a545de4.md dist/twayblade/libwebrtc-LICENSE.md
           tar -C dist -czf "dist/twayblade-${{ matrix.name }}.tar.gz" twayblade

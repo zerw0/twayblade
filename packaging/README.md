@@ -3,9 +3,10 @@
 Unsigned, unpublished inputs for distribution packages (#52–#56). Nothing here
 signs, uploads or publishes.
 
-- `icons/com.twayblade.desktop.svg`: the app icon (source). `icons/render.sh`
-  regenerates the 512 px PNG and the Windows `twayblade.ico` from it. The
-  `.ico` is also embedded in `twayblade.exe` (`crates/app/twayblade.rc`).
+- The app icon's source is `assets/twayblade-icon-transparent.png` (1254 px,
+  raster; `assets/Twayblade.icns` is the macOS bundle icon). `icons/render.sh`
+  regenerates the 512 px Linux PNG and the Windows `twayblade.ico` from it.
+  The `.ico` is also embedded in `twayblade.exe` (`crates/app/twayblade.rc`).
 - `linux/com.twayblade.desktop.desktop` and `linux/com.twayblade.desktop.metainfo.xml`:
   desktop entry and AppStream data, validated in CI. The window's Wayland
   `app_id` is the same ID, so docks match it to the entry and icon. The

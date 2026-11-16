@@ -47,6 +47,7 @@ fi
 # Remove the superseded helper from a previously built development bundle.
 rm -rf "$app/Contents/Helpers/Twayblade Call.app"
 mkdir -p "$app/Contents/Resources/licenses"
+cp assets/Twayblade.icns "$app/Contents/Resources/"
 cp crates/media/licenses/libwebrtc-a545de4.md "$app/Contents/Resources/licenses/"
 # A stable identity keeps Keychain approval across rebuilds; ad-hoc signing
 # ("-") changes the signature every build. Create one with

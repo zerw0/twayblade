@@ -60,7 +60,6 @@ assets = [
   ["target/release/twayblade", "usr/bin/", "755"],
   ["../../packaging/linux/com.twayblade.desktop.desktop", "usr/share/applications/", "644"],
   ["../../packaging/linux/com.twayblade.desktop.metainfo.xml", "usr/share/metainfo/", "644"],
-  ["../../packaging/icons/com.twayblade.desktop.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
   ["../../packaging/icons/com.twayblade.desktop.png", "usr/share/icons/hicolor/512x512/apps/", "644"],
   ["../../crates/media/licenses/libwebrtc-a545de4.md", "usr/share/doc/twayblade/libwebrtc-LICENSE.md", "644"],
 ]
@@ -74,7 +73,6 @@ assets = [
   { source = "target/release/twayblade", dest = "/usr/bin/twayblade", mode = "755" },
   { source = "../../packaging/linux/com.twayblade.desktop.desktop", dest = "/usr/share/applications/com.twayblade.desktop.desktop", mode = "644" },
   { source = "../../packaging/linux/com.twayblade.desktop.metainfo.xml", dest = "/usr/share/metainfo/com.twayblade.desktop.metainfo.xml", mode = "644" },
-  { source = "../../packaging/icons/com.twayblade.desktop.svg", dest = "/usr/share/icons/hicolor/scalable/apps/com.twayblade.desktop.svg", mode = "644" },
   { source = "../../packaging/icons/com.twayblade.desktop.png", dest = "/usr/share/icons/hicolor/512x512/apps/com.twayblade.desktop.png", mode = "644" },
   { source = "../../LICENSE", dest = "/usr/share/licenses/twayblade/LICENSE", mode = "644", doc = true },
   { source = "../../crates/media/licenses/libwebrtc-a545de4.md", dest = "/usr/share/licenses/twayblade/libwebrtc-LICENSE.md", mode = "644", doc = true },

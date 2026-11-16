@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# Regenerates the raster icons from com.twayblade.desktop.svg (the source).
-# Needs rsvg-convert and ImageMagick, e.g. `nix shell nixpkgs#librsvg nixpkgs#imagemagick`.
+# Regenerates the Linux PNG and the Windows icon from the app icon source,
+# assets/twayblade-icon-transparent.png (1254 px). The macOS
+# assets/Twayblade.icns is made from the same source with iconutil.
+# Needs ImageMagick, e.g. `nix shell nixpkgs#imagemagick`.
 set -euo pipefail
 cd "$(dirname "$0")"
-source=com.twayblade.desktop.svg
-rsvg-convert -w 512 -h 512 "$source" -o com.twayblade.desktop.png
+source=../../assets/twayblade-icon-transparent.png
+magick "$source" -resize 512x512 com.twayblade.desktop.png
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 for size in 16 24 32 48 64 128 256; do
-    rsvg-convert -w "$size" -h "$size" "$source" -o "$work/$size.png"
+    magick "$source" -resize "${size}x${size}" "$work/$size.png"
 done
 # Windows installer, shortcut and Apps & Features icon.
 magick "$work"/{16,24,32,48,64,128,256}.png twayblade.ico

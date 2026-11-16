@@ -30,8 +30,8 @@ app="$work/AppDir"
 install -Dm755 "$binary" "$app/usr/bin/twayblade"
 install -Dm644 "$root/packaging/linux/com.twayblade.desktop.metainfo.xml" \
     "$app/usr/share/metainfo/com.twayblade.desktop.appdata.xml"
-install -Dm644 "$root/packaging/icons/com.twayblade.desktop.svg" \
-    "$app/usr/share/icons/hicolor/scalable/apps/com.twayblade.desktop.svg"
+install -Dm644 "$root/packaging/icons/com.twayblade.desktop.png" \
+    "$app/usr/share/icons/hicolor/512x512/apps/com.twayblade.desktop.png"
 install -Dm644 "$root/crates/media/licenses/libwebrtc-a545de4.md" \
     "$app/usr/share/doc/twayblade/libwebrtc-LICENSE.md"
 install -Dm644 "$root/LICENSE" "$app/usr/share/doc/twayblade/LICENSE"
