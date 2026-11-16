@@ -70,10 +70,18 @@ pub(super) enum Scheme {
     Nord,
     Catppuccin,
     Discord,
+    Dracula,
+    TokyoNight,
+    OneDark,
+    Monokai,
+    Everforest,
+    RosePine,
+    Kanagawa,
+    Tomorrow,
     Custom,
 }
 impl Scheme {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 18] = [
         Self::System,
         Self::Light,
         Self::Dark,
@@ -82,9 +90,21 @@ impl Scheme {
         Self::Gruvbox,
         Self::Solarized,
         Self::Discord,
+        Self::Dracula,
+        Self::TokyoNight,
+        Self::OneDark,
+        Self::Monokai,
+        Self::Everforest,
+        Self::RosePine,
+        Self::Kanagawa,
+        Self::Tomorrow,
         Self::HighContrast,
         Self::Custom,
     ];
+    /// Schemes that exist only in a dark palette ignore the Light variant.
+    pub fn dark_only(self) -> bool {
+        matches!(self, Self::Dracula | Self::Monokai)
+    }
     pub fn name(self) -> &'static str {
         match self {
             Self::System => "system",
@@ -95,6 +115,14 @@ impl Scheme {
             Self::Gruvbox => "gruvbox",
             Self::Solarized => "solarized",
             Self::Discord => "discord",
+            Self::Dracula => "dracula",
+            Self::TokyoNight => "tokyo-night",
+            Self::OneDark => "one-dark",
+            Self::Monokai => "monokai",
+            Self::Everforest => "everforest",
+            Self::RosePine => "rose-pine",
+            Self::Kanagawa => "kanagawa",
+            Self::Tomorrow => "tomorrow",
             Self::HighContrast => "high-contrast",
             Self::Custom => "custom",
         }

@@ -716,6 +716,7 @@ impl MatrixApp {
             let preview_dark = match scheme {
                 Scheme::Light => false,
                 Scheme::Dark => true,
+                scheme if scheme.dark_only() => true,
                 _ => dark,
             };
             let [background, sidebar, text] =
@@ -787,7 +788,7 @@ impl MatrixApp {
         let has_variants = !matches!(
             appearance.scheme,
             Scheme::System | Scheme::Light | Scheme::Dark | Scheme::Custom
-        );
+        ) && !appearance.scheme.dark_only();
         let variant = segmented(
             [
                 (
@@ -2123,6 +2124,14 @@ fn scheme_label(scheme: Scheme) -> &'static str {
         Scheme::Gruvbox => "Gruvbox",
         Scheme::Solarized => "Solarized",
         Scheme::Discord => "Discord",
+        Scheme::Dracula => "Dracula",
+        Scheme::TokyoNight => "Tokyo Night",
+        Scheme::OneDark => "One Dark",
+        Scheme::Monokai => "Monokai",
+        Scheme::Everforest => "Everforest",
+        Scheme::RosePine => "Rosé Pine",
+        Scheme::Kanagawa => "Kanagawa",
+        Scheme::Tomorrow => "Tomorrow",
         Scheme::HighContrast => "High Contrast",
         Scheme::Custom => "Custom",
     }

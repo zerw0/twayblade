@@ -150,6 +150,29 @@ pub(crate) fn surfaces(scheme: Scheme, dark: bool) -> [u32; 6] {
         // secondary text, lifted from 0x949ba4 to reach 4.5:1 on the composer.
         (Scheme::Discord, false) => [0xffffff, 0xf2f3f5, 0x313338, 0x5c5e66, 0xebedef, 0xe3e5e8],
         (Scheme::Discord, true) => [0x313338, 0x2b2d31, 0xdbdee1, 0xa1a8af, 0x383a40, 0x3f4147],
+        // Editor and terminal themes (#178). Where a theme's comment or
+        // secondary colour falls below 4.5:1, it is moved toward the text ink
+        // just far enough; surfaces keep the theme's own values.
+        (Scheme::Dracula, _) => [0x282a36, 0x21222c, 0xf8f8f2, 0xb2b8cd, 0x44475a, 0x6272a4],
+        // Tokyo Night Day and Night.
+        (Scheme::TokyoNight, false) => [0xe1e2e7, 0xd0d5e3, 0x2d4f9e, 0x445180, 0xc4c8da, 0xa8aecb],
+        (Scheme::TokyoNight, true) => [0x1a1b26, 0x16161e, 0xc0caf5, 0xa9b1d6, 0x292e42, 0x3b4261],
+        // One Light and One Dark.
+        (Scheme::OneDark, false) => [0xfafafa, 0xf0f0f1, 0x383a42, 0x61646e, 0xe5e5e6, 0xd4d4d4],
+        (Scheme::OneDark, true) => [0x282c34, 0x21252b, 0xabb2bf, 0x9da5b4, 0x2c313a, 0x3e4451],
+        (Scheme::Monokai, _) => [0x272822, 0x1e1f1c, 0xf8f8f2, 0xaea991, 0x3e3d32, 0x49483e],
+        // Everforest medium, light and dark.
+        (Scheme::Everforest, false) => [0xfdf6e3, 0xefebd4, 0x4b565c, 0x5c6a72, 0xf4f0d9, 0xe0dcc7],
+        (Scheme::Everforest, true) => [0x2d353b, 0x232a2e, 0xd3c6aa, 0xa2ada5, 0x343f44, 0x475258],
+        // Rosé Pine Dawn and Rosé Pine.
+        (Scheme::RosePine, false) => [0xfaf4ed, 0xfffaf3, 0x575279, 0x67637d, 0xf2e9e1, 0xdfdad9],
+        (Scheme::RosePine, true) => [0x191724, 0x1f1d2e, 0xe0def4, 0x908caa, 0x26233a, 0x403d52],
+        // Kanagawa Lotus and Wave.
+        (Scheme::Kanagawa, false) => [0xf2ecbc, 0xe5ddb0, 0x545464, 0x5d5d59, 0xe7dba0, 0xc9cbd1],
+        (Scheme::Kanagawa, true) => [0x1f1f28, 0x16161d, 0xdcd7ba, 0xc8c093, 0x2a2a37, 0x54546d],
+        // Tomorrow and Tomorrow Night, as on terminal.sexy.
+        (Scheme::Tomorrow, false) => [0xffffff, 0xefefef, 0x4d4d4c, 0x60625e, 0xe0e0e0, 0xd6d6d6],
+        (Scheme::Tomorrow, true) => [0x1d1f21, 0x282a2e, 0xc5c8c6, 0xa6a7a6, 0x373b41, 0x4d5057],
         (Scheme::Custom, false) => [0xeff1f5, 0xe6e9ef, 0x4c4f69, 0x585b73, 0xdce0e8, 0xccd0da],
         (Scheme::Custom, true) => [0x1e1e2e, 0x181825, 0xcdd6f4, 0xa6adc8, 0x313244, 0x45475a],
         (_, false) => [0xffffff, 0xf3f3f5, 0x1c1c1e, 0x66666e, 0xebebef, 0xdcdce0],
@@ -276,6 +299,20 @@ fn scheme_accent(
         (Scheme::Gruvbox, false) => 0x076678,
         (Scheme::Nord, _) => 0x88c0d0,
         (Scheme::Discord, _) => 0x5865f2,
+        (Scheme::Dracula, _) => 0xbd93f9,
+        (Scheme::TokyoNight, true) => 0x7aa2f7,
+        (Scheme::TokyoNight, false) => 0x2e7de9,
+        (Scheme::OneDark, true) => 0x61afef,
+        (Scheme::OneDark, false) => 0x4078f2,
+        (Scheme::Monokai, _) => 0x66d9ef,
+        (Scheme::Everforest, true) => 0xa7c080,
+        (Scheme::Everforest, false) => 0x8da101,
+        (Scheme::RosePine, true) => 0xc4a7e7,
+        (Scheme::RosePine, false) => 0x907aa9,
+        (Scheme::Kanagawa, true) => 0x7e9cd8,
+        (Scheme::Kanagawa, false) => 0x4d699b,
+        (Scheme::Tomorrow, true) => 0x81a2be,
+        (Scheme::Tomorrow, false) => 0x4271ae,
         (Scheme::Catppuccin | Scheme::Custom, true) => 0xcba6f7,
         (Scheme::Catppuccin | Scheme::Custom, false) => 0x8839ef,
         (_, true) => 0x0070df,
@@ -324,6 +361,7 @@ pub(super) fn apply(cx: &mut App) {
                 ThemeMode::Light
             },
         ),
+        scheme if scheme.dark_only() => Some(ThemeMode::Dark),
         _ => match preferences.variant {
             Variant::System => None,
             Variant::Light => Some(ThemeMode::Light),
@@ -589,6 +627,20 @@ mod tests {
     palette_test!(catppuccin_dark, Catppuccin, true);
     palette_test!(discord_light, Discord, false);
     palette_test!(discord_dark, Discord, true);
+    palette_test!(dracula, Dracula, true);
+    palette_test!(tokyo_night_light, TokyoNight, false);
+    palette_test!(tokyo_night_dark, TokyoNight, true);
+    palette_test!(one_light, OneDark, false);
+    palette_test!(one_dark, OneDark, true);
+    palette_test!(monokai, Monokai, true);
+    palette_test!(everforest_light, Everforest, false);
+    palette_test!(everforest_dark, Everforest, true);
+    palette_test!(rose_pine_light, RosePine, false);
+    palette_test!(rose_pine_dark, RosePine, true);
+    palette_test!(kanagawa_light, Kanagawa, false);
+    palette_test!(kanagawa_dark, Kanagawa, true);
+    palette_test!(tomorrow_light, Tomorrow, false);
+    palette_test!(tomorrow_dark, Tomorrow, true);
     palette_test!(custom_light, Custom, false);
     palette_test!(custom_dark, Custom, true);
     #[test]
