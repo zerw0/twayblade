@@ -20,6 +20,9 @@ pub(crate) struct EditSession {
     pub saving: bool,
     /// Return was pressed on an emptied message: the next Return deletes it.
     pub confirm_delete: bool,
+    /// Opened by Delete… in the message menu: empty the field and ask once
+    /// the message has loaded.
+    pub delete_requested: bool,
 }
 
 impl MatrixApp {
@@ -83,6 +86,7 @@ impl MatrixApp {
                 loaded: true,
                 saving: false,
                 confirm_delete: false,
+                delete_requested: false,
             });
             cx.notify();
             return;
@@ -97,10 +101,43 @@ impl MatrixApp {
             loaded: false,
             saving: false,
             confirm_delete: false,
+            delete_requested: false,
         });
         if let Err(error) = backend.begin_edit(event_id) {
             self.status = error.to_string();
             self.edit_session = None;
+        }
+        cx.notify();
+    }
+
+    /// Delete… in the message menu: the same question an emptied edit asks,
+    /// so deleting always takes a second, deliberate step.
+    pub(crate) fn request_delete(
+        &mut self,
+        event_id: String,
+        in_thread: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_edit(event_id, in_thread, window, cx);
+        let Some(session) = &mut self.edit_session else {
+            return;
+        };
+        session.delete_requested = true;
+        if session.loaded {
+            self.ask_to_delete(window, cx);
+        }
+    }
+
+    fn ask_to_delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(session) = &mut self.edit_session else {
+            return;
+        };
+        session.delete_requested = false;
+        session.confirm_delete = true;
+        let in_thread = session.in_thread;
+        if let Some(composer) = self.edit_composer(in_thread) {
+            composer.update(cx, |state, cx| state.set_value("", window, cx));
         }
         cx.notify();
     }
@@ -225,6 +262,13 @@ impl MatrixApp {
                         state.set_value(text, window, cx);
                         state.focus(window, cx);
                     });
+                }
+                if self
+                    .edit_session
+                    .as_ref()
+                    .is_some_and(|session| session.delete_requested)
+                {
+                    self.ask_to_delete(window, cx);
                 }
             } else if failed {
                 // The message could not be opened for editing.

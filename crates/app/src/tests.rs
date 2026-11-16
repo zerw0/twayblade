@@ -2291,6 +2291,66 @@ fn editing_loads_your_message_and_always_restores_the_draft(cx: &mut TestAppCont
 }
 
 #[gpui_kit::test]
+fn the_message_menu_offers_actions_and_asks_before_deleting(cx: &mut TestAppContext) {
+    use gpui_kit::test::{TestEventExt, TestQueryExt};
+    let (window, app) = preview_window(cx);
+    let id = cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            let user = app.snapshot.user_id.clone();
+            let message = app
+                .snapshot
+                .messages
+                .iter_mut()
+                .find(|m| m.kind == crate::backend::MessageKind::Text && m.attachment.is_none())
+                .expect("a text message");
+            message.sender = user;
+            message.body = "menu target".into();
+            message.editable = true;
+            message.event_id = Some("$menu-target".into());
+            let id = message.id.clone();
+            cx.notify();
+            id
+        })
+    });
+    let open_menu = |cx: &mut TestAppContext| {
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.right_click(
+                gpui_kit::SharedString::from(format!("message-row-{id}")),
+                cx,
+            );
+            window.render_frame(cx);
+        })
+        .expect("right click");
+        cx.run_until_parked();
+    };
+    open_menu(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        for label in ["Add Reaction…", "Copy Text", "Copy Link", "Edit", "Delete…"] {
+            assert!(window.find_by_label(label).visible(), "missing {label}");
+        }
+        let point = window.find_by_label("Delete…").bounds().center();
+        window.pointer_move(point, None, cx);
+        window.pointer_down(point, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(point, gpui_kit::MouseButton::Left, cx);
+    })
+    .expect("choose delete");
+    cx.run_until_parked();
+    // Delete… asks first, exactly as an emptied edit does.
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("edit-delete").visible(), "asks before deleting");
+    })
+    .expect("delete question");
+    cx.update(|cx| {
+        let app = app.read(cx);
+        assert!(app.edit_session.as_ref().is_some_and(|s| s.confirm_delete));
+        assert_eq!(app.composer.read(cx).value().to_string(), "");
+    });
+}
+
+#[gpui_kit::test]
 fn image_size_setting_updates_preferences(cx: &mut TestAppContext) {
     use twayblade_core::conversation::PreviewSize;
     let (_, app) = preview_window(cx);

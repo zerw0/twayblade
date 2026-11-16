@@ -57,3 +57,20 @@ the window. The reply field uses the main composer's box and send button.
 - Attachments in thread replies: the thread composer has no attach button yet
   (#118).
 - Linux and Windows.
+
+# Right-click menu on messages (#120)
+
+Right-clicking a message opens a menu with these actions:
+- Add Reaction…
+- Reply in Thread (main timeline only)
+- Copy Text (text, emote and notice messages)
+- Copy Link (`https://matrix.to/#/<room>/<event>`)
+- Edit and Delete… (your own editable messages)
+
+Delete… starts the edit, empties it and asks the same question as an emptied
+edit (#116), so deleting always takes a second step.
+
+Verification: `the_message_menu_offers_actions_and_asks_before_deleting`
+right-clicks a message, checks the entries, and confirms that Delete… asks
+before deleting. `cargo test -p twayblade --all-features --locked`: 184 passed.
+Not verified: the menu on the live account, and on Linux and Windows.
