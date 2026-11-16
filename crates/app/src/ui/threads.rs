@@ -10,12 +10,13 @@ use gpui_kit::{
     component::{
         button::{Button, ButtonVariants},
         input::{InputEvent, Textarea, TextareaState},
-        message_scroller::{MessageScroller, MessageScrollerState},
         *,
     },
     *,
 };
 use std::ops::Range;
+
+use super::message_scroller::{MessageScroller, MessageScrollerState};
 
 pub(crate) struct ThreadPanel {
     pub room: String,

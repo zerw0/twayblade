@@ -1,5 +1,7 @@
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{AppContext, Bounds, TestAppContext, WindowBounds, WindowOptions, px, size};
+use gpui_kit::{
+    AppContext, Bounds, Pixels, Size, TestAppContext, WindowBounds, WindowOptions, px, size,
+};
 
 use crate::app::MatrixApp;
 
@@ -116,13 +118,20 @@ fn own_profile_opens_and_closes_through_real_buttons(cx: &mut TestAppContext) {
 fn preview_window(
     cx: &mut TestAppContext,
 ) -> (gpui_kit::AnyWindowHandle, gpui_kit::Entity<MatrixApp>) {
+    preview_window_sized(cx, size(px(1120.), px(760.)))
+}
+
+fn preview_window_sized(
+    cx: &mut TestAppContext,
+    window_size: Size<Pixels>,
+) -> (gpui_kit::AnyWindowHandle, gpui_kit::Entity<MatrixApp>) {
     cx.update(gpui_kit::init);
     cx.update(|cx| {
         gpui_kit::open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                     None,
-                    size(px(1120.), px(760.)),
+                    window_size,
                     cx,
                 ))),
                 ..Default::default()
@@ -370,8 +379,44 @@ fn latest_event_visibility_follows_actual_clipped_timeline_rows(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
+fn short_timeline_rests_against_the_composer(cx: &mut TestAppContext) {
+    // Tall enough that the whole sample timeline fits with room to spare.
+    let (window, app) = preview_window_sized(cx, size(px(1120.), px(1600.)));
+    let (first, last) = cx.update(|cx| {
+        let messages = &app.read(cx).snapshot.messages;
+        (
+            messages.first().unwrap().id.clone(),
+            messages.last().unwrap().id.clone(),
+        )
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        // The header sits above the timeline and the composer below it.
+        let above = window.find("header-members").bounds();
+        let below = window.find("send").bounds();
+        let mut row = |id: &str| {
+            window
+                .within("messages")
+                .find(gpui_kit::SharedString::from(format!("message-row-{id}")))
+                .bounds()
+        };
+        let (first, last) = (row(&first), row(&last));
+        let room_above = first.top() - above.bottom();
+        let room_below = below.top() - last.bottom();
+        assert!(
+            room_above > room_below + px(100.),
+            "Spare room belongs above the first message: {room_above:?} above, \
+             {room_below:?} below"
+        );
+    })
+    .expect("short timeline");
+}
+
+#[gpui_kit::test]
 fn pagination_keeps_existing_group_and_reading_anchor(cx: &mut TestAppContext) {
-    let (window, app) = preview_window(cx);
+    // Short enough that the sample timeline scrolls: a timeline that fits
+    // rests against the composer and has no reading anchor to keep.
+    let (window, app) = preview_window_sized(cx, size(px(1120.), px(420.)));
     cx.update_window(window, |_, window, cx| {
         app.update(cx, |app, cx| {
             app.scroller
@@ -1895,7 +1940,6 @@ fn switching_all_styles_preserves_visible_ids_draft_anchor_thread_and_actions(
                     .collect::<Vec<_>>(),
                 ids
             );
-            assert_eq!(main.scroller.read(cx).logical_scroll_top().item_ix, 0);
             assert_eq!(main.thread.as_ref().unwrap().root.id, "sample-0");
         });
     }

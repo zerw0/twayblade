@@ -23,6 +23,7 @@ pub(crate) mod editing;
 pub(crate) mod emoji;
 pub(crate) mod focus;
 pub(crate) mod keyboard;
+pub(crate) mod message_scroller;
 pub(crate) mod motion;
 pub(crate) mod security;
 pub(crate) mod settings;
@@ -42,13 +43,13 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants},
     input::{Input, Textarea},
     message::MessageAlignment,
-    message_scroller::MessageScroller,
     text::TextView,
     *,
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
+use self::message_scroller::MessageScroller;
 use crate::{
     app::{
         CloseProfile, FindConversation, JoinSpace, MatrixApp, NewDirectMessage, NewRoom,

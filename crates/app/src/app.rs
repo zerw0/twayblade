@@ -6,11 +6,11 @@ use std::{
 
 use gpui_kit::component::{
     input::{InputEvent, InputState, TextareaState},
-    message_scroller::MessageScrollerState,
     *,
 };
 use gpui_kit::*;
 
+use crate::ui::message_scroller::MessageScrollerState;
 use crate::{
     backend::{self, Backend, LoginOptions, Profile, Snapshot, TimelineAction},
     model::{self, Navigation},
