@@ -26,9 +26,8 @@ Branch `feature/linux-packages`.
 - `packaging/aur/PKGBUILD`: `twayblade-bin` template from the release tarball.
 - Versions: a `v*` tag's version, otherwise `<Cargo version>+git<sha>`; `-` is
   written as `~` so `0.1.0~rc.1` sorts before `0.1.0` in dpkg and rpm.
-- The app icon is new (`packaging/icons/com.twayblade.desktop.svg`: the
-  twayblade's two leaves under a flower spike), with `render.sh` for the PNG
-  and Windows `.ico`.
+- Packages carry the app icon (now the one described in
+  `2026-11-16-app-icon.md`), with `render.sh` for the PNG and Windows `.ico`.
 - The main and Settings windows set the Wayland `app_id`
   `com.twayblade.desktop`, so docks match the window to the desktop entry and
   icon. GPUI sets no X11 `WM_CLASS`, so the desktop entry no longer claims a
