@@ -69,10 +69,11 @@ pub(super) enum Scheme {
     Gruvbox,
     Nord,
     Catppuccin,
+    Discord,
     Custom,
 }
 impl Scheme {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::System,
         Self::Light,
         Self::Dark,
@@ -80,6 +81,7 @@ impl Scheme {
         Self::Nord,
         Self::Gruvbox,
         Self::Solarized,
+        Self::Discord,
         Self::HighContrast,
         Self::Custom,
     ];
@@ -92,6 +94,7 @@ impl Scheme {
             Self::Nord => "nord",
             Self::Gruvbox => "gruvbox",
             Self::Solarized => "solarized",
+            Self::Discord => "discord",
             Self::HighContrast => "high-contrast",
             Self::Custom => "custom",
         }

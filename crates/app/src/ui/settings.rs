@@ -2122,6 +2122,7 @@ fn scheme_label(scheme: Scheme) -> &'static str {
         Scheme::Nord => "Nord",
         Scheme::Gruvbox => "Gruvbox",
         Scheme::Solarized => "Solarized",
+        Scheme::Discord => "Discord",
         Scheme::HighContrast => "High Contrast",
         Scheme::Custom => "Custom",
     }

@@ -41,6 +41,22 @@ pub(super) fn font_or_default(
 struct SystemAccent(Option<[f32; 3]>);
 impl Global for SystemAccent {}
 
+/// Title bar and space rail colours for schemes that set their own instead
+/// of deriving them from the sidebar.
+#[derive(Clone, Copy, Default)]
+struct SchemeChrome(Option<(u32, u32)>);
+impl Global for SchemeChrome {}
+
+/// (title bar, space rail) a scheme sets itself.
+fn scheme_chrome(scheme: Scheme, dark: bool) -> Option<(u32, u32)> {
+    match (scheme, dark) {
+        // Discord's server list and title bar.
+        (Scheme::Discord, true) => Some((0x1e1f22, 0x1e1f22)),
+        (Scheme::Discord, false) => Some((0xe3e5e8, 0xe3e5e8)),
+        _ => None,
+    }
+}
+
 pub(super) fn set_system_accent(accent: Option<[f32; 3]>, cx: &mut App) -> bool {
     let accent = accent.filter(|rgb| {
         rgb.iter()
@@ -130,6 +146,10 @@ pub(crate) fn surfaces(scheme: Scheme, dark: bool) -> [u32; 6] {
         // Catppuccin Latte and Mocha.
         (Scheme::Catppuccin, false) => [0xeff1f5, 0xe6e9ef, 0x4c4f69, 0x585b73, 0xdce0e8, 0xccd0da],
         (Scheme::Catppuccin, true) => [0x1e1e2e, 0x181825, 0xcdd6f4, 0xa6adc8, 0x313244, 0x45475a],
+        // Discord's light and dark themes; dark is 1:1 (#180) apart from the
+        // secondary text, lifted from 0x949ba4 to reach 4.5:1 on the composer.
+        (Scheme::Discord, false) => [0xffffff, 0xf2f3f5, 0x313338, 0x5c5e66, 0xebedef, 0xe3e5e8],
+        (Scheme::Discord, true) => [0x313338, 0x2b2d31, 0xdbdee1, 0xa1a8af, 0x383a40, 0x3f4147],
         (Scheme::Custom, false) => [0xeff1f5, 0xe6e9ef, 0x4c4f69, 0x585b73, 0xdce0e8, 0xccd0da],
         (Scheme::Custom, true) => [0x1e1e2e, 0x181825, 0xcdd6f4, 0xa6adc8, 0x313244, 0x45475a],
         (_, false) => [0xffffff, 0xf3f3f5, 0x1c1c1e, 0x66666e, 0xebebef, 0xdcdce0],
@@ -255,6 +275,7 @@ fn scheme_accent(
         (Scheme::Gruvbox, true) => 0x83a598,
         (Scheme::Gruvbox, false) => 0x076678,
         (Scheme::Nord, _) => 0x88c0d0,
+        (Scheme::Discord, _) => 0x5865f2,
         (Scheme::Catppuccin | Scheme::Custom, true) => 0xcba6f7,
         (Scheme::Catppuccin | Scheme::Custom, false) => 0x8839ef,
         (_, true) => 0x0070df,
@@ -333,6 +354,8 @@ pub(super) fn apply(cx: &mut App) {
         // appearance; otherwise the last forced mode sticks until the OS changes.
         None => Theme::sync_system_appearance(None, cx),
     }
+    let dark = Theme::global(cx).is_dark();
+    cx.set_global(SchemeChrome(scheme_chrome(preferences.scheme, dark)));
     Theme::update(cx, |theme| {
         let dark = theme.is_dark();
         let [background, sidebar, text, muted, secondary, border] =
@@ -440,9 +463,16 @@ pub(super) fn palette(cx: &App) -> Palette {
         l: (color.l + amount).clamp(0., 1.),
         ..color
     };
+    let own = cx.try_global::<SchemeChrome>().and_then(|chrome| chrome.0);
     Palette {
-        chrome: shift(theme.sidebar, if dark { 0.03 } else { -0.03 }),
-        rail: shift(theme.sidebar, if dark { -0.04 } else { -0.05 }),
+        chrome: own.map_or_else(
+            || shift(theme.sidebar, if dark { 0.03 } else { -0.03 }),
+            |(chrome, _)| rgb(chrome).into(),
+        ),
+        rail: own.map_or_else(
+            || shift(theme.sidebar, if dark { -0.04 } else { -0.05 }),
+            |(_, rail)| rgb(rail).into(),
+        ),
         selection: theme.primary.opacity(if dark { 0.18 } else { 0.12 }),
         pill: pick(0xffffff, 0x56565c),
         online: pick(0x248a3d, 0x30d158),
@@ -557,6 +587,8 @@ mod tests {
     palette_test!(nord_dark, Nord, true);
     palette_test!(catppuccin_light, Catppuccin, false);
     palette_test!(catppuccin_dark, Catppuccin, true);
+    palette_test!(discord_light, Discord, false);
+    palette_test!(discord_dark, Discord, true);
     palette_test!(custom_light, Custom, false);
     palette_test!(custom_dark, Custom, true);
     #[test]
