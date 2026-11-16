@@ -1,17 +1,23 @@
-# Template for the AUR package twayblade-bin (#53). Not published: the release
-# flow fills VERSION and SHA256 from a published release's tarball and
-# SHA256SUMS, and pushing to the AUR needs explicit authorization.
+# Template for the AUR package twayblade-bin (#53). scripts/aur-pkgbuild.py
+# fills PKGVER, TAG and SHA256 from a published release's SHA256SUMS.
 # Maintainer: hdjenkov <me@zerw.xyz>
 pkgname=twayblade-bin
-pkgver=VERSION
+# Arch versions can't contain "-": tag 0.1.1-rc.1 is pkgver 0.1.1rc.1, which
+# sorts before 0.1.1.
+pkgver=PKGVER
+_tag=TAG
 pkgrel=1
 pkgdesc='Native Matrix client with encrypted messages and calls'
 arch=('x86_64')
 url='https://github.com/zerw0/twayblade'
 license=('MIT')
-depends=('alsa-lib' 'dbus' 'gcc-libs' 'glib2' 'glibc' 'libdrm' 'libglvnd'
-         'libpulse' 'libx11' 'libxcb' 'libxkbcommon' 'libxkbcommon-x11' 'mesa'
-         'vulkan-icd-loader' 'wayland')
+# Most graphics and audio libraries are loaded at run time (dlopen), so
+# namcap reports them as unused; they are needed.
+depends=('alsa-lib' 'dbus' 'gcc-libs' 'glib2' 'glibc' 'hicolor-icon-theme'
+         'libdrm' 'libglvnd' 'libpulse' 'libx11' 'libxcb' 'libxkbcommon'
+         'libxkbcommon-x11' 'mesa' 'vulkan-icd-loader' 'wayland')
+# A prebuilt, stripped binary: no debug package.
+options=('!debug')
 optdepends=('gnome-keyring: Secret Service to keep you signed in'
             'kwallet: Secret Service to keep you signed in'
             'keepassxc: Secret Service to keep you signed in'
@@ -19,7 +25,8 @@ optdepends=('gnome-keyring: Secret Service to keep you signed in'
             'pipewire: screen sharing on Wayland')
 provides=('twayblade')
 conflicts=('twayblade')
-source=("https://github.com/zerw0/twayblade/releases/download/v${pkgver}/twayblade-linux-x86_64.tar.gz")
+# The asset name is the same in every release; keep a per-version local name.
+source=("twayblade-${_tag}-linux-x86_64.tar.gz::https://github.com/zerw0/twayblade/releases/download/v${_tag}/twayblade-linux-x86_64.tar.gz")
 sha256sums=('SHA256')
 
 package() {
@@ -27,7 +34,6 @@ package() {
     install -Dm755 twayblade "$pkgdir/usr/bin/twayblade"
     install -Dm644 com.twayblade.desktop.desktop "$pkgdir/usr/share/applications/com.twayblade.desktop.desktop"
     install -Dm644 com.twayblade.desktop.metainfo.xml "$pkgdir/usr/share/metainfo/com.twayblade.desktop.metainfo.xml"
-    install -Dm644 com.twayblade.desktop.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/com.twayblade.desktop.svg"
     install -Dm644 com.twayblade.desktop.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/com.twayblade.desktop.png"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     install -Dm644 libwebrtc-LICENSE.md "$pkgdir/usr/share/licenses/$pkgname/libwebrtc-LICENSE.md"

@@ -17,9 +17,14 @@ signs, uploads or publishes.
     binary; a Secret Service provider and `xdg-desktop-portal` are recommended.
   - AppImage with `linux/build-appimage.sh` (linuxdeploy pinned by tag and
     SHA-256).
-  - `aur/PKGBUILD`: template for `twayblade-bin` from the release tarball,
-    which now carries the desktop entry, AppStream data and icons. Pushing to
-    the AUR needs explicit authorization.
+  - `aur/PKGBUILD`: template for `twayblade-bin` from the release tarball
+    (binary, desktop entry, AppStream data, icon). For a release:
+    ```sh
+    python3 scripts/aur-pkgbuild.py --version 0.1.1-rc.1 --sums SHA256SUMS > PKGBUILD
+    makepkg --printsrcinfo > .SRCINFO   # on Arch
+    ```
+    then commit both to `ssh://aur@aur.archlinux.org/twayblade-bin.git` and
+    push. Tags become Arch versions without `-` (`0.1.1-rc.1` → `0.1.1rc.1`).
   - Versions: a `v*` tag's version, otherwise `<Cargo version>+git<sha>`;
     `-` becomes `~` so pre-releases sort before the final release.
 - Windows installer (#54): `windows/twayblade.wxs`, built by the Windows job
