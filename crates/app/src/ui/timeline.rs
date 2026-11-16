@@ -122,11 +122,29 @@ impl MatrixApp {
                                     gpui_kit::component::tooltip::Tooltip::new(url.clone())
                                         .build(window, cx)
                                 })
-                                .on_link_click(|url, _, _, cx| {
-                                    if url::Url::parse(url).is_ok_and(|url| {
-                                        matches!(url.scheme(), "https" | "http" | "mailto")
-                                    }) {
-                                        cx.open_url(url);
+                                .on_link_click({
+                                    let weak = cx.weak_entity();
+                                    move |url, _, window, cx| {
+                                        // A mention opens the person's profile beside the chat.
+                                        if let Some(user) = model::mentioned_user(url) {
+                                            let _ = weak.update(cx, |this, cx| {
+                                                let name = this
+                                                    .snapshot
+                                                    .members
+                                                    .iter()
+                                                    .find(|member| member.user_id == user)
+                                                    .map(|member| member.display_name.clone())
+                                                    .filter(|name| !name.is_empty())
+                                                    .unwrap_or_else(|| user.clone());
+                                                this.open_profile(user, name, window, cx);
+                                            });
+                                            return;
+                                        }
+                                        if url::Url::parse(url).is_ok_and(|url| {
+                                            matches!(url.scheme(), "https" | "http" | "mailto")
+                                        }) {
+                                            cx.open_url(url);
+                                        }
                                     }
                                 })
                                 .when(

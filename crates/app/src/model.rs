@@ -581,6 +581,72 @@ mod rich_tests {
     }
 }
 
+/// The user a mention (pill) links to: `https://matrix.to/#/@user:server`,
+/// percent-encoded or not and with optional `?via=`, or `matrix:u/user:server`.
+/// None for every other link, which opens in the browser.
+pub(super) fn mentioned_user(link: &str) -> Option<String> {
+    let url = url::Url::parse(link).ok()?;
+    let id = match url.scheme() {
+        "https" if url.host_str() == Some("matrix.to") => {
+            let fragment = url.fragment()?.strip_prefix('/')?;
+            percent_decode(fragment.split(['?', '/']).next()?)?
+        }
+        "matrix" => {
+            let user = url.path().strip_prefix("u/")?.split(['?', '/']).next()?;
+            format!("@{}", percent_decode(user)?)
+        }
+        _ => return None,
+    };
+    let (local, server) = id.strip_prefix('@')?.split_once(':')?;
+    (!local.is_empty() && !server.is_empty()).then_some(id)
+}
+
+fn percent_decode(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut ix = 0;
+    while ix < bytes.len() {
+        if bytes[ix] == b'%' {
+            let hex = text.get(ix + 1..ix + 3)?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            ix += 3;
+        } else {
+            out.push(bytes[ix]);
+            ix += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+#[cfg(test)]
+mod mention_tests {
+    use super::mentioned_user;
+    #[test]
+    fn mention_links_name_the_user_and_other_links_do_not() {
+        for link in [
+            "https://matrix.to/#/@hristo:example.org",
+            "https://matrix.to/#/%40hristo%3Aexample.org",
+            "https://matrix.to/#/@hristo:example.org?via=example.org",
+            "matrix:u/hristo:example.org",
+        ] {
+            assert_eq!(
+                mentioned_user(link).as_deref(),
+                Some("@hristo:example.org"),
+                "{link}"
+            );
+        }
+        for link in [
+            "https://matrix.to/#/#room:example.org",
+            "https://matrix.to/#/!room:example.org/$event",
+            "https://example.org/#/@hristo:example.org",
+            "matrix:r/room:example.org",
+            "https://matrix.to/#/@:example.org",
+        ] {
+            assert_eq!(mentioned_user(link), None, "{link}");
+        }
+    }
+}
+
 /// Sanitized rich text (from core) to Markdown for Kit's selectable text view.
 /// Every text run is escaped; only structure produces Markdown syntax, so
 /// message content can never inject formatting or links of its own.
