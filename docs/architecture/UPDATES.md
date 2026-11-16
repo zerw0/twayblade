@@ -67,6 +67,18 @@ Trust: the checksum comes from the same release as the installer. It detects
 a corrupt or truncated download, not a compromised release or account. The
 signed-manifest design below remains the target once a release key exists.
 
+## Release versions
+
+The app compares its own version (`CARGO_PKG_VERSION`, the
+`[workspace.package]` version in `Cargo.toml`) with the GitHub releases. A
+release tag must therefore equal that version: set it to the release version
+(for example `0.1.1-rc.1`) and commit before `git tag -a v0.1.1-rc.1`. The
+`Release version` job in `build.yml` fails a tag build whose tag differs, so
+no draft is created. Up to rc.3 every build reported `0.1.0`, which semver
+orders after `0.1.0-rc.N`: those builds never see a newer `0.1.0-rc` release,
+only `0.1.1` and later. macOS bundles show the numeric part in
+`CFBundleShortVersionString` (`0.1.1-rc.1` → `0.1.1`).
+
 ## Installation ownership
 
 Detection is read-only. Package builders can stamp

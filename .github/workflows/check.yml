@@ -110,6 +110,7 @@ jobs:
         run: |
           python3 scripts/test_release_notes.py
           python3 scripts/test_homebrew_cask.py
+          python3 scripts/test_check_release_version.py
       # The app binary itself only on main (and pull requests into it);
       # develop and feature branches stop at the tests.
       - name: Build native desktop

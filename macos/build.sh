@@ -30,6 +30,10 @@ app="$repo_root/target/$profile/bundle/Twayblade.app"
 mkdir -p "$app/Contents/MacOS"
 cp "target/$profile/twayblade" "$app/Contents/MacOS/"
 cp macos/Info.plist "$app/Contents/Info.plist"
+# The bundle shows the Cargo version; CFBundleShortVersionString takes only
+# the numeric part ("0.1.1-rc.1" -> "0.1.1").
+version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${version%%[-+]*}" "$app/Contents/Info.plist"
 # Local builds keep the development identifier, so they never share
 # notification permission or preferences with an installed release. CI sets
 # TWAYBLADE_BUNDLE_ID=com.twayblade.desktop for the distributed bundle.
