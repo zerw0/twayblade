@@ -797,23 +797,6 @@ impl MatrixApp {
                             }),
                         );
                     }
-                    if status_msg.is_some() {
-                        let weak = weak.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new("Clear Status Message")
-                                .icon(IconName::MessageSquareX)
-                                .on_click(move |_, window, cx| {
-                                    let _ = weak.update(cx, |this, cx| {
-                                        let state = this
-                                            .snapshot
-                                            .own_presence
-                                            .as_ref()
-                                            .map_or(State::Online, |presence| presence.state);
-                                        this.set_presence(state, None, window, cx)
-                                    });
-                                }),
-                        );
-                    }
                 }
                 let create = weak.clone();
                 let dm = weak.clone();
