@@ -428,8 +428,10 @@ impl MatrixApp {
         root.thread_replies = 0;
         root.thread_unread = 0;
         v_flex()
+            // 360 px, never wider than the panel region, which caps it against
+            // the window. A percentage here would be of the region instead.
             .w(px(360.))
-            .max_w(relative(0.36))
+            .max_w_full()
             .h_full()
             .flex_none()
             .border_l_1()
@@ -529,14 +531,10 @@ impl MatrixApp {
                     .pb(px(12.))
                     .children(self.edit_bar(true, cx))
                     .child(
-                        h_flex()
-                            .items_end()
-                            .gap(px(2.))
-                            .min_h(px(32.))
-                            .py(px(3.))
-                            .pl(px(10.))
-                            .pr(px(3.))
-                            .rounded(px(16.))
+                        // The main composer's box: the field, then a toolbar
+                        // row with the send button at the same size.
+                        v_flex()
+                            .rounded(px(9.))
                             .border_1()
                             .border_color(cx.theme().input)
                             .bg(crate::theme::palette(cx).field)
@@ -581,9 +579,10 @@ impl MatrixApp {
                                             }
                                         },
                                     ))
-                                    .flex_1()
                                     .min_w_0()
-                                    .py(px(1.))
+                                    .px(px(12.))
+                                    .pt(px(8.))
+                                    .pb(px(2.))
                                     .child({
                                         let composer = t.composer.clone();
                                         self.thread_selection_bar
@@ -605,17 +604,28 @@ impl MatrixApp {
                                     ),
                             )
                             .child(
-                                Button::new("thread-send")
-                                    .primary()
-                                    .xsmall()
-                                    .rounded(px(12.))
-                                    .icon(assets::IconName::ArrowUp)
-                                    .accessibility_label("Send thread reply")
-                                    .tooltip("Send Reply  ↩")
-                                    .disabled(self.preview || !t.ready || empty || t.sending)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.send_thread(window, cx)
-                                    })),
+                                h_flex()
+                                    .h(px(34.))
+                                    .px(px(6.))
+                                    .gap(px(2.))
+                                    .items_center()
+                                    .child(div().flex_1())
+                                    .child(
+                                        Button::new("thread-send")
+                                            .primary()
+                                            .h(px(26.))
+                                            .w(px(30.))
+                                            .rounded(px(6.))
+                                            .icon(assets::IconName::Send)
+                                            .accessibility_label("Send thread reply")
+                                            .tooltip("Send Reply  ↩")
+                                            .disabled(
+                                                self.preview || !t.ready || empty || t.sending,
+                                            )
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.send_thread(window, cx)
+                                            })),
+                                    ),
                             ),
                     ),
             )

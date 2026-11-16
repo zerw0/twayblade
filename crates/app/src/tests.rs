@@ -3222,6 +3222,35 @@ fn opening_the_archive_scrolls_a_long_sidebar_to_it(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn the_thread_panel_fits_its_region(cx: &mut TestAppContext) {
+    // Narrow enough that the region's 32% cap is below the panel's 360 px.
+    let (window, app) = preview_window_sized(cx, size(px(1000.), px(760.)));
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| app.open_thread("sample-0".into(), window, cx));
+        window.render_frame(cx);
+        let panel = window.find("close-thread").bounds();
+        let region = window.find("panel-thread-region").bounds();
+        // The region holds the panel at the width it allows (32% of the
+        // window here), not a fraction of it and not more.
+        assert!(
+            region.size.width > px(300.),
+            "thread panel squeezed: {region:?}"
+        );
+        assert!(
+            panel.right() <= region.right(),
+            "close button cut off: {panel:?} past {region:?}"
+        );
+        // The close button sits at the panel's trailing edge, so it ends
+        // near the region's: a squeezed panel leaves it far from there.
+        assert!(
+            region.right() - panel.right() < px(40.),
+            "panel narrower than its region: close at {panel:?}, region {region:?}"
+        );
+    })
+    .expect("thread panel");
+}
+
+#[gpui_kit::test]
 fn switching_back_to_an_account_reopens_its_last_room(cx: &mut TestAppContext) {
     let (window, app) = preview_window(cx);
     let switch = |cx: &mut TestAppContext, user: Option<&str>| {
