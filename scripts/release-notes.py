@@ -10,7 +10,12 @@ Groups merged PRs as New, Improved and Fixed, and lists the "Not verified" /
 than it is. The output is a draft for a person to review and reword for users;
 it does not publish anything and reads nothing but merged-PR metadata.
 
-`--since` is a tag (its commit date is used) or a date (YYYY-MM-DD). The PR list
+`--since` is the previous tag or a date (YYYY-MM-DD). With a tag, a PR is in
+the release when its merge commit is reachable from `--until` (default HEAD,
+the new tag in CI) but not from the previous tag, so work merged into develop
+after the release branch was cut stays out; release/* and sync/* pull requests
+(develop to main and back) are left out too. With a date, PRs merged after it
+are listed. The PR list
 comes from the GitHub CLI (`gh`, or `nix shell nixpkgs#gh -c gh`), or from a JSON
 file in the same shape with `--input`.
 """
@@ -23,7 +28,9 @@ import sys
 from datetime import date, datetime, timezone
 
 REPO = "zerw0/twayblade"
-FIELDS = "number,title,mergedAt,labels,body,url"
+FIELDS = "number,title,mergedAt,labels,body,url,mergeCommit,headRefName"
+# Branches that only move work between develop and main.
+FLOW_BRANCHES = ("release/", "sync/")
 
 NEW = ("add", "introduce", "support", "invite", "allow", "enable", "let")
 FIXED = ("fix", "stop", "restart", "repair", "prevent", "correct", "resolve")
@@ -83,6 +90,25 @@ def merged_since(prs: list[dict], since: datetime) -> list[dict]:
     return sorted(result, key=lambda pr: pr["number"])
 
 
+def in_release(prs: list[dict], commits: set[str]) -> list[dict]:
+    """PRs whose merge commit is one of `commits`, without branch-flow PRs."""
+    result = []
+    for pr in prs:
+        oid = (pr.get("mergeCommit") or {}).get("oid")
+        if oid not in commits or pr.get("headRefName", "").startswith(FLOW_BRANCHES):
+            continue
+        result.append(pr)
+    return sorted(result, key=lambda pr: pr["number"])
+
+
+def commits_between(since: str, until: str) -> set[str]:
+    out = subprocess.run(
+        ["git", "rev-list", f"{since}..{until}"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    return set(out.split())
+
+
 def render(version: str, prs: list[dict], today: date | None = None) -> str:
     today = today or date.today()
     sections: dict[str, list[str]] = {"New": [], "Improved": [], "Fixed": []}
@@ -129,12 +155,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--version", required=True)
     parser.add_argument("--since", required=True, help="previous tag or YYYY-MM-DD")
+    parser.add_argument("--until", default="HEAD", help="the release commit (with a tag --since)")
     parser.add_argument("--repo", default=REPO)
     parser.add_argument("--gh", default="nix shell nixpkgs#gh -c gh")
     parser.add_argument("--input", help="read PRs from this JSON file instead of GitHub")
     args = parser.parse_args()
     prs = json.load(open(args.input)) if args.input else fetch(args.repo, args.gh)
-    sys.stdout.write(render(args.version, merged_since(prs, since_datetime(args.since))))
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.since):
+        selected = merged_since(prs, since_datetime(args.since))
+    else:
+        selected = in_release(prs, commits_between(args.since, args.until))
+    sys.stdout.write(render(args.version, selected))
 
 
 if __name__ == "__main__":

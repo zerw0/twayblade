@@ -53,6 +53,18 @@ class ReleaseNotes(unittest.TestCase):
         self.assertEqual(text.count("- VoiceOver."), 1)
         self.assertIn("### Known gaps", text)
 
+    def test_release_has_only_prs_reachable_from_its_tag(self):
+        prs = [
+            {"number": 137, "title": "Chooser stills", "mergeCommit": {"oid": "a1"}, "headRefName": "feature/fix-batch"},
+            {"number": 138, "title": "Back navigation", "mergeCommit": {"oid": "b2"}, "headRefName": "feature/back-navigation-v3"},
+            {"number": 141, "title": "Release 0.1.1-rc.1", "mergeCommit": {"oid": "c3"}, "headRefName": "release/0.1.1-rc.1"},
+            {"number": 143, "title": "Merge main into develop", "mergeCommit": {"oid": "d4"}, "headRefName": "sync/main-into-develop"},
+            {"number": 99, "title": "Unmerged", "mergeCommit": None, "headRefName": "feature/x"},
+        ]
+        # b2 merged into develop after the release branch was cut: not in the tag.
+        picked = notes.in_release(prs, {"a1", "c3", "d4"})
+        self.assertEqual([pr["number"] for pr in picked], [137])
+
     def test_empty_release_says_so(self):
         self.assertIn("No user-facing changes", notes.render("1", [], date(2026, 11, 15)))
 
