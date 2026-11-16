@@ -500,7 +500,7 @@ impl MatrixApp {
     /// below are the saved ones; anything you send is queued and goes out when
     /// the connection returns.
     fn offline_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.snapshot.offline {
+        if !self.snapshot.offline && !self.snapshot.no_network {
             return None;
         }
         let palette = theme::palette(cx);

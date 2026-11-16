@@ -586,3 +586,49 @@ async fn room_list_recovers_after_a_long_network_loss() {
     checked(account.client.matrix_auth().logout().await, "outage logout");
     checked(other.matrix_auth().logout().await, "other device logout");
 }
+
+/// Wi-Fi off does not refuse connections: requests hang. The room list must
+/// still report Offline within a bounded time, so the notice appears (#105).
+#[tokio::test]
+#[ignore = "requires isolated Synapse fixture and fault proxy"]
+async fn room_list_reports_offline_when_requests_hang() {
+    use crate::rooms::SyncStatus;
+    let (root, data, cert) = fixture().await;
+    let work = root.join(format!("room-open-stall-{}", Uuid::new_v4()));
+    let proxy = Proxy::start(&root, work.join("proxy")).await;
+    let main = client(&proxy, &data, &cert, &work.join("store"), true).await;
+    let account = account(main, work.join("store"));
+    let (latest, mut snapshots) = tokio::sync::watch::channel::<Option<SyncStatus>>(None);
+    let drain = account.clone();
+    let list = tokio::spawn(async move {
+        let stream = drain.room_updates();
+        tokio::pin!(stream);
+        while let Some(snapshot) = stream.next().await {
+            latest.send_replace(Some(snapshot.status));
+        }
+    });
+    let mut wait_for = async |stage: &'static str, seconds: u64, wanted: SyncStatus| {
+        checked(
+            tokio::time::timeout(Duration::from_secs(seconds), async {
+                loop {
+                    if *snapshots.borrow_and_update() == Some(wanted) {
+                        return;
+                    }
+                    checked(snapshots.changed().await, "room list stream ended");
+                }
+            })
+            .await,
+            stage,
+        )
+    };
+    wait_for("first sync", 30, SyncStatus::Connected).await;
+    proxy.fault("stall", "all").await;
+    let started = std::time::Instant::now();
+    wait_for("offline while requests hang", 120, SyncStatus::Offline).await;
+    eprintln!("OFFLINE_AFTER_SECONDS={}", started.elapsed().as_secs());
+    proxy.fault("normal", "all").await;
+    wait_for("back online", 120, SyncStatus::Connected).await;
+    list.abort();
+    let _ = list.await;
+    checked(account.client.matrix_auth().logout().await, "stall logout");
+}

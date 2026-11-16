@@ -93,6 +93,9 @@ pub(super) struct Snapshot {
     /// The homeserver can't be reached: shown as "no internet connection" while the
     /// saved conversations stay readable.
     pub(super) offline: bool,
+    /// No network interface can reach beyond the link (Wi-Fi off, cable out).
+    /// Seen within seconds, where sync takes until its long poll times out.
+    pub(super) no_network: bool,
     pub(super) timeline_status: String,
     /// Main timeline state behind `timeline_status`, for the view's layout.
     pub(super) timeline_phase: TimelineStatus,
@@ -280,6 +283,7 @@ impl Snapshot {
         *self = Self {
             accounts,
             updater: self.updater.clone(),
+            no_network: self.no_network,
             update_download: self.update_download.clone(),
             revision: self.revision,
             reduce_motion: self.reduce_motion,
@@ -293,6 +297,7 @@ pub(super) struct Backend {
     _instance: Option<auth::InstanceLock>,
     motion_task: JoinHandle<()>,
     update_task: JoinHandle<()>,
+    network_task: JoinHandle<()>,
     update_config: watch::Sender<twayblade_platform::updates::Preferences>,
     runtime: Runtime,
     state: Arc<Mutex<State>>,
@@ -580,8 +585,15 @@ impl Backend {
             runtime.spawn(twayblade_platform::updates::run(receive, move |updater| {
                 publish_updater(&update_snapshots, updater);
             }));
+        let network_snapshots = updates.clone();
+        let network_task = runtime.spawn(twayblade_platform::network::run(move |available| {
+            if network_snapshots.borrow().no_network == available {
+                publish(&network_snapshots, |view| view.no_network = !available);
+            }
+        }));
         Ok(Arc::new(Self {
             _instance: instance,
+            network_task,
             motion_task,
             update_task,
             update_config,
@@ -2160,6 +2172,7 @@ impl Drop for Backend {
     fn drop(&mut self) {
         self.motion_task.abort();
         self.update_task.abort();
+        self.network_task.abort();
         let state = match self.state.lock() {
             Ok(mut state) => {
                 state.stop();

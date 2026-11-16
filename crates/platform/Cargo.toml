@@ -25,6 +25,7 @@ tokio = { workspace = true, features = ["process"] }
 tokio = { workspace = true, features = ["test-util"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+system-configuration = "=0.6.1"
 keyring = { version = "=3.6.3", features = ["apple-native"] }
 objc2-av-foundation = { version = "=0.3.2", default-features = false, features = ["std", "AVCaptureDevice", "AVMediaFormat", "block2"] }
 mac-usernotifications = "=0.3.1"

@@ -6,6 +6,7 @@ mod accent;
 pub mod diagnostics;
 pub mod media_devices;
 mod motion;
+pub mod network;
 pub mod notifications;
 pub mod ringtone;
 pub mod updates;
