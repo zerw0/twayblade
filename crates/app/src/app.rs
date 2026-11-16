@@ -1074,6 +1074,12 @@ impl MatrixApp {
                 );
             }
             self.restore_room = self.account_rooms.get(&snapshot.user_id).cloned();
+            tracing::info!(
+                name: "ui_account_changed",
+                rooms = snapshot.rooms.len(),
+                pending = u64::from(self.pending_activation.is_some()),
+                ready = self.restore_room.is_some()
+            );
             self.navigation = Navigation::default();
             self.composers.clear();
             self.thread = None;
@@ -1498,13 +1504,20 @@ impl MatrixApp {
             return;
         };
         let here = target.account == self.snapshot.account_instance;
-        if here
-            && self
-                .snapshot
-                .rooms
-                .iter()
-                .any(|room| room.id == target.room)
-        {
+        let listed = self
+            .snapshot
+            .rooms
+            .iter()
+            .any(|room| room.id == target.room);
+        tracing::info!(
+            name: "ui_activation_resolve",
+            matched = here,
+            ready = listed,
+            active = self.busy,
+            rooms = self.snapshot.rooms.len()
+        );
+        // Spaces decide where the room is shown; wait for them as well.
+        if here && listed && self.snapshot.spaces_loaded {
             self.activate_notification(target, window, cx);
         } else if here || self.busy {
             // Still switching, or its rooms are still loading.
@@ -1520,13 +1533,18 @@ impl MatrixApp {
     ) {
         if target.account != self.snapshot.account_instance {
             // Another signed-in account: switch to it, then open the room.
-            if let Some(id) = self
+            let found = self
                 .snapshot
                 .accounts
                 .iter()
                 .find(|account| !account.active && account.instance == target.account)
-                .map(|account| account.id.clone())
-            {
+                .map(|account| account.id.clone());
+            tracing::info!(
+                name: "ui_notification_other_account",
+                matched = found.is_some(),
+                active = self.busy,
+            );
+            if let Some(id) = found {
                 self.pending_activation = Some(target);
                 cx.activate(true);
                 window.activate_window();
@@ -1542,7 +1560,23 @@ impl MatrixApp {
         {
             return;
         }
+        if !self.snapshot.spaces_loaded {
+            // Until spaces load, Home lists nothing and the room would be
+            // dropped again; open it once they are in.
+            self.pending_activation = Some(target);
+            return;
+        }
+        // Open the room where the sidebar lists it: Home, or its space. In
+        // Home a room inside a space is not shown and would be closed again.
         self.navigation.selected_space = None;
+        if !self.navigation.room_visible(&target.room, &self.snapshot) {
+            self.navigation.selected_space = self
+                .snapshot
+                .spaces
+                .iter()
+                .find(|space| space.room_ids.contains(target.room.as_str()))
+                .map(|space| space.id.clone());
+        }
         self.select_room(target.room.clone(), window, cx);
         cx.activate(true);
         window.activate_window();
@@ -1729,7 +1763,11 @@ impl MatrixApp {
         };
         let previous = self.selection_task.take();
         self.selection_pending += 1;
-        tracing::info!(name: "ui_selection_queued", pending = self.selection_pending);
+        tracing::info!(
+            name: "ui_selection_queued",
+            pending = self.selection_pending,
+            empty = room.is_none()
+        );
         self.selection_task = Some(cx.spawn_in(window, async move |view, cx| {
             if let Some(previous) = previous {
                 previous.await;

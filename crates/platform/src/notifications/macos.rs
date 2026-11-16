@@ -64,9 +64,11 @@ define_class!(
                 _ => NotificationAction::Open,
             };
             if is_default || action != NotificationAction::Open {
+                let waiting = live.is_some();
                 let delivered = live.is_some_and(|(sender, target)| {
                     sender.send(NotificationResponse { target, action }).is_ok()
                 });
+                tracing::info!(name: "notification_response", waiting, delivered);
                 if !delivered {
                     let info = request.content().userInfo();
                     let key = NSString::from_str(PAYLOAD_KEY);
@@ -93,7 +95,7 @@ pub(super) fn initialize() {
         return;
     }
     static DELEGATE: OnceLock<Retained<NotificationDelegate>> = OnceLock::new();
-    DELEGATE.get_or_init(|| {
+    let delegate = DELEGATE.get_or_init(|| {
         let accept = UNNotificationAction::actionWithIdentifier_title_options(
             &NSString::from_str("twayblade.call.accept"),
             &NSString::from_str("Accept"),
@@ -113,11 +115,12 @@ pub(super) fn initialize() {
             );
         UNUserNotificationCenter::currentNotificationCenter()
             .setNotificationCategories(&objc2_foundation::NSSet::from_slice(&[&*category]));
-        let delegate = NotificationDelegate::new();
-        UNUserNotificationCenter::currentNotificationCenter()
-            .setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
-        delegate
+        NotificationDelegate::new()
     });
+    // Set on every call: GPUI installs its own delegate when GPUI Kit
+    // initialises, which would otherwise swallow every click.
+    UNUserNotificationCenter::currentNotificationCenter()
+        .setDelegate(Some(ProtocolObject::from_ref(&**delegate)));
 }
 fn begin_permission_read() -> oneshot::Receiver<Permission> {
     let (tx, rx) = oneshot::channel();

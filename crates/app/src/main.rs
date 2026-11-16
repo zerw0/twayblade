@@ -56,6 +56,10 @@ fn main() {
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            // Kit just made GPUI the notification delegate; take clicks back.
+            if !preview {
+                twayblade_platform::notifications::initialize_activation();
+            }
             Theme::sync_system_appearance(None, cx);
             if preview {
                 if args.iter().any(|arg| arg == "--light") { Theme::change(ThemeMode::Light, None, cx); }

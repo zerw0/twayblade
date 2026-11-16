@@ -89,7 +89,9 @@ pub(super) fn receive_launch(payload: &str) {
         queue().send_replace(Some(target));
     }
 }
-/// Install before application launch completion. Does not request permission.
+/// Install before application launch completion, and again after GPUI Kit
+/// initialises: Kit registers GPUI's own notification delegate, which replaces
+/// this one (#82). Does not request permission.
 pub fn initialize_activation() {
     #[cfg(target_os = "macos")]
     super::macos::initialize();

@@ -3216,6 +3216,102 @@ fn switching_back_to_an_account_reopens_its_last_room(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_click_for_another_account_opens_its_room_after_the_switch(cx: &mut TestAppContext) {
+    use twayblade_platform::notifications::Activation;
+    let (window, app) = preview_window(cx);
+    let (own, open) = cx.update(|cx| {
+        let app = app.read(cx);
+        (app.snapshot.user_id.clone(), app.snapshot.account_instance)
+    });
+    let other = open.wrapping_add(7);
+    let all_rooms = cx.update(|cx| app.read(cx).snapshot.rooms.clone());
+    let accounts = move |active_other: bool| {
+        vec![
+            crate::backend::AccountEntry {
+                id: "own".into(),
+                active: !active_other,
+                instance: open,
+                ..Default::default()
+            },
+            crate::backend::AccountEntry {
+                id: "other".into(),
+                active: active_other,
+                instance: other,
+                ..Default::default()
+            },
+        ]
+    };
+    let land = |cx: &mut TestAppContext, user: &str, instance: u128, loaded: bool| {
+        let user = user.to_owned();
+        cx.update_window(window, |_, window, cx| {
+            app.update(cx, |app, cx| {
+                let mut snapshot = app.snapshot.clone();
+                snapshot.user_id = user;
+                snapshot.account_instance = instance;
+                snapshot.accounts = accounts(instance == other);
+                // Before the list loads: no rooms and no spaces yet.
+                snapshot.rooms = if loaded {
+                    all_rooms.clone()
+                } else {
+                    Vec::new()
+                };
+                snapshot.spaces_loaded = loaded;
+                snapshot.revision += 1;
+                app.apply(snapshot, window, cx);
+            });
+        })
+        .expect("snapshot");
+        cx.run_until_parked();
+    };
+    // Each account has shown a room before.
+    land(cx, &own, open, true);
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| app.select_room("critique".into(), window, cx));
+    })
+    .unwrap();
+    land(cx, "@other:preview.invalid", other, true);
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| app.select_room("research".into(), window, cx));
+    })
+    .unwrap();
+    land(cx, &own, open, true);
+    // A click for the other account's "announcements" switches to it.
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.activate_notification(
+                Activation {
+                    account: other,
+                    room: "announcements".into(),
+                    thread: None,
+                },
+                window,
+                cx,
+            )
+        });
+    })
+    .unwrap();
+    // The switch lands in steps: first no rooms, then the list, then more
+    // updates, which must not close the room again.
+    land(cx, "@other:preview.invalid", other, false);
+    land(cx, "@other:preview.invalid", other, true);
+    land(cx, "@other:preview.invalid", other, true);
+    let (room, space) = cx.update(|cx| {
+        let navigation = &app.read(cx).navigation;
+        (
+            navigation.selected_room.clone(),
+            navigation.selected_space.clone(),
+        )
+    });
+    assert_eq!(
+        room,
+        Some("announcements".into()),
+        "the clicked room wins over the account's last room"
+    );
+    // "announcements" belongs to a space, so it opens there, not in Home.
+    assert!(space.is_some(), "opened in its space");
+}
+
+#[gpui_kit::test]
 fn a_notification_from_another_account_switches_and_then_opens_the_room(cx: &mut TestAppContext) {
     use twayblade_platform::notifications::Activation;
     let (window, app) = preview_window(cx);

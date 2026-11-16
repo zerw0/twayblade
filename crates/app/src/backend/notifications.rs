@@ -216,6 +216,7 @@ pub(super) async fn run(
 pub(super) fn publish_click(updates: &watch::Sender<Snapshot>, target: os::Activation) {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    tracing::info!(name: "notification_click", serial);
     publish(updates, |view| {
         view.notification_click = Some((serial, target))
     });
