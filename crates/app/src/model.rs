@@ -66,9 +66,13 @@ pub(super) fn grouped_with_boundaries(
     for (ix, message) in messages.iter().enumerate() {
         let joins = ix > 0 && {
             let previous = &messages[ix - 1];
+            // Membership changes group with each other, whoever made them,
+            // and never with messages.
+            let membership = |m: &Message| m.kind == MessageKind::Membership;
             !message.new_messages
                 && !boundaries.contains(&message.id)
-                && previous.sender == message.sender
+                && membership(previous) == membership(message)
+                && (membership(message) || previous.sender == message.sender)
                 && (0..300_000)
                     .contains(&message.timestamp_ms.saturating_sub(previous.timestamp_ms))
                 && Local
@@ -287,6 +291,26 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
             message.can_retry = true;
             message.event_id = None;
         }
+        // A membership change between messages, shown as a quiet line.
+        if snapshot.messages.len() > 3 {
+            snapshot.messages.insert(
+                3,
+                Message {
+                    id: "sample-joined".into(),
+                    event_id: Some("$sample-joined:preview.invalid".into()),
+                    sender: "@robin:preview.invalid".into(),
+                    display_name: "Robin".into(),
+                    kind: MessageKind::Membership,
+                    timestamp_ms: 1_794_300_000_000 + 70_000,
+                    membership: Some(twayblade_core::conversation::Membership {
+                        kind: twayblade_core::conversation::MembershipKind::Joined,
+                        target: "@robin:preview.invalid".into(),
+                        target_name: "Robin".into(),
+                    }),
+                    ..Default::default()
+                },
+            );
+        }
     }
     snapshot.members = vec![
         Member {
@@ -437,7 +461,8 @@ mod tests {
     #[test]
     fn grouping_uses_identity_forward_time_and_keeps_stable_message_ids() {
         let mut snapshot = preview(false, 6);
-        assert_eq!(grouped(&snapshot.messages), vec![0..3, 3..6]);
+        // The sample's membership line (index 3) is a group of its own.
+        assert_eq!(grouped(&snapshot.messages), vec![0..3, 3..4, 4..7]);
         snapshot.messages[1].sender = "@other:preview.invalid".into();
         snapshot.messages[1].display_name = snapshot.messages[0].display_name.clone();
         assert_eq!(grouped(&snapshot.messages)[0], 0..1);
@@ -834,5 +859,31 @@ mod rich_markdown_tests {
         );
         // Spoilers stay hidden.
         assert!(!render("<span data-mx-spoiler>secret</span>").contains("secret"));
+    }
+}
+
+#[cfg(test)]
+mod membership_tests {
+    use super::{Message, MessageKind, grouped};
+
+    fn message(id: &str, sender: &str, kind: MessageKind, at: i64) -> Message {
+        Message {
+            id: id.into(),
+            sender: sender.into(),
+            kind,
+            timestamp_ms: 1_794_300_000_000 + at,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn membership_changes_group_together_and_apart_from_messages() {
+        let messages = [
+            message("a", "@alex", MessageKind::Text, 0),
+            message("b", "@robin", MessageKind::Membership, 1_000),
+            message("c", "@sam", MessageKind::Membership, 2_000),
+            message("d", "@alex", MessageKind::Text, 3_000),
+        ];
+        assert_eq!(grouped(&messages), vec![0..1, 1..3, 3..4]);
     }
 }

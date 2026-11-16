@@ -35,6 +35,59 @@ pub enum MessageKind {
     File,
     Undecryptable,
     Redacted,
+    /// Someone joined, left, was invited, … (`MessageRow::membership`).
+    Membership,
+}
+
+/// A membership change in the timeline; the frontend words it (#104).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MembershipKind {
+    Joined,
+    Left,
+    Invited,
+    InvitationAccepted,
+    InvitationRejected,
+    InvitationRevoked,
+    Kicked,
+    Banned,
+    KickedAndBanned,
+    Unbanned,
+    Knocked,
+    KnockAccepted,
+    KnockRetracted,
+    KnockDenied,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Membership {
+    pub kind: MembershipKind,
+    /// The member it happened to; the row's sender is who did it.
+    pub target: String,
+    pub target_name: String,
+}
+
+/// The SDK's change, or None for no-ops and unknown changes, which stay hidden.
+pub(crate) fn membership_kind(
+    change: matrix_sdk_ui::timeline::MembershipChange,
+) -> Option<MembershipKind> {
+    use matrix_sdk_ui::timeline::MembershipChange as Change;
+    Some(match change {
+        Change::Joined => MembershipKind::Joined,
+        Change::Left => MembershipKind::Left,
+        Change::Invited => MembershipKind::Invited,
+        Change::InvitationAccepted => MembershipKind::InvitationAccepted,
+        Change::InvitationRejected => MembershipKind::InvitationRejected,
+        Change::InvitationRevoked => MembershipKind::InvitationRevoked,
+        Change::Kicked => MembershipKind::Kicked,
+        Change::Banned => MembershipKind::Banned,
+        Change::KickedAndBanned => MembershipKind::KickedAndBanned,
+        Change::Unbanned => MembershipKind::Unbanned,
+        Change::Knocked => MembershipKind::Knocked,
+        Change::KnockAccepted => MembershipKind::KnockAccepted,
+        Change::KnockRetracted => MembershipKind::KnockRetracted,
+        Change::KnockDenied => MembershipKind::KnockDenied,
+        Change::None | Change::Error | Change::NotImplemented => return None,
+    })
 }
 
 #[derive(Clone, Default)]
@@ -63,6 +116,8 @@ pub struct MessageRow {
     pub can_retry: bool,
     pub event_id: Option<String>,
     pub new_messages: bool,
+    /// Set for `MessageKind::Membership`.
+    pub membership: Option<Membership>,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -416,12 +471,23 @@ fn rows<'a>(
             }
             let event = item.as_event()?;
             let content = event.content();
+            let mut membership = None;
             let (kind, body, attachment) = if let Some(message) = content.as_message() {
                 message_content(message.msgtype())
             } else if content.is_unable_to_decrypt() {
                 (MessageKind::Undecryptable, String::new(), None)
             } else if content.is_redacted() {
                 (MessageKind::Redacted, String::new(), None)
+            } else if let TimelineItemContent::MembershipChange(change) = content {
+                let kind = change.change().and_then(membership_kind)?;
+                membership = Some(Membership {
+                    kind,
+                    target: change.user_id().to_string(),
+                    target_name: change
+                        .display_name()
+                        .unwrap_or_else(|| change.user_id().to_string()),
+                });
+                (MessageKind::Membership, String::new(), None)
             } else {
                 return None;
             };
@@ -479,6 +545,7 @@ fn rows<'a>(
                     event.send_state(),
                     Some(EventSendState::SendingFailed { .. })
                 ) && event.local_echo_send_handle().is_some(),
+                membership,
             })
         })
         .collect()

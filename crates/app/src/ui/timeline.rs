@@ -338,6 +338,9 @@ impl MatrixApp {
                 .child(Icon::new(IconName::Lock).small())
                 .child("Unable to decrypt this message.")
                 .into_any_element(),
+            MessageKind::Membership => {
+                return self.membership_line(message, in_thread, cx);
+            }
             MessageKind::Redacted => div()
                 .px(px(12.))
                 .py(px(7.))
@@ -650,6 +653,20 @@ impl MatrixApp {
             }
             row = row.child(failure);
         }
+        if let Some(canvas) = self.latest_visibility(message, in_thread, cx) {
+            row = row.relative().child(canvas);
+        }
+        row.test_support().into_any_element()
+    }
+
+    /// For the latest event: a full-size canvas that reports whether it is on
+    /// screen, which sends the read receipt. None for any other row.
+    fn latest_visibility(
+        &self,
+        message: &crate::backend::Message,
+        in_thread: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let messages = if in_thread {
             self.thread
                 .as_ref()
@@ -668,17 +685,20 @@ impl MatrixApp {
         } else {
             self.latest_event()
         };
-        if message.event_id.is_some()
-            && latest.as_deref() == Some(message.id.as_str())
-            && let (Some(event_id), Some(room)) = (
-                message.event_id.clone(),
-                self.navigation.selected_room.clone(),
-            )
+        if !(message.event_id.is_some() && latest.as_deref() == Some(message.id.as_str())) {
+            return None;
+        }
+        let (Some(event_id), Some(room)) = (
+            message.event_id.clone(),
+            self.navigation.selected_room.clone(),
+        ) else {
+            return None;
+        };
         {
             let weak = cx.weak_entity();
             let account = self.snapshot.account_instance;
             let request = self.thread.as_ref().map(|t| t.request);
-            row = row.relative().child(
+            Some(
                 canvas(
                     move |bounds, window, cx| {
                         let visible = bounds.intersect(&window.content_mask().bounds);
@@ -702,10 +722,35 @@ impl MatrixApp {
                 .absolute()
                 .top_0()
                 .left_0()
-                .size_full(),
-            );
+                .size_full()
+                .into_any_element(),
+            )
         }
-        row.test_support().into_any_element()
+    }
+
+    /// A membership change as a quiet centred line, not a message (#104).
+    fn membership_line(
+        &self,
+        message: &crate::backend::Message,
+        in_thread: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let text = membership_text(message, &self.snapshot.user_id);
+        h_flex()
+            .id(SharedString::from(format!("message-row-{}", message.id)))
+            .role(Role::Group)
+            .aria_label(format!("{}, {text}", time_label(message.timestamp_ms)))
+            .relative()
+            .w_full()
+            .justify_center()
+            .py(px(2.))
+            .gap(px(6.))
+            .text_size(px(11.5))
+            .text_color(cx.theme().muted_foreground)
+            .child(div().truncate().child(text))
+            .children(self.latest_visibility(message, in_thread, cx))
+            .test_support()
+            .into_any_element()
     }
 
     pub(crate) fn message_group(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -802,6 +847,13 @@ impl MatrixApp {
                     .child(div().flex_1().h(px(1.)).bg(palette.error.opacity(0.55)))
                     .test_support(),
             );
+        }
+        // Membership changes: quiet lines, no avatar or name header.
+        if first.kind == MessageKind::Membership {
+            for message in &messages[range] {
+                group = group.child(self.membership_line(message, in_thread, cx));
+            }
+            return group.into_any_element();
         }
         if self.preferences.chat.style != ChatStyle::Bubbles {
             let style = self.preferences.chat.style;
@@ -1089,6 +1141,44 @@ impl MatrixApp {
 
 /// What a screen reader announces for one message: who, when, what, and its
 /// state. Uses the same text the row shows; nothing is logged.
+/// "Alex joined", "You invited Sam", … for a membership row.
+pub(crate) fn membership_text(message: &crate::backend::Message, own_user: &str) -> String {
+    use twayblade_core::conversation::MembershipKind::*;
+    let Some(change) = &message.membership else {
+        return String::new();
+    };
+    let actor = if message.sender == own_user {
+        "You".to_owned()
+    } else {
+        message.display_name.clone()
+    };
+    let target = if change.target == own_user {
+        "you".to_owned()
+    } else {
+        change.target_name.clone()
+    };
+    // The member is also the subject of their own changes.
+    let subject = if change.target == own_user {
+        "You".to_owned()
+    } else {
+        change.target_name.clone()
+    };
+    match change.kind {
+        Joined | InvitationAccepted => format!("{subject} joined"),
+        Left => format!("{subject} left"),
+        Invited => format!("{actor} invited {target}"),
+        InvitationRejected => format!("{subject} declined the invitation"),
+        InvitationRevoked => format!("{actor} withdrew the invitation for {target}"),
+        Kicked => format!("{actor} removed {target}"),
+        Banned | KickedAndBanned => format!("{actor} banned {target}"),
+        Unbanned => format!("{actor} unbanned {target}"),
+        Knocked => format!("{subject} asked to join"),
+        KnockAccepted => format!("{actor} let {target} in"),
+        KnockRetracted => format!("{subject} withdrew the request to join"),
+        KnockDenied => format!("{actor} declined the request from {target}"),
+    }
+}
+
 pub(crate) fn accessible_message(message: &crate::backend::Message, own_user: &str) -> String {
     let who = if message.sender == own_user {
         "You".to_owned()
@@ -1124,7 +1214,45 @@ pub(crate) fn accessible_message(message: &crate::backend::Message, own_user: &s
 
 #[cfg(test)]
 mod tests {
-    use super::{DeliveryState, MessageKind, accessible_message};
+    use super::{DeliveryState, MessageKind, accessible_message, membership_text};
+    #[test]
+    fn membership_lines_name_who_did_what() {
+        use twayblade_core::conversation::{Membership, MembershipKind};
+        let row = |sender: &str, name: &str, kind, target: &str, target_name: &str| {
+            crate::backend::Message {
+                sender: sender.into(),
+                display_name: name.into(),
+                kind: MessageKind::Membership,
+                membership: Some(Membership {
+                    kind,
+                    target: target.into(),
+                    target_name: target_name.into(),
+                }),
+                ..Default::default()
+            }
+        };
+        let me = "@me:example.org";
+        assert_eq!(
+            membership_text(
+                &row("@robin", "Robin", MembershipKind::Joined, "@robin", "Robin"),
+                me
+            ),
+            "Robin joined"
+        );
+        assert_eq!(
+            membership_text(&row(me, "Me", MembershipKind::Invited, "@sam", "Sam"), me),
+            "You invited Sam"
+        );
+        assert_eq!(
+            membership_text(&row("@alex", "Alex", MembershipKind::Kicked, me, "Me"), me),
+            "Alex removed you"
+        );
+        assert_eq!(
+            membership_text(&row(me, "Me", MembershipKind::Left, me, "Me"), me),
+            "You left"
+        );
+    }
+
     #[test]
     fn screen_readers_hear_sender_content_and_state() {
         let message = |sender: &str, kind, body: &str| crate::backend::Message {

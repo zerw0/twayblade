@@ -30,6 +30,11 @@ pub(crate) enum Step {
     Last,
 }
 
+/// Messages the timeline cursor stops on: not membership lines.
+fn navigable(message: &Message) -> bool {
+    message.kind != crate::backend::MessageKind::Membership
+}
+
 /// The message `step` lands on from `from`, or None at either end.
 pub(crate) fn step_index(from: usize, len: usize, step: Step) -> Option<usize> {
     let target = match step {
@@ -89,7 +94,9 @@ impl MatrixApp {
         let slot = if in_thread { THREAD } else { MAIN };
         self.message_cursor[slot].as_deref().or_else(|| {
             self.timeline_messages(in_thread)
-                .last()
+                .iter()
+                .rev()
+                .find(|m| navigable(m))
                 .map(|m| m.id.as_str())
         })
     }
@@ -156,7 +163,12 @@ impl MatrixApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let messages = self.timeline_messages(in_thread);
+        // Membership lines are read in passing, not stopped on.
+        let messages: Vec<&Message> = self
+            .timeline_messages(in_thread)
+            .iter()
+            .filter(|m| navigable(m))
+            .collect();
         let Some(ix) = messages.iter().position(|m| m.id == from) else {
             return false;
         };
