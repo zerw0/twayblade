@@ -80,7 +80,33 @@ pub struct ScreenSource {
     pub selection: ScreenSelection,
     /// OS-provided title, never logged or persisted. None for unnamed monitors.
     pub title: Option<String>,
+    /// A small still of the source for the chooser, held in memory only.
+    /// None when the source gave no frame in time or is past the budget.
+    pub thumbnail: Option<Thumbnail>,
 }
+/// A downscaled BGRA still (GPUI's upload layout), at most
+/// `THUMBNAIL_WIDTH`×`THUMBNAIL_HEIGHT`, tightly packed.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Thumbnail {
+    pub width: u32,
+    pub height: u32,
+    pub bgra: Arc<[u8]>,
+}
+impl std::fmt::Debug for Thumbnail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Thumbnail")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .finish_non_exhaustive()
+    }
+}
+pub const THUMBNAIL_WIDTH: u32 = 192;
+pub const THUMBNAIL_HEIGHT: u32 = 120;
+/// Only the first sources get a still; the rest show an icon.
+const MAX_THUMBNAILS: usize = 16;
+/// Per-source wait for a first frame, and the budget for all of them.
+const THUMBNAIL_WAIT: Duration = Duration::from_millis(400);
+const THUMBNAILS_BUDGET: Duration = Duration::from_secs(3);
 impl std::fmt::Debug for ScreenSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScreenSource").finish_non_exhaustive()
@@ -322,7 +348,8 @@ pub async fn sources(kind: SourceKind) -> Result<Vec<ScreenSource>, ScreenError>
         .try_acquire_owned()
         .map_err(|_| ScreenError::Busy)?;
     tokio::time::timeout(
-        Duration::from_secs(5),
+        // The list itself, then the bounded stills.
+        Duration::from_secs(5) + THUMBNAILS_BUDGET + THUMBNAIL_WAIT,
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             #[cfg(target_os = "windows")]
@@ -341,11 +368,21 @@ pub async fn sources(kind: SourceKind) -> Result<Vec<ScreenSource>, ScreenError>
                             id: source.id(),
                         },
                         title: (!title.is_empty()).then_some(title),
+                        thumbnail: None,
                     }
                 })
                 .collect();
+            drop(capturer);
             if sources.is_empty() {
                 return Err(ScreenError::NoSources);
+            }
+            let mut sources = sources;
+            let started = Instant::now();
+            for source in sources.iter_mut().take(MAX_THUMBNAILS) {
+                if started.elapsed() >= THUMBNAILS_BUDGET {
+                    break;
+                }
+                source.thumbnail = still(backend, source.selection);
             }
             Ok(sources)
         }),
@@ -353,6 +390,99 @@ pub async fn sources(kind: SourceKind) -> Result<Vec<ScreenSource>, ScreenError>
     .await
     .map_err(|_| ScreenError::QueryTimeout)?
     .map_err(|_| ScreenError::WorkerUnavailable)?
+}
+
+/// One frame of `selection` through its own short-lived capturer, downscaled.
+/// A capturer can't switch sources once started, so each still gets a new one.
+fn still(backend: ScreenBackend, selection: ScreenSelection) -> Option<Thumbnail> {
+    let mut capturer = DesktopCapturer::new(options(backend, selection.kind).ok()?)?;
+    let source = capturer
+        .get_source_list()
+        .into_iter()
+        .find(|source| source.id() == selection.id)?;
+    let slot = Arc::new(std::sync::Mutex::new(None));
+    let frames = slot.clone();
+    capturer.start_capture(Some(source), move |result| {
+        if let Ok(frame) = result
+            && let Ok(mut slot) = frames.lock()
+            && slot.is_none()
+            && frame.width() > 0
+            && frame.height() > 0
+        {
+            *slot = downscale(
+                frame.data(),
+                frame.stride() as usize,
+                frame.width() as u32,
+                frame.height() as u32,
+            );
+        }
+    });
+    let started = Instant::now();
+    while started.elapsed() < THUMBNAIL_WAIT {
+        capturer.capture_frame();
+        if let Some(thumbnail) = slot.lock().ok()?.take() {
+            return Some(thumbnail);
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    None
+}
+
+/// Box-averages a BGRA frame into a still that fits the thumbnail size,
+/// keeping the aspect ratio. None for frames whose buffer is too short.
+fn downscale(data: &[u8], stride: usize, width: u32, height: u32) -> Option<Thumbnail> {
+    if width == 0 || height == 0 || width > 16_384 || height > 16_384 {
+        return None;
+    }
+    let (w, h) = (width as usize, height as usize);
+    if stride < w * 4 || data.len() < stride * (h - 1) + w * 4 {
+        return None;
+    }
+    let scale = f64::max(
+        width as f64 / THUMBNAIL_WIDTH as f64,
+        height as f64 / THUMBNAIL_HEIGHT as f64,
+    )
+    .max(1.);
+    let out_w = ((width as f64 / scale).round() as usize).max(1);
+    let out_h = ((height as f64 / scale).round() as usize).max(1);
+    let mut bgra = vec![0u8; out_w * out_h * 4];
+    for oy in 0..out_h {
+        let (y0, y1) = (
+            oy * h / out_h,
+            ((oy + 1) * h / out_h).max(oy * h / out_h + 1),
+        );
+        for ox in 0..out_w {
+            let (x0, x1) = (
+                ox * w / out_w,
+                ((ox + 1) * w / out_w).max(ox * w / out_w + 1),
+            );
+            // At most 4×4 samples per pixel: enough to smooth text and edges.
+            let ys = (y1 - y0).div_ceil(4).max(1);
+            let xs = (x1 - x0).div_ceil(4).max(1);
+            let mut sum = [0u32; 3];
+            let mut n = 0u32;
+            for y in (y0..y1).step_by(ys) {
+                for x in (x0..x1).step_by(xs) {
+                    let at = y * stride + x * 4;
+                    for c in 0..3 {
+                        sum[c] += data[at + c] as u32;
+                    }
+                    n += 1;
+                }
+            }
+            let at = (oy * out_w + ox) * 4;
+            for c in 0..3 {
+                bgra[at + c] = (sum[c] / n) as u8;
+            }
+            // Desktop frames leave alpha undefined; stills are opaque.
+            bgra[at + 3] = 255;
+        }
+    }
+    Some(Thumbnail {
+        width: out_w as u32,
+        height: out_h as u32,
+        bgra: bgra.into(),
+    })
 }
 
 /// Fits `width`×`height` inside the maximum, keeping the aspect ratio and
@@ -485,8 +615,46 @@ mod tests {
                 id: 42,
             },
             title: Some("private window title".into()),
+            thumbnail: downscale(&[7; 64], 16, 4, 4),
         };
-        assert!(!format!("{source:?}").contains("private window title"));
+        let debug = format!("{source:?}");
+        assert!(!debug.contains("private window title"));
+        assert!(!debug.contains("7, 7"));
+    }
+    #[test]
+    fn stills_fit_the_thumbnail_keep_aspect_and_average_colours() {
+        // A 1920×1080 frame with a stride wider than its rows: left half
+        // blue, right half red (BGRA).
+        let (w, h, stride) = (1920usize, 1080usize, 1920 * 4 + 64);
+        let mut data = vec![0u8; stride * h];
+        for y in 0..h {
+            for x in 0..w {
+                let at = y * stride + x * 4;
+                let px = if x < w / 2 {
+                    [255, 0, 0, 0]
+                } else {
+                    [0, 0, 255, 0]
+                };
+                data[at..at + 4].copy_from_slice(&px);
+            }
+        }
+        let still = downscale(&data, stride, w as u32, h as u32).unwrap();
+        assert_eq!((still.width, still.height), (192, 108));
+        assert_eq!(still.bgra.len(), 192 * 108 * 4);
+        assert_eq!(&still.bgra[..4], &[255, 0, 0, 255]);
+        let last = still.bgra.len() - 4;
+        assert_eq!(&still.bgra[last..], &[0, 0, 255, 255]);
+        // Tall windows fit by height; small sources are not enlarged.
+        let tall = downscale(&vec![0; 400 * 4 * 1000], 400 * 4, 400, 1000).unwrap();
+        assert_eq!((tall.width, tall.height), (48, 120));
+        let small = downscale(&[0; 64 * 4 * 40], 64 * 4, 64, 40).unwrap();
+        assert_eq!((small.width, small.height), (64, 40));
+    }
+    #[test]
+    fn stills_refuse_short_buffers_and_bad_sizes() {
+        assert!(downscale(&[0; 15], 16, 4, 1).is_none());
+        assert!(downscale(&[0; 64], 8, 4, 4).is_none());
+        assert!(downscale(&[], 0, 0, 0).is_none());
     }
     #[test]
     fn large_screens_fit_the_send_size_with_even_dimensions() {

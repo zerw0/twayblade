@@ -11,7 +11,7 @@ pub use ringing::{CallActivity, IncomingAction, IncomingCall};
 pub use session::{CallHandle, NativeCall, NativeControl};
 use std::collections::HashMap;
 pub use twayblade_media::screen::{
-    ScreenBackend, ScreenError, ScreenSelection, ScreenSource, SourceKind,
+    ScreenBackend, ScreenError, ScreenSelection, ScreenSource, SourceKind, Thumbnail,
 };
 pub use twayblade_media::{
     Device as CallDevice, Devices as CallDevices, LatestFrame, VideoFrame, VideoTracks,

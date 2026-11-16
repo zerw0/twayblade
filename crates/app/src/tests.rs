@@ -2745,12 +2745,17 @@ fn screen_picker_lists_sources_and_opens_from_the_share_button(cx: &mut TestAppC
         window.render_frame(cx);
         assert!(window.find("screen-picker-cancel").visible());
         assert!(window.find("share-source-1").visible());
+        // Both screens show stills.
+        assert_eq!(app.read(cx).screen_stills.borrow().len(), 2);
         window.click("screen-picker-windows", cx);
     })
     .expect("switch to windows");
     cx.update(|cx| assert_eq!(app.read(cx).screen_picker, Some(SourceKind::Window)));
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
+        // The Windows tab keeps only its one still (the other window has
+        // none) and released the screens'.
+        assert_eq!(app.read(cx).screen_stills.borrow().len(), 1);
         window.click("screen-picker-cancel", cx);
     })
     .expect("cancel");
@@ -2759,6 +2764,8 @@ fn screen_picker_lists_sources_and_opens_from_the_share_button(cx: &mut TestAppC
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
         assert!(window.find_all("screen-picker-cancel").is_empty());
+        // A closed chooser holds no stills.
+        assert!(app.read(cx).screen_stills.borrow().is_empty());
         window.click("call-screen-share", cx);
     })
     .expect("open from the share button");

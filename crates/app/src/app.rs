@@ -458,6 +458,9 @@ pub(super) struct MatrixApp {
     /// The in-app screen/window chooser, open on this tab. Only where the OS has
     /// no picker of its own (X11, Windows).
     pub(super) screen_picker: Option<twayblade_core::calls::SourceKind>,
+    /// GPU images of the chooser's stills, kept while their sources are listed
+    /// and released when the list changes or the chooser closes.
+    pub(super) screen_stills: std::cell::RefCell<Vec<crate::ui::calls::ScreenStill>>,
     pub(super) call_follow: crate::ui::call_layout::SpeakerFollow,
     /// Wakes the view when the follow pick may change.
     pub(super) call_follow_timer: Option<Task<()>>,
@@ -834,6 +837,7 @@ impl MatrixApp {
             call_tiles: HashMap::new(),
             call_focus: None,
             screen_picker: None,
+            screen_stills: Default::default(),
             call_follow: Default::default(),
             call_follow_timer: None,
             call_full_screen: false,

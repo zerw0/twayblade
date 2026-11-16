@@ -80,6 +80,13 @@ impl Render for VideoTile {
     }
 }
 
+/// A chooser still uploaded for GPUI, keyed by its source and frame.
+pub(crate) struct ScreenStill {
+    selection: twayblade_core::calls::ScreenSelection,
+    frame: Arc<[u8]>,
+    image: Arc<RenderImage>,
+}
+
 fn live(call: &CallState) -> bool {
     !matches!(call.phase, CallPhase::Ended(_))
 }
@@ -1906,9 +1913,57 @@ impl MatrixApp {
         self.set_screen_share(start)
     }
 
+    /// Releases stills whose source is gone or changed, or whose tab is not shown.
+    fn prune_screen_stills(&self, call: &CallState, cx: &mut Context<Self>) {
+        let shown = self.screen_picker;
+        let mut stills = self.screen_stills.borrow_mut();
+        let mut kept = Vec::with_capacity(stills.len());
+        for still in stills.drain(..) {
+            let listed = shown == Some(still.selection.kind)
+                && call.screen_sources.iter().any(|source| {
+                    source.selection == still.selection
+                        && source
+                            .thumbnail
+                            .as_ref()
+                            .is_some_and(|t| Arc::ptr_eq(&t.bgra, &still.frame))
+                });
+            if listed {
+                kept.push(still);
+            } else {
+                cx.drop_image(still.image, None);
+            }
+        }
+        *stills = kept;
+    }
+
+    /// The GPU image for a source's still, uploaded once per frame.
+    fn screen_still(
+        &self,
+        source: &twayblade_core::calls::ScreenSource,
+    ) -> Option<Arc<RenderImage>> {
+        let thumbnail = source.thumbnail.as_ref()?;
+        let mut stills = self.screen_stills.borrow_mut();
+        if let Some(still) = stills.iter().find(|still| {
+            still.selection == source.selection && Arc::ptr_eq(&still.frame, &thumbnail.bgra)
+        }) {
+            return Some(still.image.clone());
+        }
+        // Stills are BGRA, which is what GPUI uploads.
+        let buffer =
+            image::RgbaImage::from_raw(thumbnail.width, thumbnail.height, thumbnail.bgra.to_vec())?;
+        let image = Arc::new(RenderImage::new(vec![image::Frame::new(buffer)]));
+        stills.push(ScreenStill {
+            selection: source.selection,
+            frame: thumbnail.bgra.clone(),
+            image: image.clone(),
+        });
+        Some(image)
+    }
+
     /// The screen and window chooser, above the call controls.
     fn screen_picker_view(&self, call: &CallState, cx: &mut Context<Self>) -> Option<AnyElement> {
         use twayblade_core::calls::SourceKind;
+        self.prune_screen_stills(call, cx);
         let kind = self.screen_picker?;
         let muted_fg = cx.theme().muted_foreground;
         let sources: Vec<_> = call
@@ -1948,25 +2003,46 @@ impl MatrixApp {
                 SourceKind::Screen => format!("Screen {}", index + 1),
                 SourceKind::Window => format!("Window {}", index + 1),
             });
+            // A 16:10 frame for the still (or the icon when there is none),
+            // so rows line up whatever the source's shape.
+            let still = self.screen_still(source);
+            let preview = div()
+                .flex_none()
+                .w(px(64.))
+                .h(px(40.))
+                .rounded(px(4.))
+                .overflow_hidden()
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().secondary)
+                .flex()
+                .items_center()
+                .justify_center()
+                .map(|frame| match still {
+                    Some(image) => {
+                        frame.child(img(image).size_full().object_fit(ObjectFit::Contain))
+                    }
+                    None => frame.child(
+                        Icon::new(match kind {
+                            SourceKind::Screen => IconName::Monitor,
+                            SourceKind::Window => IconName::AppWindow,
+                        })
+                        .size(px(14.))
+                        .text_color(muted_fg),
+                    ),
+                });
             Button::new(SharedString::from(format!("share-source-{index}")))
                 .ghost()
-                .h(px(30.))
+                .h(px(48.))
                 .w_full()
                 .justify_start()
-                .px(px(8.))
+                .px(px(6.))
                 .accessibility_label(format!("Share {name}"))
                 .child(
                     h_flex()
-                        .gap(px(8.))
+                        .gap(px(10.))
                         .w_full()
-                        .child(
-                            Icon::new(match kind {
-                                SourceKind::Screen => IconName::Monitor,
-                                SourceKind::Window => IconName::AppWindow,
-                            })
-                            .size(px(14.))
-                            .text_color(muted_fg),
-                        )
+                        .child(preview)
                         .child(div().flex_1().min_w_0().truncate().text_left().child(name)),
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -2039,7 +2115,7 @@ impl MatrixApp {
                 .child(
                     v_flex()
                         .id("screen-picker-list")
-                        .max_h(px(180.))
+                        .max_h(px(220.))
                         .overflow_y_scroll()
                         .children(rows)
                         .when(sources.is_empty(), |list| {
@@ -2627,15 +2703,52 @@ impl MatrixApp {
                 .then_some(twayblade_core::calls::ScreenBackend::X11),
             screen_sources: if flag == "--preview-call-picker" {
                 use twayblade_core::calls::{ScreenSelection, ScreenSource, SourceKind};
+                // Generated stills; the last window has none, as when a
+                // source gives no frame in time.
+                let full = preview_screen(1600, 1000);
+                let still = |width: u32, height: u32| {
+                    let full = full.as_ref()?;
+                    let mut bgra = Vec::with_capacity((width * height * 4) as usize);
+                    for y in 0..height {
+                        for x in 0..width {
+                            let at = ((y * full.height / height) * full.width
+                                + x * full.width / width)
+                                as usize
+                                * 4;
+                            bgra.extend_from_slice(&full.bgra[at..at + 4]);
+                        }
+                    }
+                    Some(twayblade_core::calls::Thumbnail {
+                        width,
+                        height,
+                        bgra: bgra.into(),
+                    })
+                };
                 [
-                    (SourceKind::Screen, 1, Some("DP-1 · 2560 × 1440")),
-                    (SourceKind::Screen, 2, Some("HDMI-1 · 1920 × 1080")),
-                    (SourceKind::Window, 3, Some("Design review · Firefox")),
-                    (SourceKind::Window, 4, Some("Terminal")),
+                    (
+                        SourceKind::Screen,
+                        1,
+                        Some("DP-1 · 2560 × 1440"),
+                        still(192, 108),
+                    ),
+                    (
+                        SourceKind::Screen,
+                        2,
+                        Some("HDMI-1 · 1920 × 1080"),
+                        still(192, 108),
+                    ),
+                    (
+                        SourceKind::Window,
+                        3,
+                        Some("Design review · Firefox"),
+                        still(192, 120),
+                    ),
+                    (SourceKind::Window, 4, Some("Terminal"), None),
                 ]
-                .map(|(kind, id, title)| ScreenSource {
+                .map(|(kind, id, title, thumbnail)| ScreenSource {
                     selection: ScreenSelection { kind, id },
                     title: title.map(Into::into),
+                    thumbnail,
                 })
                 .to_vec()
             } else {
