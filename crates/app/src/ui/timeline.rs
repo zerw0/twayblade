@@ -414,7 +414,13 @@ impl MatrixApp {
             .items_center()
             .gap(px(4.))
             .when(outgoing, |line| line.flex_row_reverse());
-        line = line.child(div().min_w_0().child(bubble));
+        // Not on the server yet (queued, uploading or failed): dimmed until sent.
+        line = line.child(
+            div()
+                .min_w_0()
+                .opacity(delivery_opacity(message.delivery))
+                .child(bubble),
+        );
         // React and reply-in-thread share one small bar that appears on hover.
         let mut actions = h_flex()
             .flex_none()
@@ -1141,6 +1147,15 @@ impl MatrixApp {
 
 /// What a screen reader announces for one message: who, when, what, and its
 /// state. Uses the same text the row shows; nothing is logged.
+/// Full strength once the server has a message; dimmed while it waits in the
+/// send queue or after it failed (#107).
+pub(crate) fn delivery_opacity(delivery: DeliveryState) -> f32 {
+    match delivery {
+        DeliveryState::Queued | DeliveryState::Failed => 0.6,
+        DeliveryState::Remote | DeliveryState::Sent => 1.0,
+    }
+}
+
 /// "Alex joined", "You invited Sam", … for a membership row.
 pub(crate) fn membership_text(message: &crate::backend::Message, own_user: &str) -> String {
     use twayblade_core::conversation::MembershipKind::*;
@@ -1214,7 +1229,17 @@ pub(crate) fn accessible_message(message: &crate::backend::Message, own_user: &s
 
 #[cfg(test)]
 mod tests {
-    use super::{DeliveryState, MessageKind, accessible_message, membership_text};
+    use super::{
+        DeliveryState, MessageKind, accessible_message, delivery_opacity, membership_text,
+    };
+
+    #[test]
+    fn unsent_messages_are_dimmed() {
+        assert_eq!(delivery_opacity(DeliveryState::Queued), 0.6);
+        assert_eq!(delivery_opacity(DeliveryState::Failed), 0.6);
+        assert_eq!(delivery_opacity(DeliveryState::Sent), 1.0);
+        assert_eq!(delivery_opacity(DeliveryState::Remote), 1.0);
+    }
     #[test]
     fn membership_lines_name_who_did_what() {
         use twayblade_core::conversation::{Membership, MembershipKind};

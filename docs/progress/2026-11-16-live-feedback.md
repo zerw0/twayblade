@@ -49,3 +49,10 @@
 - Membership lines with the live account.
 - The large empty space below the last message (#103): not reproduced, so
   no change here.
+
+## Unsent messages dimmed (#107)
+
+A message that is queued, uploading or failed is drawn at 60% opacity until
+the server has it. The "Sending…" and "Send failed" labels and the Retry and
+Cancel buttons stay at full strength. Offline test for the opacity; capture
+of an uploading attachment reviewed. Not verified with the live account.
