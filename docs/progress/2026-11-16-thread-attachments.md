@@ -11,9 +11,12 @@ Each composer has its own stack (`AttachmentStack`): one for the main composer
 and one in `ThreadPanel`. A file added in a thread never goes to the main room.
 The stack is dropped when the thread closes.
 
-Attachments are sent through the thread's timeline (`ThreadAction::Attach`).
-For a thread-focused timeline, the SDK infers the thread relation, so they
-arrive as thread replies.
+Attachments go through the thread's timeline (`ThreadAction::Attach`). Core
+used to call the room's send queue directly, so the thread relation was never
+added, and live use showed a thread image landing in the main room. Core now
+sends every attachment with `Timeline::send_attachment(...).use_send_queue()`.
+A thread-focused timeline adds the thread relation, and the main timeline
+sends exactly as before.
 
 ## Verification
 
@@ -23,9 +26,13 @@ arrive as thread replies.
   `a_thread_reply_has_its_own_attachments` shows that a file being added in
   the thread appears in the thread's tray and not in the main composer.
 
+- Local Synapse: the `threads` profile now sends a file from the thread. Bob
+  sees it in the thread, the root's reply count includes it, and the main room
+  does not show it. The `media` profile (plain and encrypted attachments in the
+  main room, cancel and restart) still passes.
+
 ## Not verified
 
-- Sending to a live homeserver, and checking that Element shows the file inside
-  the thread.
+- The live account after the fix, and how Element shows the file in the thread.
 - Pasting and dropping files on the physical Mac.
 - Linux and Windows.
