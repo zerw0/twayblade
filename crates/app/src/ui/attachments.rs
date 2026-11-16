@@ -74,21 +74,65 @@ pub(crate) struct Staged {
 pub(crate) const MAX_ATTACHMENTS: usize = 10;
 const MAX_STACK_BYTES: u64 = 256 * 1024 * 1024;
 
-impl MatrixApp {
-    pub(crate) fn clear_attachment(&mut self) {
-        self.attachment_request = self.attachment_request.wrapping_add(1);
-        self.attachment_pending = 0;
-        self.attachment_sample = false;
-        self.attachment_drafts.clear();
+/// The attachments stacked in one composer (the main one or a thread's),
+/// sent with that composer's next message.
+#[derive(Default)]
+pub(crate) struct AttachmentStack {
+    /// In the order they were added.
+    pub drafts: Vec<Staged>,
+    /// Still being read or checked.
+    pub pending: usize,
+    /// Bumped when the stack is cleared, so late results are dropped.
+    pub request: u64,
+    next_id: u64,
+}
+
+impl AttachmentStack {
+    pub(crate) fn clear(&mut self) {
+        self.request = self.request.wrapping_add(1);
+        self.pending = 0;
+        self.drafts.clear();
     }
-    pub(crate) fn remove_attachment(&mut self, id: u64, cx: &mut Context<Self>) {
-        self.attachment_drafts.retain(|item| item.id != id);
+    pub(crate) fn is_empty(&self) -> bool {
+        self.drafts.is_empty() && self.pending == 0
+    }
+    pub(crate) fn full(&self) -> bool {
+        self.drafts.len() + self.pending >= MAX_ATTACHMENTS
+    }
+}
+
+impl MatrixApp {
+    /// The main composer's stack, or the open thread's.
+    pub(crate) fn attachments(&self, in_thread: bool) -> Option<&AttachmentStack> {
+        if in_thread {
+            self.thread.as_ref().map(|thread| &thread.attachments)
+        } else {
+            Some(&self.attachments)
+        }
+    }
+    fn attachments_mut(&mut self, in_thread: bool) -> Option<&mut AttachmentStack> {
+        if in_thread {
+            self.thread.as_mut().map(|thread| &mut thread.attachments)
+        } else {
+            Some(&mut self.attachments)
+        }
+    }
+    pub(crate) fn clear_attachment(&mut self) {
+        self.attachments.clear();
+        self.attachment_sample = false;
+    }
+    pub(crate) fn remove_attachment(&mut self, in_thread: bool, id: u64, cx: &mut Context<Self>) {
+        if let Some(stack) = self.attachments_mut(in_thread) {
+            stack.drafts.retain(|item| item.id != id);
+        }
         cx.notify();
     }
-    fn attachment_room(&self) -> usize {
-        MAX_ATTACHMENTS.saturating_sub(self.attachment_drafts.len() + self.attachment_pending)
-    }
-    pub(crate) fn choose_attachment(&mut self, window: &Window, cx: &mut Context<Self>) {
+    pub(crate) fn choose_attachment(
+        &mut self,
+        in_thread: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
         let room = self.snapshot.selected_room.clone();
         let account = self.snapshot.account_instance;
         let paths = cx.prompt_for_paths(PathPromptOptions {
@@ -103,7 +147,7 @@ impl MatrixApp {
                     if this.snapshot.selected_room == room
                         && this.snapshot.account_instance == account
                     {
-                        this.add_attachments(paths, window, cx);
+                        this.add_attachments(in_thread, paths, window, cx);
                     }
                 });
             }
@@ -112,30 +156,53 @@ impl MatrixApp {
     }
     pub(crate) fn add_attachments(
         &mut self,
+        in_thread: bool,
         paths: impl IntoIterator<Item = PathBuf>,
         window: &Window,
         cx: &mut Context<Self>,
     ) {
         for path in paths {
-            self.prepare_attachment(AttachmentSource::File(path), window, cx);
+            self.prepare_attachment(in_thread, AttachmentSource::File(path), window, cx);
+        }
+    }
+    /// A problem with an attachment, shown under the composer it belongs to.
+    fn attachment_problem(&mut self, in_thread: bool, message: String) {
+        match &mut self.thread {
+            Some(thread) if in_thread => thread.status = message,
+            _ => self.status = message,
         }
     }
     pub(crate) fn prepare_attachment(
         &mut self,
+        in_thread: bool,
         source: AttachmentSource,
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        if self.preview || !self.snapshot.timeline_ready {
+        let ready = if in_thread {
+            self.thread.as_ref().is_some_and(|thread| thread.ready)
+        } else {
+            self.snapshot.timeline_ready
+        };
+        if self.preview || !ready {
             return;
         }
-        if self.attachment_room() == 0 {
-            self.status = format!("You can attach up to {MAX_ATTACHMENTS} files to one message.");
+        // The thread's own request tells a late result for a closed thread
+        // from one for the thread now open.
+        let thread_request = self.thread.as_ref().map(|thread| thread.request);
+        let Some(stack) = self.attachments_mut(in_thread) else {
+            return;
+        };
+        if stack.full() {
+            self.attachment_problem(
+                in_thread,
+                format!("You can attach up to {MAX_ATTACHMENTS} files to one message."),
+            );
             cx.notify();
             return;
         }
-        self.attachment_pending += 1;
-        let request = self.attachment_request;
+        stack.pending += 1;
+        let request = stack.request;
         let room = self.snapshot.selected_room.clone();
         let account = self.snapshot.account_instance;
         self.job(
@@ -143,27 +210,37 @@ impl MatrixApp {
             cx,
             move |backend| backend.prepare_attachment(room, account, source),
             move |this, result, _, cx| {
-                if this.attachment_request != request || this.snapshot.account_instance != account {
+                if this.snapshot.account_instance != account
+                    || (in_thread && this.thread.as_ref().map(|t| t.request) != thread_request)
+                {
                     return;
                 }
-                this.attachment_pending = this.attachment_pending.saturating_sub(1);
-                match result {
+                let Some(stack) = this.attachments_mut(in_thread) else {
+                    return;
+                };
+                if stack.request != request {
+                    return;
+                }
+                stack.pending = stack.pending.saturating_sub(1);
+                let problem = match result {
                     Ok(draft) => {
-                        let total: u64 = this.attachment_drafts.iter().map(|i| i.draft.size).sum();
+                        let total: u64 = stack.drafts.iter().map(|i| i.draft.size).sum();
                         if total.saturating_add(draft.size) > MAX_STACK_BYTES {
-                            this.status = format!(
+                            Some(format!(
                                 "{} wasn't added: one message can carry up to 256 MB of attachments.",
                                 draft.filename
-                            );
+                            ))
                         } else {
-                            this.attachment_next_id += 1;
-                            this.attachment_drafts.push(Staged {
-                                id: this.attachment_next_id,
-                                draft,
-                            });
+                            stack.next_id += 1;
+                            let id = stack.next_id;
+                            stack.drafts.push(Staged { id, draft });
+                            None
                         }
                     }
-                    Err(error) => this.status = error.to_string(),
+                    Err(error) => Some(error.to_string()),
+                };
+                if let Some(problem) = problem {
+                    this.attachment_problem(in_thread, problem);
                 }
                 cx.notify();
             },
@@ -236,6 +313,7 @@ impl MatrixApp {
     }
     pub(crate) fn paste_attachment(
         &mut self,
+        in_thread: bool,
         clipboard: &ClipboardItem,
         window: &Window,
         cx: &mut Context<Self>,
@@ -244,6 +322,7 @@ impl MatrixApp {
             match entry {
                 ClipboardEntry::Image(image) => {
                     self.prepare_attachment(
+                        in_thread,
                         AttachmentSource::Bytes("Pasted image.png".into(), image.bytes.to_vec()),
                         window,
                         cx,
@@ -251,7 +330,7 @@ impl MatrixApp {
                     return true;
                 }
                 ClipboardEntry::ExternalPaths(paths) if !paths.0.is_empty() => {
-                    self.add_attachments(paths.0.iter().cloned(), window, cx);
+                    self.add_attachments(in_thread, paths.0.iter().cloned(), window, cx);
                     return true;
                 }
                 _ => {}
@@ -260,15 +339,17 @@ impl MatrixApp {
         false
     }
     /// Stacked attachments inside the composer box, above the message field.
-    pub(crate) fn attachment_tray(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn attachment_tray(&self, in_thread: bool, cx: &mut Context<Self>) -> AnyElement {
+        let empty = AttachmentStack::default();
+        let stack = self.attachments(in_thread).unwrap_or(&empty);
         struct Tile {
             id: Option<u64>,
             filename: String,
             size: u64,
             preview: Option<Arc<Vec<u8>>>,
         }
-        let mut tiles: Vec<Tile> = self
-            .attachment_drafts
+        let mut tiles: Vec<Tile> = stack
+            .drafts
             .iter()
             .map(|item| Tile {
                 id: Some(item.id),
@@ -277,7 +358,7 @@ impl MatrixApp {
                 preview: item.draft.preview_png.clone(),
             })
             .collect();
-        if self.preview && self.attachment_sample {
+        if self.preview && self.attachment_sample && !in_thread {
             tiles.push(Tile {
                 id: None,
                 filename: "Sample landscape.png".into(),
@@ -300,8 +381,13 @@ impl MatrixApp {
             theme.muted,
             theme.background,
         );
+        let prefix = if in_thread { "thread-" } else { "" };
         let mut row = h_flex()
-            .id("attachment-tray")
+            .id(if in_thread {
+                "thread-attachment-tray"
+            } else {
+                "attachment-tray"
+            })
             .flex_wrap()
             .gap(px(6.))
             .px(px(8.))
@@ -347,46 +433,51 @@ impl MatrixApp {
                     .into_any_element(),
             };
             let remove_id = tile.id;
-            row = row.child(
-                div()
-                    .id(SharedString::from(format!("attachment-{key}")))
-                    .relative()
-                    .border_1()
-                    .border_color(border)
-                    .rounded(px(7.))
-                    .test_support()
-                    .child(body)
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(-6.))
-                            .right(px(-6.))
-                            .rounded_full()
-                            .border_1()
-                            .border_color(border)
-                            .bg(background)
-                            .child(
-                                Button::new(SharedString::from(format!("attachment-remove-{key}")))
+            row =
+                row.child(
+                    div()
+                        .id(SharedString::from(format!("{prefix}attachment-{key}")))
+                        .relative()
+                        .border_1()
+                        .border_color(border)
+                        .rounded(px(7.))
+                        .test_support()
+                        .child(body)
+                        .child(
+                            div()
+                                .absolute()
+                                .top(px(-6.))
+                                .right(px(-6.))
+                                .rounded_full()
+                                .border_1()
+                                .border_color(border)
+                                .bg(background)
+                                .child(
+                                    Button::new(SharedString::from(format!(
+                                        "{prefix}attachment-remove-{key}"
+                                    )))
                                     .ghost()
                                     .size(px(18.))
                                     .rounded_full()
                                     .icon(gpui_kit::assets::IconName::X)
                                     .accessibility_label(format!("Remove {}", tile.filename))
                                     .on_click(cx.listener(move |this, _, _, cx| match remove_id {
-                                        Some(id) => this.remove_attachment(id, cx),
+                                        Some(id) => this.remove_attachment(in_thread, id, cx),
                                         None => {
                                             this.attachment_sample = false;
                                             cx.notify();
                                         }
                                     })),
-                            ),
-                    ),
-            );
+                                ),
+                        ),
+                );
         }
-        for index in 0..self.attachment_pending {
+        for index in 0..stack.pending {
             row = row.child(
                 div()
-                    .id(SharedString::from(format!("attachment-pending-{index}")))
+                    .id(SharedString::from(format!(
+                        "{prefix}attachment-pending-{index}"
+                    )))
                     .size(px(56.))
                     .rounded(px(7.))
                     .border_1()
@@ -397,6 +488,7 @@ impl MatrixApp {
                     .justify_center()
                     .text_size(px(11.))
                     .text_color(muted)
+                    .test_support()
                     .child("Adding…"),
             );
         }

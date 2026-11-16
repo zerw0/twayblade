@@ -1,4 +1,7 @@
 name: Rust checks
+# Branch flow: feature/* -> develop -> main. Feature branches and develop are
+# tested only (format, lint, tests); no app build here. Binaries are built only
+# from main and release tags, by build.yml.
 # Documentation-only changes (Markdown, docs/, licences) skip the Rust steps.
 # Pushes simply don't start. Pull requests always start, because main requires
 # the three `check (...)` results: for a documentation-only pull request the
@@ -21,8 +24,9 @@ permissions:
 # group: the push run and the pull-request run of a branch still both run.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
-  # Never cancel runs on main: a failure on an intermediate commit must stay visible.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  # Never cancel runs on main or develop: a failure on an intermediate commit
+  # must stay visible.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/develop' }}
 
 jobs:
   changes:
@@ -99,8 +103,12 @@ jobs:
         run: |
           python3 scripts/test_release_notes.py
           python3 scripts/test_homebrew_cask.py
+      # The app binary itself only on main (and pull requests into it);
+      # develop and feature branches stop at the tests.
       - name: Build native desktop
-        if: env.CODE == 'true'
+        if: >-
+          env.CODE == 'true' && (github.ref == 'refs/heads/main'
+          || github.base_ref == 'main')
         run: cargo build --locked -p twayblade
       - name: Documentation only
         if: env.CODE != 'true'

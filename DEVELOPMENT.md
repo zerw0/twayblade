@@ -13,11 +13,13 @@ the version that is built and tested.
 rustup component add rustfmt clippy
 git clone https://github.com/zerw0/twayblade.git
 cd twayblade
-git switch -c feature/my-feature
+git switch -c feature/my-feature origin/develop
 ```
 
 The repository is private. Follow [AGENTS.md](AGENTS.md): use one branch per
-feature and a separate worktree for concurrent work. Keep Cargo.lock committed;
+feature, based on `develop` and merged back into it, and a separate worktree for
+concurrent work. `develop` reaches `main` in release pull requests; only `main`
+builds binaries. Keep Cargo.lock committed;
 use `--locked`. The first GPUI build downloads and compiles many dependencies.
 GPUI Kit is pinned to 0.9.1 with its matching GPUI snapshot. Cargo.lock also pins
 the compatible Taffy/unicode-properties versions needed by Kit's test features.

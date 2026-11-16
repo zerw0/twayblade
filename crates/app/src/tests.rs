@@ -774,7 +774,7 @@ fn attachment_controls_require_an_explicit_action_and_samples_cannot_upload(
         window.click(gpui_kit::SharedString::from(format!("open-{id}")), cx);
     })
     .expect("attachment controls");
-    cx.update(|cx| assert!(app.read(cx).attachment_drafts.is_empty()));
+    cx.update(|cx| assert!(app.read(cx).attachments.drafts.is_empty()));
     cx.update(|cx| {
         app.update(cx, |app, cx| {
             let message = app.snapshot.messages.last_mut().unwrap();
@@ -2394,6 +2394,30 @@ fn the_composer_shows_who_has_seen_the_latest_message(cx: &mut TestAppContext) {
         })
     });
     assert!(!seen(cx), "typing replaces the read line");
+}
+
+#[gpui_kit::test]
+fn a_thread_reply_has_its_own_attachments(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_thread("sample-0".into(), window, cx);
+            // A file still being added to the thread's reply.
+            app.thread.as_mut().unwrap().attachments.pending = 1;
+            cx.notify();
+        });
+        window.render_frame(cx);
+        assert!(window.find("thread-attach-file").visible());
+        assert!(window.find("thread-attachment-pending-0").visible());
+        // The main composer stays empty: the file belongs to the thread.
+        assert!(window.find_all("attachment-pending-0").is_empty());
+    })
+    .expect("thread attachments");
+    cx.update(|cx| {
+        let app = app.read(cx);
+        assert!(app.attachments.is_empty());
+        assert!(!app.attachments(true).unwrap().is_empty());
+    });
 }
 
 #[gpui_kit::test]

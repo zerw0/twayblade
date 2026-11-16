@@ -57,9 +57,7 @@ impl MatrixApp {
         let editable = !self.busy && (self.preview || self.snapshot.timeline_ready);
         let empty = self.composer.read(cx).value().trim().is_empty();
         let editing = self.edit_session.as_ref().is_some_and(|s| !s.in_thread);
-        let stacked = !self.attachment_drafts.is_empty()
-            || self.attachment_pending > 0
-            || (self.preview && self.attachment_sample);
+        let stacked = !self.attachments.is_empty() || (self.preview && self.attachment_sample);
         let details_shown = self.details_open || self.profile.is_some() || self.thread.is_some();
 
         let room_icon = if room.direct || room.avatar.is_some() {
@@ -309,7 +307,7 @@ impl MatrixApp {
                     .border_1()
                     .border_color(cx.theme().input)
                     .bg(palette.field)
-                    .when(stacked, |view| view.child(self.attachment_tray(cx)))
+                    .when(stacked, |view| view.child(self.attachment_tray(false, cx)))
                     .children(self.edit_bar(false, cx))
                     .child(
                         self.composer_keys(div().id("composer-panel"), false, cx)
@@ -366,7 +364,7 @@ impl MatrixApp {
                                     .on_paste(move |clipboard, window, cx| {
                                         paste_target
                                             .update(cx, |this, cx| {
-                                                this.paste_attachment(clipboard, window, cx)
+                                                this.paste_attachment(false, clipboard, window, cx)
                                             })
                                             .unwrap_or(false)
                                     }),
@@ -385,15 +383,9 @@ impl MatrixApp {
                                     .icon(IconName::Paperclip)
                                     .accessibility_label("Attach file")
                                     .tooltip("Attach File…")
-                                    .disabled(
-                                        !editable
-                                            || self.preview
-                                            || self.attachment_drafts.len()
-                                                + self.attachment_pending
-                                                >= crate::ui::attachments::MAX_ATTACHMENTS,
-                                    )
+                                    .disabled(!editable || self.preview || self.attachments.full())
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        this.choose_attachment(window, cx)
+                                        this.choose_attachment(false, window, cx)
                                     })),
                             )
                             .child(
@@ -424,8 +416,8 @@ impl MatrixApp {
                                     .tooltip(if editing { "Save  ↩" } else { "Send  ↩" })
                                     .disabled(
                                         !ready
-                                            || (empty && self.attachment_drafts.is_empty())
-                                            || self.attachment_pending > 0
+                                            || (empty && self.attachments.drafts.is_empty())
+                                            || self.attachments.pending > 0
                                             || self.sending.contains(&room.id),
                                     )
                                     .on_click(
@@ -493,7 +485,7 @@ impl MatrixApp {
             .child(body)
             .child(composer)
             .on_drop::<ExternalPaths>(cx.listener(|this, paths: &ExternalPaths, window, cx| {
-                this.add_attachments(paths.0.iter().cloned(), window, cx);
+                this.add_attachments(false, paths.0.iter().cloned(), window, cx);
             }))
             .into_any_element()
     }
