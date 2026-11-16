@@ -2,6 +2,8 @@ name: Rust checks
 # Branch flow: feature/* -> develop -> main. Feature branches and develop are
 # tested only (format, lint, tests); no app build here. Binaries are built only
 # from main and release tags, by build.yml.
+# Pushes run only on main and develop (after a merge); a feature branch is
+# checked once, by its pull request, not again by its push.
 # Documentation-only changes (Markdown, docs/, licences) skip the Rust steps.
 # Pushes simply don't start. Pull requests always start, because main requires
 # the three `check (...)` results: for a documentation-only pull request the
@@ -9,6 +11,7 @@ name: Rust checks
 # seconds, so auto-merge works without an admin.
 on:
   push:
+    branches: [main, develop]
     paths-ignore:
       - '**.md'
       - 'docs/**'
