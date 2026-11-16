@@ -35,6 +35,8 @@ pub(crate) struct ThreadPanel {
     pub exhausted: bool,
     pub receipt: Option<String>,
     pub receipt_retry_after: std::time::Instant,
+    /// Files stacked in the reply field, sent with the next reply.
+    pub attachments: crate::ui::attachments::AttachmentStack,
 }
 
 impl MatrixApp {
@@ -168,6 +170,7 @@ impl MatrixApp {
             exhausted: false,
             receipt: None,
             receipt_retry_after: std::time::Instant::now(),
+            attachments: Default::default(),
         });
         if !self.preview {
             let account = self.snapshot.account_instance;
@@ -353,7 +356,13 @@ impl MatrixApp {
             return;
         };
         let body = t.composer.read(cx).value().to_string();
-        if !t.ready || t.sending || body.trim().is_empty() {
+        let has_text = !body.trim().is_empty();
+        // Wait for every stacked attachment so none is left behind.
+        if !t.ready
+            || t.sending
+            || (!has_text && t.attachments.drafts.is_empty())
+            || t.attachments.pending > 0
+        {
             return;
         }
         t.sending = true;
@@ -362,22 +371,50 @@ impl MatrixApp {
         let room = t.room.clone();
         let root = t.root.event_id.clone().expect("remote root");
         let request = t.request;
+        let staged = std::mem::take(&mut t.attachments.drafts);
+        let stack_request = t.attachments.request;
         let account = self.snapshot.account_instance;
         self.job(
             window,
             cx,
-            move |b| b.thread_action(room, root, account, request, ThreadAction::Send(body)),
-            move |this, result, window, cx| {
+            move |b| {
+                // Attachments first, in order, then the text; stop at the first failure.
+                let mut staged = staged.into_iter();
+                while let Some(item) = staged.next() {
+                    if let Err(error) = b.thread_action(
+                        room.clone(),
+                        root.clone(),
+                        account,
+                        request,
+                        ThreadAction::Attach(item.draft),
+                    ) {
+                        return (Err(error), staged.collect::<Vec<_>>());
+                    }
+                }
+                let result = if has_text {
+                    b.thread_action(room, root, account, request, ThreadAction::Send(body))
+                } else {
+                    Ok(false)
+                };
+                (result, Vec::new())
+            },
+            move |this, (result, unsent), window, cx| {
                 if this.snapshot.account_instance != account {
                     return;
                 }
-                if result.is_ok() && input.read(cx).value().as_str() == sent {
+                if has_text && result.is_ok() && input.read(cx).value().as_str() == sent {
                     input.update(cx, |s, cx| s.set_value("", window, cx));
                 }
                 if let Some(t) = &mut this.thread
                     && t.request == request
                 {
                     t.sending = false;
+                    // Put unsent attachments back in the same thread.
+                    if !unsent.is_empty() && t.attachments.request == stack_request {
+                        let mut restored = unsent;
+                        restored.append(&mut t.attachments.drafts);
+                        t.attachments.drafts = restored;
+                    }
                     if let Err(e) = result {
                         t.status = e.to_string();
                     }
@@ -538,6 +575,9 @@ impl MatrixApp {
                             .border_1()
                             .border_color(cx.theme().input)
                             .bg(crate::theme::palette(cx).field)
+                            .when(!t.attachments.is_empty(), |field| {
+                                field.child(self.attachment_tray(true, cx))
+                            })
                             .child(
                                 self.composer_keys(div().id("thread-composer-panel"), true, cx)
                                     // ↑/↓ start or step an edit before the
@@ -600,7 +640,19 @@ impl MatrixApp {
                                             .aria_label("Reply in thread")
                                             .appearance(false)
                                             .w_full()
-                                            .disabled(!t.ready),
+                                            .disabled(!t.ready)
+                                            .on_paste({
+                                                let paste_target = cx.weak_entity();
+                                                move |clipboard, window, cx| {
+                                                    paste_target
+                                                        .update(cx, |this, cx| {
+                                                            this.paste_attachment(
+                                                                true, clipboard, window, cx,
+                                                            )
+                                                        })
+                                                        .unwrap_or(false)
+                                                }
+                                            }),
                                     ),
                             )
                             .child(
@@ -611,6 +663,20 @@ impl MatrixApp {
                                     .items_center()
                                     .child(div().flex_1())
                                     .child(
+                                        Button::new("thread-attach-file")
+                                            .ghost()
+                                            .size(px(26.))
+                                            .icon(assets::IconName::Paperclip)
+                                            .accessibility_label("Attach file")
+                                            .tooltip("Attach File…")
+                                            .disabled(
+                                                self.preview || !t.ready || t.attachments.full(),
+                                            )
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.choose_attachment(true, window, cx)
+                                            })),
+                                    )
+                                    .child(
                                         Button::new("thread-send")
                                             .primary()
                                             .h(px(26.))
@@ -620,7 +686,11 @@ impl MatrixApp {
                                             .accessibility_label("Send thread reply")
                                             .tooltip("Send Reply  ↩")
                                             .disabled(
-                                                self.preview || !t.ready || empty || t.sending,
+                                                self.preview
+                                                    || !t.ready
+                                                    || (empty && t.attachments.drafts.is_empty())
+                                                    || t.attachments.pending > 0
+                                                    || t.sending,
                                             )
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.send_thread(window, cx)
@@ -629,6 +699,11 @@ impl MatrixApp {
                             ),
                     ),
             )
+            // Files dropped on the thread go with the reply, not the main message.
+            .on_drop::<ExternalPaths>(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                this.add_attachments(true, paths.0.iter().cloned(), window, cx);
+                cx.stop_propagation();
+            }))
             .into_any_element()
     }
 }
