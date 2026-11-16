@@ -3135,6 +3135,43 @@ fn opening_the_archive_scrolls_a_long_sidebar_to_it(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn switching_back_to_an_account_reopens_its_last_room(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    let switch = |cx: &mut TestAppContext, user: Option<&str>| {
+        cx.update_window(window, |_, window, cx| {
+            app.update(cx, |app, cx| {
+                let mut snapshot = app.snapshot.clone();
+                if let Some(user) = user {
+                    snapshot.user_id = user.into();
+                }
+                snapshot.account_instance = snapshot.account_instance.wrapping_add(1);
+                snapshot.revision += 1;
+                app.apply(snapshot, window, cx);
+            });
+        })
+        .expect("switch account");
+        cx.run_until_parked();
+    };
+    let own = cx.update(|cx| app.read(cx).snapshot.user_id.clone());
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| app.select_room("critique".into(), window, cx));
+    })
+    .expect("open a room");
+    // Another account starts with nothing open: it never showed a room.
+    switch(cx, Some("@other:preview.invalid"));
+    assert_eq!(
+        cx.update(|cx| app.read(cx).navigation.selected_room.clone()),
+        None
+    );
+    // Back on the first account, its room opens again.
+    switch(cx, Some(&own));
+    assert_eq!(
+        cx.update(|cx| app.read(cx).navigation.selected_room.clone()),
+        Some("critique".into())
+    );
+}
+
+#[gpui_kit::test]
 fn a_notification_from_another_account_switches_and_then_opens_the_room(cx: &mut TestAppContext) {
     use twayblade_platform::notifications::Activation;
     let (window, app) = preview_window(cx);

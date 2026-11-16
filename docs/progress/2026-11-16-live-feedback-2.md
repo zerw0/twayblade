@@ -50,3 +50,27 @@ to `delivery_opacity`.
   with the message text.
 - `cargo test -p twayblade --all-features --locked`: 179 passed.
 - Not verified: live account on the physical Mac.
+
+# Switching back to an account reopens its last room (#82)
+
+## Behaviour
+
+Live acceptance found that switching accounts and back opened no room. The
+window reset its navigation on every account change. It now remembers each
+account's last space and room (by user ID, for the life of the window). When
+the account becomes active again and its room list contains that room, the
+room reopens. Choosing a room yourself, or a notification click, takes
+precedence.
+
+The same acceptance pass showed that clicking a notification started a
+second instance. The cause was the development setup: a debug and a release
+development bundle shared one bundle ID, and macOS launched the other copy.
+The stale debug bundle was removed. This still needs a recheck with one
+bundle.
+
+## Verification
+
+- `switching_back_to_an_account_reopens_its_last_room` fails without the
+  change and passes with it. `cargo test -p twayblade --all-features --locked`:
+  180 passed.
+- Not verified: two live accounts on the physical Mac.

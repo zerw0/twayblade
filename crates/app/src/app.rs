@@ -337,6 +337,11 @@ pub(super) struct MatrixApp {
     pub(super) history_back: Vec<String>,
     pub(super) history_forward: Vec<String>,
     navigating_history: bool,
+    /// The space and room each account last showed, by user ID, so switching
+    /// back reopens it. Kept for the life of the window.
+    account_rooms: HashMap<String, (Option<String>, String)>,
+    /// The room to reopen once the switched-to account lists it.
+    restore_room: Option<(Option<String>, String)>,
     /// Sidebar sections the user collapsed, by section key.
     pub(super) collapsed_sections: std::collections::HashSet<&'static str>,
     /// Selected tab of the room Info panel.
@@ -743,6 +748,8 @@ impl MatrixApp {
             history_back: Vec::new(),
             history_forward: Vec::new(),
             navigating_history: false,
+            account_rooms: HashMap::new(),
+            restore_room: None,
             // Archived conversations stay out of the way until asked for.
             collapsed_sections: ["archive"].into_iter().collect(),
             info_tab: InfoTab::About,
@@ -1058,6 +1065,15 @@ impl MatrixApp {
             self.options = None;
             self.choosing_server = false;
             self.reset_pagination();
+            if !self.snapshot.user_id.is_empty()
+                && let Some(room) = self.navigation.selected_room.clone()
+            {
+                self.account_rooms.insert(
+                    self.snapshot.user_id.clone(),
+                    (self.navigation.selected_space.clone(), room),
+                );
+            }
+            self.restore_room = self.account_rooms.get(&snapshot.user_id).cloned();
             self.navigation = Navigation::default();
             self.composers.clear();
             self.thread = None;
@@ -1077,6 +1093,21 @@ impl MatrixApp {
             self.close_profile(cx);
             self.composer
                 .update(cx, |state, cx| state.set_value("", window, cx));
+        }
+        if self.navigation.selected_room.is_none()
+            && let Some((space, room)) = self
+                .restore_room
+                .take_if(|(_, room)| snapshot.rooms.iter().any(|listed| &listed.id == room))
+        {
+            // The account we switched back to lists its last room again.
+            self.navigation.selected_space =
+                space.filter(|space| snapshot.spaces.iter().any(|listed| &listed.id == space));
+            cx.defer_in(window, move |this, window, cx| {
+                // A notification or click may have chosen a room meanwhile.
+                if this.navigation.selected_room.is_none() {
+                    this.select_room_target(room, None, window, cx)
+                }
+            });
         }
         if self.navigation.reconcile(&snapshot) {
             self.queue_selection(None, window, cx);
@@ -1557,6 +1588,8 @@ impl MatrixApp {
         cx: &mut Context<Self>,
     ) {
         self.management = None;
+        // Choosing a room supersedes reopening the account's last one.
+        self.restore_room = None;
         cx.notify();
         if event.is_none() && self.navigation.selected_room.as_ref() == Some(&id) {
             // Selecting the open room again retries it when it isn't loaded or
