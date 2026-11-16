@@ -1690,6 +1690,32 @@ fn viewer_pinch_double_click_pan_outside_click_and_stale_loads(cx: &mut TestAppC
 }
 
 #[gpui_kit::test]
+fn command_w_closes_settings_unless_a_recovery_key_is_shown(cx: &mut TestAppContext) {
+    let (main_window, app) = preview_window(cx);
+    cx.update_window(main_window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("open-settings", cx);
+        window.render_frame(cx);
+    })
+    .unwrap();
+    let handle = cx.update(|cx| app.read(cx).settings.as_ref().unwrap().0);
+    // A new recovery key keeps Settings open.
+    cx.update(|cx| app.update(cx, |app, _| app.security_key = Some(Default::default())));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.dispatch_action(Box::new(crate::app::CloseWindow), cx);
+    })
+    .unwrap();
+    cx.update(|cx| assert!(app.read(cx).settings.is_some()));
+    cx.update(|cx| app.update(cx, |app, _| app.security_key = None));
+    cx.update_window(handle, |_, window, cx| {
+        window.dispatch_action(Box::new(crate::app::CloseWindow), cx);
+    })
+    .unwrap();
+    cx.update(|cx| assert!(app.read(cx).settings.is_none()));
+}
+
+#[gpui_kit::test]
 fn settings_sections_share_one_window_and_preserve_conversation(cx: &mut TestAppContext) {
     let (main_window, app) = preview_window(cx);
     cx.update_window(main_window, |_, window, cx| {

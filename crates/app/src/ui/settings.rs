@@ -81,6 +81,7 @@ pub(crate) struct SettingsWindow {
     pub(crate) history_back: Vec<Section>,
     pub(crate) history_forward: Vec<Section>,
     main: Entity<MatrixApp>,
+    focus: FocusHandle,
     _observe: Subscription,
 }
 impl MatrixApp {
@@ -522,22 +523,16 @@ impl MatrixApp {
             |window, cx| {
                 let weak = main.downgrade();
                 window.on_window_should_close(cx, move |_window, cx| {
-                    weak.update(cx, |main, cx| {
-                        if main.security_key.is_some() {
-                            return false;
-                        }
-                        main.security_restore = false;
-                        main.security_device = None;
-                        main.security_input =
-                            cx.new(|cx| InputState::new(_window, cx).masked(true));
-                        main.settings = None;
-                        true
-                    })
-                    .unwrap_or(true)
+                    weak.update(cx, |main, cx| main.release_settings(_window, cx))
+                        .unwrap_or(true)
                 });
                 cx.new(|cx| {
                     let observe = cx.observe(&main, |_, _, cx| cx.notify());
-                    Self::settings_root(section, main.clone(), observe)
+                    let root = Self::settings_root(section, main.clone(), observe, cx);
+                    // Focus the window so ⌘W and section shortcuts reach it
+                    // before any control is clicked.
+                    root.focus.focus(window, cx);
+                    root
                 })
             },
         );
@@ -556,14 +551,29 @@ impl MatrixApp {
         section: Section,
         main: Entity<MatrixApp>,
         observe: Subscription,
+        cx: &mut Context<SettingsWindow>,
     ) -> SettingsWindow {
         SettingsWindow {
             section,
             history_back: Vec::new(),
             history_forward: Vec::new(),
             main,
+            focus: cx.focus_handle(),
             _observe: observe,
         }
+    }
+    /// Forgets the Settings window unless a new recovery key is still shown,
+    /// which must be saved first. Returns whether the window may close.
+    fn release_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.security_key.is_some() {
+            return false;
+        }
+        self.security_restore = false;
+        self.security_device = None;
+        self.security_input = cx.new(|cx| InputState::new(window, cx).masked(true));
+        self.settings = None;
+        cx.notify();
+        true
     }
     pub(crate) fn reset_settings(
         &mut self,
@@ -2038,6 +2048,19 @@ impl Render for SettingsWindow {
             .text_color(cx.theme().foreground)
             .text_size(px(13.))
             .key_context("Twayblade")
+            .track_focus(&self.focus)
+            // ⌘W closes Settings like its close button: not while a new
+            // recovery key is shown, which must be saved first.
+            .on_action(
+                cx.listener(|this, _: &crate::app::CloseWindow, window, cx| {
+                    if this
+                        .main
+                        .update(cx, |main, cx| main.release_settings(window, cx))
+                    {
+                        window.remove_window();
+                    }
+                }),
+            )
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
                 if let MouseButton::Navigate(direction) = event.button {
                     this.navigate_section(direction == NavigationDirection::Back, window, cx);

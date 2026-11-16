@@ -32,7 +32,8 @@ gpui_kit::actions!(
         JoinSpace,
         ToggleSidebar,
         NavigateBack,
-        NavigateForward
+        NavigateForward,
+        CloseWindow
     ]
 );
 
