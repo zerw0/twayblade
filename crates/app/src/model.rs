@@ -369,6 +369,51 @@ pub(super) fn typing_text(snapshot: &Snapshot) -> String {
     }
 }
 
+/// Who has read up to the latest message: "Seen by Ana", "Seen by Ana and
+/// Bo", "Seen by Ana, Bo and Cy", "Seen by Ana, Bo, Cy and 2 others".
+pub(super) fn seen_by_line(names: &[String]) -> Option<String> {
+    let shown = names.len().min(3);
+    let rest = names.len() - shown;
+    let list = match (&names[..shown], rest) {
+        ([], _) => return None,
+        ([one], 0) => one.clone(),
+        ([first, second], 0) => format!("{first} and {second}"),
+        ([first, second, third], 0) => format!("{first}, {second} and {third}"),
+        (named, rest) => format!(
+            "{} and {rest} {}",
+            named.join(", "),
+            if rest == 1 { "other" } else { "others" }
+        ),
+    };
+    Some(format!("Seen by {list}"))
+}
+
+#[cfg(test)]
+mod seen_tests {
+    use super::seen_by_line;
+    #[test]
+    fn seen_by_names_up_to_three_and_counts_the_rest() {
+        let names = |n: usize| -> Vec<String> {
+            ["Ana", "Bo", "Cy", "Di", "Ed"][..n]
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
+        };
+        assert_eq!(seen_by_line(&names(0)), None);
+        assert_eq!(seen_by_line(&names(1)).unwrap(), "Seen by Ana");
+        assert_eq!(seen_by_line(&names(2)).unwrap(), "Seen by Ana and Bo");
+        assert_eq!(seen_by_line(&names(3)).unwrap(), "Seen by Ana, Bo and Cy");
+        assert_eq!(
+            seen_by_line(&names(4)).unwrap(),
+            "Seen by Ana, Bo, Cy and 1 other"
+        );
+        assert_eq!(
+            seen_by_line(&names(5)).unwrap(),
+            "Seen by Ana, Bo, Cy and 2 others"
+        );
+    }
+}
+
 pub(super) fn size_label(size: Option<u64>) -> String {
     match size {
         None => "size unknown".into(),

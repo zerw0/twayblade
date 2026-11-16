@@ -440,6 +440,8 @@ impl MatrixApp {
                     .pl(px(4.))
                     .text_size(px(11.))
                     .text_color(muted)
+                    // Nobody typing: who has read up to the latest message.
+                    .when(typing.is_empty(), |line| line.children(self.seen_by_row()))
                     .when(!typing.is_empty(), |line| {
                         // Who is typing (avatars), a pulse, then the accessible text.
                         let reduce = self.snapshot.reduce_motion;
@@ -494,6 +496,52 @@ impl MatrixApp {
                 this.add_attachments(paths.0.iter().cloned(), window, cx);
             }))
             .into_any_element()
+    }
+
+    /// The people whose read receipt is on the latest message, in groups and
+    /// direct messages alike. None until someone besides you has read it.
+    fn seen_by_row(&self) -> Option<AnyElement> {
+        if !self.snapshot.timeline_ready {
+            return None;
+        }
+        let latest = self
+            .snapshot
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.event_id.is_some())?;
+        let names: Vec<String> = latest
+            .read_by
+            .iter()
+            .map(|user| {
+                self.snapshot
+                    .members
+                    .iter()
+                    .find(|member| &member.user_id == user)
+                    .map(|member| member.display_name.clone())
+                    .filter(|name| !name.is_empty())
+                    // Before the member list loads: the user's local part.
+                    .unwrap_or_else(|| {
+                        user.trim_start_matches('@')
+                            .split(':')
+                            .next()
+                            .unwrap_or(user)
+                            .to_owned()
+                    })
+            })
+            .collect();
+        let text = model::seen_by_line(&names)?;
+        Some(
+            h_flex()
+                .id("seen-by")
+                .gap(px(6.))
+                .items_center()
+                .min_w_0()
+                .child(Icon::new(IconName::CheckCheck).size(px(12.)))
+                .child(div().min_w_0().truncate().child(text))
+                .test_support()
+                .into_any_element(),
+        )
     }
 
     /// A slim strip under the header while there is no connection. The messages
