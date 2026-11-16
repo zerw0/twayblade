@@ -485,6 +485,33 @@ impl MatrixApp {
                     ),
             );
         }
+        if !in_thread && message.event_id.is_some() {
+            let id = message.id.clone();
+            let focus = self
+                .image_focus(&format!("reply-action-{id}"), cx)
+                .tab_stop(stops);
+            actions = actions.child(
+                div()
+                    .track_focus(&focus)
+                    .focus(|style| style.opacity(1.))
+                    .opacity(0.)
+                    .group_hover("message", |style| style.opacity(1.))
+                    .when(show_actions, |view| view.opacity(1.))
+                    .child(
+                        Button::new(SharedString::from(format!("reply-to-{id}")))
+                            .track_focus(&focus)
+                            .tab_stop(stops)
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::CornerUpLeft)
+                            .accessibility_label("Reply")
+                            .tooltip("Reply")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.start_reply(id.clone(), window, cx)
+                            })),
+                    ),
+            );
+        }
         if message.editable
             && let Some(event_id) = message.event_id.clone()
         {
@@ -730,6 +757,12 @@ impl MatrixApp {
                 ));
             }
             if !in_thread && event_id.is_some() {
+                let (reply_view, reply_id) = (weak.clone(), id.clone());
+                menu = menu.item(PopupMenuItem::new("Reply").on_click(move |_, window, cx| {
+                    let _ = reply_view.update(cx, |this, cx| {
+                        this.start_reply(reply_id.clone(), window, cx)
+                    });
+                }));
                 let (weak, id) = (weak.clone(), id.clone());
                 menu = menu.item(PopupMenuItem::new("Reply in Thread").on_click(
                     move |_, window, cx| {

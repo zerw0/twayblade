@@ -311,6 +311,7 @@ impl MatrixApp {
                     .bg(palette.field)
                     .when(stacked, |view| view.child(self.attachment_tray(cx)))
                     .children(self.edit_bar(false, cx))
+                    .children(self.reply_bar(cx))
                     .child(
                         self.composer_keys(div().id("composer-panel"), false, cx)
                             // The text field binds ↑/↓ itself; take them first only when they
@@ -325,6 +326,9 @@ impl MatrixApp {
                                         .is_some_and(|session| !session.in_thread)
                                     {
                                         this.end_edit(window, cx);
+                                        cx.stop_propagation();
+                                    } else if this.open_reply().is_some() {
+                                        this.cancel_reply(cx);
                                         cx.stop_propagation();
                                     }
                                 },

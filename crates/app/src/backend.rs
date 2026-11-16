@@ -1815,7 +1815,13 @@ impl Backend {
             .map_err(media_failure)
     }
 
-    pub(super) fn send_text(&self, room_id: String, body: String) -> Result<(), ServiceError> {
+    /// Sends `body` to the open room, as a reply to `reply` when given.
+    pub(super) fn send_text(
+        &self,
+        room_id: String,
+        body: String,
+        reply: Option<String>,
+    ) -> Result<(), ServiceError> {
         let (conversation, epoch) = {
             let mut state = self
                 .state
@@ -1832,7 +1838,12 @@ impl Backend {
             (conversation, state.epoch)
         };
         self.runtime
-            .block_on(conversation.send(body.clone()))
+            .block_on(async {
+                match &reply {
+                    Some(event) => conversation.send_reply(body.clone(), event).await,
+                    None => conversation.send(body.clone()).await,
+                }
+            })
             .map_err(conversation_failure)?;
         self.record_sent(epoch, &room_id, body);
         Ok(())
@@ -2284,7 +2295,7 @@ mod tests {
         assert!(client.select_room("!room:example.org".into()).is_err());
         assert!(
             client
-                .send_text("!room:example.org".into(), "test".into())
+                .send_text("!room:example.org".into(), "test".into(), None)
                 .is_err()
         );
         assert!(client.profile("@someone:example.org".into(), None).is_err());

@@ -227,6 +227,29 @@ impl Conversation {
             .map_err(|_| ConversationError::Queue)
     }
 
+    /// Sends `body` as a reply quoting `in_reply_to`. The SDK adds the reply
+    /// relation, the quoted sender's mention and, in a thread, the thread.
+    pub async fn send_reply(
+        &self,
+        body: String,
+        in_reply_to: &str,
+    ) -> Result<(), ConversationError> {
+        if body.trim().is_empty() {
+            return Err(ConversationError::EmptyMessage);
+        }
+        let event = matrix_sdk::ruma::OwnedEventId::try_from(in_reply_to)
+            .map_err(|_| ConversationError::Queue)?;
+        let content =
+            matrix_sdk::ruma::events::room::message::RoomMessageEventContentWithoutRelation::new(
+                crate::rich_text::compose(body)?.msgtype,
+            );
+        self.timeline
+            .send_reply(content, event)
+            .await
+            .map(|_| ())
+            .map_err(|_| ConversationError::Queue)
+    }
+
     pub async fn older(&self) -> Result<bool, ConversationError> {
         self.timeline
             .paginate_backwards(30)

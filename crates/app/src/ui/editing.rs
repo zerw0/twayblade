@@ -61,6 +61,10 @@ impl MatrixApp {
         let Some(composer) = self.edit_composer(in_thread) else {
             return;
         };
+        // Replying and editing share the composer: one at a time.
+        if !in_thread {
+            self.reply_to = None;
+        }
         // Stepping from one edit to the next keeps the original draft.
         let draft = match self.edit_session.take() {
             Some(session) => session.draft,

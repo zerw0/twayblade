@@ -2351,6 +2351,38 @@ fn the_message_menu_offers_actions_and_asks_before_deleting(cx: &mut TestAppCont
 }
 
 #[gpui_kit::test]
+fn reply_names_the_message_and_can_be_cancelled(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    let id = cx.update(|cx| {
+        app.read(cx)
+            .snapshot
+            .messages
+            .iter()
+            .find(|m| m.event_id.is_some() && m.sender != app.read(cx).snapshot.user_id)
+            .map(|m| m.id.clone())
+            .expect("someone else's message")
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(gpui_kit::SharedString::from(format!("reply-to-{id}")), cx);
+        window.render_frame(cx);
+        assert!(window.find("reply-bar").visible(), "reply bar shown");
+    })
+    .expect("reply");
+    cx.update(|cx| {
+        let reply = app.read(cx).reply_to.as_ref().expect("replying");
+        assert!(!reply.event_id.is_empty());
+        assert!(!reply.sender.is_empty());
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.click("reply-cancel", cx);
+        window.render_frame(cx);
+        assert!(window.find_all("reply-bar").is_empty(), "reply cancelled");
+    })
+    .expect("cancel");
+}
+
+#[gpui_kit::test]
 fn image_size_setting_updates_preferences(cx: &mut TestAppContext) {
     use twayblade_core::conversation::PreviewSize;
     let (_, app) = preview_window(cx);

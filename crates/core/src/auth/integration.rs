@@ -1764,6 +1764,28 @@ async fn threads_send_paginate_receipts_and_closed_unread() {
         "Alice receives Bob reply",
     )
     .await;
+    // A quoted reply in the main timeline points at the message it answers.
+    checked(
+        main_conversation
+            .send_reply("quoted reply sample".into(), root_event.as_str())
+            .await,
+        "send quoted reply",
+    );
+    wait_snapshot(
+        &mut main,
+        |s| {
+            s.messages.iter().any(|m| {
+                m.body.ends_with("quoted reply sample")
+                    && matches!(
+                        &m.reply,
+                        Some(crate::conversation::ReplyTarget::Ready { excerpt, .. })
+                            if excerpt.contains("thread root sample")
+                    )
+            })
+        },
+        "quoted reply shows its target",
+    )
+    .await;
     drop(bob_thread);
     for ix in 0..65 {
         checked(
