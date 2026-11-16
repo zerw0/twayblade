@@ -168,6 +168,12 @@ impl MatrixApp {
             .items_start()
             .justify_center()
             .pt(px(56.))
+            .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                if let MouseButton::Navigate(direction) = event.button {
+                    this.navigate_history(direction == NavigationDirection::Back, window, cx);
+                    cx.stop_propagation();
+                }
+            }))
             .child(crate::ui::motion::rise(
                 div().child(
                     self.sign_in_form(cx)
@@ -417,7 +423,7 @@ impl MatrixApp {
                                             != twayblade_core::auth::SessionState::Active,
                                 )
                                 .on_click(cx.listener(|this, _, window, cx| {
-                                    this.options = None;
+                                    this.last_login_options = this.options.take();
                                     this.choosing_server = true;
                                     this.password
                                         .update(cx, |state, cx| state.set_value("", window, cx));

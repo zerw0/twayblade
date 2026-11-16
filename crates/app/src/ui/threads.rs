@@ -59,6 +59,16 @@ impl MatrixApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.open_thread_event_inner(root, true, window, cx);
+    }
+
+    pub(crate) fn open_thread_event_inner(
+        &mut self,
+        root: String,
+        record_history: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let row = self
             .snapshot
             .messages
@@ -70,13 +80,27 @@ impl MatrixApp {
                 event_id: Some(root),
                 ..Default::default()
             });
-        self.open_thread_root(row, window, cx);
+        self.open_thread_root_inner(row, record_history, window, cx);
     }
 
     fn open_thread_root(&mut self, root: Message, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_thread_root_inner(root, true, window, cx);
+    }
+
+    fn open_thread_root_inner(
+        &mut self,
+        root: Message,
+        record_history: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(room) = self.navigation.selected_room.clone() else {
             return;
         };
+        let before = self.current_nav_page();
+        self.pending_history_thread = None;
+        self.management = None;
+        self.search_open = false;
         self.close_profile(cx);
         self.details_open = false;
         self.thread_request = self.thread_request.wrapping_add(1);
@@ -172,6 +196,9 @@ impl MatrixApp {
             receipt_retry_after: std::time::Instant::now(),
             attachments: Default::default(),
         });
+        if record_history {
+            self.record_history(before);
+        }
         if !self.preview {
             let account = self.snapshot.account_instance;
             self.job(

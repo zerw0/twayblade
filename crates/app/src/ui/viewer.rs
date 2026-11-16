@@ -591,6 +591,14 @@ impl MatrixApp {
             .bg(cx.theme().background)
             .track_focus(&v.focus)
             .key_context("ImageViewer")
+            .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                if let MouseButton::Navigate(direction) = event.button {
+                    if direction == NavigationDirection::Back {
+                        this.close_viewer(window, cx);
+                    }
+                    cx.stop_propagation();
+                }
+            }))
             .child(
                 self.toolbar("viewer-toolbar", cx)
                     .pl(px(if cfg!(target_os = "macos") { 96. } else { 16. }))

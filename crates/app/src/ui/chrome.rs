@@ -1055,7 +1055,7 @@ impl MatrixApp {
                             "nav-back",
                             IconName::ChevronLeft,
                             "Back  ⌘[",
-                            !self.history_back.is_empty(),
+                            self.can_navigate(true),
                         )
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.navigate_history(true, window, cx)
@@ -1066,7 +1066,7 @@ impl MatrixApp {
                             "nav-forward",
                             IconName::ChevronRight,
                             "Forward  ⌘]",
-                            !self.history_forward.is_empty(),
+                            self.can_navigate(false),
                         )
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.navigate_history(false, window, cx)

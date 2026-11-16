@@ -344,10 +344,18 @@ impl Render for MatrixApp {
                                     .items_start()
                                     .justify_center()
                                     .pt(px(72.))
+                                    .capture_any_mouse_down(cx.listener(
+                                        |this, event: &MouseDownEvent, window, cx| {
+                                            if let MouseButton::Navigate(direction) = event.button {
+                                                if direction == NavigationDirection::Back {
+                                                    this.close_management_page(window, cx);
+                                                }
+                                                cx.stop_propagation();
+                                            }
+                                        },
+                                    ))
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        this.management = None;
-                                        this.restore_focus(window, cx);
-                                        cx.notify();
+                                        this.close_management_page(window, cx);
                                     }))
                                     .child(motion::rise(
                                         div().child(
@@ -394,6 +402,12 @@ impl Render for MatrixApp {
             .text_size(px(13.))
             .track_focus(&self.focus)
             .key_context("Twayblade")
+            .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                if let MouseButton::Navigate(direction) = event.button {
+                    this.navigate_history(direction == NavigationDirection::Back, window, cx);
+                    cx.stop_propagation();
+                }
+            }))
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if this.viewer.is_none() {
                     this.emoji_key(event, window, cx);
@@ -468,9 +482,7 @@ impl Render for MatrixApp {
                     .as_ref()
                     .is_some_and(|page| page.kind.is_dialog())
                 {
-                    this.management = None;
-                    this.restore_focus(window, cx);
-                    cx.notify();
+                    this.close_management_page(window, cx);
                 } else {
                     this.dismiss_panel(window, cx);
                 }

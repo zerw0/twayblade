@@ -277,6 +277,32 @@ impl MatrixApp {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum NavPanel {
+    Thread { room: String, root_event: String },
+    Profile { id: String, name: String },
+    Search,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum NavPage {
+    Workspace {
+        space: Option<String>,
+        room: Option<String>,
+        panel: Option<NavPanel>,
+    },
+    Directory {
+        space: Option<String>,
+        room: Option<String>,
+        directory_space: String,
+    },
+    Leave {
+        space: Option<String>,
+        room: Option<String>,
+        leave_space: String,
+    },
+}
+
 pub(super) struct MatrixApp {
     pub settings: Option<(
         AnyWindowHandle,
@@ -319,6 +345,7 @@ pub(super) struct MatrixApp {
     pub options: Option<LoginOptions>,
     /// The sign-in screen moved past the welcome step to choose a server.
     pub(super) choosing_server: bool,
+    pub(super) last_login_options: Option<LoginOptions>,
     pub status: String,
     pub busy: bool,
     /// The sign-in flow is open as a sheet over the workspace, adding another
@@ -333,15 +360,16 @@ pub(super) struct MatrixApp {
     pub(crate) notifications_focus: FocusHandle,
     /// The room list column; the space rail stays visible (⌃⌘S).
     pub sidebar_open: bool,
-    /// Room navigation history for Back/Forward (⌘[ / ⌘]).
-    pub(super) history_back: Vec<String>,
-    pub(super) history_forward: Vec<String>,
+    /// Navigation history for Back/Forward (mouse buttons, ⌘[ / ⌘], titlebar).
+    pub(super) history_back: Vec<NavPage>,
+    pub(super) history_forward: Vec<NavPage>,
     navigating_history: bool,
     /// The space and room each account last showed, by user ID, so switching
     /// back reopens it. Kept for the life of the window.
     account_rooms: HashMap<String, (Option<String>, String)>,
     /// The room to reopen once the switched-to account lists it.
     restore_room: Option<(Option<String>, String)>,
+    pub(super) pending_history_thread: Option<(String, String)>,
     /// Sidebar sections the user collapsed, by section key.
     pub(super) collapsed_sections: std::collections::HashSet<&'static str>,
     /// Selected tab of the room Info panel.
@@ -737,6 +765,7 @@ impl MatrixApp {
             focus: cx.focus_handle(),
             options: None,
             choosing_server: false,
+            last_login_options: None,
             status: String::new(),
             busy: !preview,
             adding_account: false,
@@ -751,6 +780,7 @@ impl MatrixApp {
             navigating_history: false,
             account_rooms: HashMap::new(),
             restore_room: None,
+            pending_history_thread: None,
             // Archived conversations stay out of the way until asked for.
             collapsed_sections: ["archive"].into_iter().collect(),
             info_tab: InfoTab::About,
@@ -1009,6 +1039,7 @@ impl MatrixApp {
         }
         if self.snapshot.session_state != snapshot.session_state {
             self.options = None;
+            self.last_login_options = None;
             self.status.clear();
             self.confirm_session_reset = false;
         }
@@ -1017,6 +1048,11 @@ impl MatrixApp {
             || self.snapshot.account_instance != snapshot.account_instance
         {
             self.notification_thread = None;
+            self.pending_history_thread = None;
+            self.history_back.clear();
+            self.history_forward.clear();
+            self.last_login_options = None;
+            self.search_open = false;
             self.own_avatar = None;
             self.own_name = None;
             if !snapshot.user_id.is_empty()
@@ -1244,6 +1280,7 @@ impl MatrixApp {
         }
         self.resolve_pending_activation(window, cx);
         self.open_pending_notification_thread(window, cx);
+        self.open_pending_history_thread(window, cx);
         self.refresh_viewer(window, cx);
         cx.notify();
     }
@@ -1268,6 +1305,7 @@ impl MatrixApp {
                             state.set_value(this.snapshot.user_id.clone(), window, cx)
                         });
                         this.options = Some(options);
+                        this.last_login_options = None;
                         this.status.clear();
                     }
                     Err(error) => this.status = error.to_string(),
@@ -1283,6 +1321,7 @@ impl MatrixApp {
         if self.preview {
             self.snapshot = Snapshot::default();
             self.options = None;
+            self.last_login_options = None;
             self.confirm_session_reset = false;
             self.status = "Sample data · Local session removed.".into();
             cx.notify();
@@ -1299,6 +1338,7 @@ impl MatrixApp {
                     this.status = error.to_string();
                 } else {
                     this.options = None;
+                    this.last_login_options = None;
                     this.confirm_session_reset = false;
                     this.status.clear();
                 }
@@ -1331,6 +1371,7 @@ impl MatrixApp {
                         }
                         .into();
                         this.options = Some(options);
+                        this.last_login_options = None;
                     }
                     Err(error) => this.status = error.to_string(),
                 }
@@ -1451,17 +1492,27 @@ impl MatrixApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let before = self.current_nav_page();
+        self.pending_history_thread = None;
         self.management = None;
         self.navigation.selected_space = id;
         self.search
             .update(cx, |state, cx| state.set_value("", window, cx));
         if self.navigation.reconcile(&self.snapshot) {
+            self.close_thread(cx);
+            self.close_profile(cx);
+            self.emoji_picker = None;
+            self.end_edit(window, cx);
+            self.clear_attachment();
+            self.snapshot.timeline_ready = false;
+            self.latest_visible = None;
             self.reset_pagination();
             self.groups.clear();
             self.snapshot.messages.clear();
             self.scroller.update(cx, |state, cx| state.reset(0, cx));
             self.queue_selection(None, window, cx);
         }
+        self.record_history(before);
         cx.notify();
     }
 
@@ -1566,6 +1617,10 @@ impl MatrixApp {
             self.pending_activation = Some(target);
             return;
         }
+        let before = self.current_nav_page();
+        self.pending_history_thread = None;
+        self.management = None;
+        self.search_open = false;
         // Open the room where the sidebar lists it: Home, or its space. In
         // Home a room inside a space is not shown and would be closed again.
         self.navigation.selected_space = None;
@@ -1577,12 +1632,22 @@ impl MatrixApp {
                 .find(|space| space.room_ids.contains(target.room.as_str()))
                 .map(|space| space.id.clone());
         }
-        self.select_room(target.room.clone(), window, cx);
+        if let Some(backend) = &self.backend
+            && self
+                .snapshot
+                .missed_calls
+                .iter()
+                .any(|call| call.room == target.room)
+        {
+            backend.clear_missed_calls(Some(&target.room));
+        }
+        self.select_room_inner(target.room.clone(), None, false, window, cx);
         cx.activate(true);
         window.activate_window();
         self.notification_sample = false;
         self.notification_thread = target.thread.map(|root| (target.room, root));
         self.open_pending_notification_thread(window, cx);
+        self.record_history(before);
         cx.notify();
     }
 
@@ -1599,6 +1664,28 @@ impl MatrixApp {
         }
         let (_, root) = self.notification_thread.take().expect("pending thread");
         self.open_thread_event(root, window, cx);
+    }
+
+    fn open_pending_history_thread(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((room, _)) = &self.pending_history_thread else {
+            return;
+        };
+        if self.navigation.selected_room.as_ref() != Some(room)
+            || self.management.is_some()
+            || self.search_open
+            || self.profile.is_some()
+        {
+            self.pending_history_thread = None;
+            return;
+        }
+        if self.snapshot.selected_room != *room || !self.snapshot.timeline_ready {
+            return;
+        }
+        let (_, root) = self
+            .pending_history_thread
+            .take()
+            .expect("pending history thread");
+        self.open_thread_event_inner(root, false, window, cx);
     }
 
     pub fn select_room(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -1621,7 +1708,18 @@ impl MatrixApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.management = None;
+        self.select_room_inner(id, event, true, window, cx);
+    }
+    fn select_room_inner(
+        &mut self,
+        id: String,
+        event: Option<String>,
+        record_history: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let before = self.current_nav_page();
+        let had_management = self.management.take().is_some();
         // Choosing a room supersedes reopening the account's last one.
         self.restore_room = None;
         cx.notify();
@@ -1631,21 +1729,31 @@ impl MatrixApp {
             if !self.preview && !self.timeline_loading_for(&id) {
                 self.queue_selection(Some(id), window, cx);
             }
+            if record_history && had_management {
+                self.record_history(before);
+            }
             return;
         }
+        let navigating_history = std::mem::take(&mut self.navigating_history);
+        if !navigating_history {
+            self.pending_history_thread = None;
+            if self.snapshot.spaces_loaded
+                && !self.navigation.room_visible(&id, &self.snapshot)
+                && self.snapshot.rooms.iter().any(|room| room.id == id)
+            {
+                self.navigation.selected_space = self
+                    .snapshot
+                    .spaces
+                    .iter()
+                    .find(|space| space.room_ids.contains(&id))
+                    .map(|space| space.id.clone());
+            }
+        }
+        self.close_profile(cx);
         self.emoji_picker = None;
         self.end_edit(window, cx);
         self.clear_attachment();
         self.reset_pagination();
-        if !std::mem::take(&mut self.navigating_history) {
-            if let Some(previous) = self.navigation.selected_room.clone() {
-                self.history_back.push(previous);
-                if self.history_back.len() > 100 {
-                    self.history_back.remove(0);
-                }
-            }
-            self.history_forward.clear();
-        }
         self.navigation.selected_room = Some(id.clone());
         self.notification_config();
         self.groups.clear();
@@ -1664,6 +1772,9 @@ impl MatrixApp {
             self.snapshot.timeline_ready = true;
         }
         self.queue_selection_focus(Some(id), event, window, cx);
+        if record_history && !navigating_history {
+            self.record_history(before);
+        }
         cx.notify();
     }
 
@@ -2065,7 +2176,21 @@ impl MatrixApp {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
+        self.open_profile_inner(id, name, true, window, cx);
+    }
+
+    pub(super) fn open_profile_inner(
+        &mut self,
+        id: String,
+        name: String,
+        record_history: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let before = self.current_nav_page();
+        self.pending_history_thread = None;
         self.management = None;
+        self.search_open = false;
         self.close_thread(cx);
         self.profile_request = self.profile_request.wrapping_add(1);
         let request = self.profile_request;
@@ -2076,6 +2201,9 @@ impl MatrixApp {
             loading: !self.preview,
             error: String::new(),
         });
+        if record_history {
+            self.record_history(before);
+        }
         if self.preview {
             cx.notify();
             return;
@@ -2117,17 +2245,77 @@ impl MatrixApp {
         cx.notify();
     }
 
+    pub(super) fn close_management_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(page) = self.management.take() else {
+            return;
+        };
+        if !page.kind.is_dialog() {
+            self.prune_dismissed_panel(true);
+        }
+        self.restore_focus(window, cx);
+        cx.notify();
+    }
+
+    fn prune_dismissed_panel(&mut self, dismissed_management: bool) {
+        let current = self.current_nav_page();
+        let NavPage::Workspace {
+            space: cur_space,
+            room: cur_room,
+            panel: None,
+        } = &current
+        else {
+            while self.history_back.last() == Some(&current) {
+                self.history_back.pop();
+            }
+            return;
+        };
+        while let Some(last) = self.history_back.last() {
+            let prune = if last == &current {
+                true
+            } else if dismissed_management {
+                matches!(
+                    last,
+                    NavPage::Directory { space, room, .. } | NavPage::Leave { space, room, .. }
+                        if space == cur_space && room == cur_room
+                )
+            } else {
+                matches!(
+                    last,
+                    NavPage::Workspace {
+                        space,
+                        room,
+                        panel: Some(_),
+                    } if space == cur_space && room == cur_room
+                )
+            };
+            if prune {
+                self.history_back.pop();
+            } else {
+                break;
+            }
+        }
+        while self.history_forward.last() == Some(&current) {
+            self.history_forward.pop();
+        }
+    }
+
     /// Escape: close the profile first, then the details panel. Focus goes
     /// back to where typing continues, since the closed panel held it.
     pub fn dismiss_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.management.is_some() {
-            self.management = None;
-        } else if self.search_open {
+            self.close_management_page(window, cx);
+            return;
+        }
+        if self.search_open {
             self.search_open = false;
+            self.prune_dismissed_panel(false);
         } else if self.thread.is_some() {
+            self.pending_history_thread = None;
             self.close_thread(cx);
+            self.prune_dismissed_panel(false);
         } else if self.profile.is_some() {
             self.close_profile(cx);
+            self.prune_dismissed_panel(false);
         } else if self.details_open {
             self.details_open = false;
         } else {
@@ -2182,6 +2370,7 @@ impl MatrixApp {
         }
         self.adding_account = true;
         self.options = None;
+        self.last_login_options = None;
         self.choosing_server = true;
         self.status.clear();
         for input in [&self.homeserver, &self.username, &self.password] {
@@ -2199,6 +2388,7 @@ impl MatrixApp {
         }
         self.adding_account = false;
         self.options = None;
+        self.last_login_options = None;
         self.choosing_server = false;
         self.status.clear();
         self.password
@@ -2330,13 +2520,357 @@ pub(super) enum InfoTab {
 }
 
 impl MatrixApp {
-    /// ⌘[ / ⌘]: move through visited rooms, skipping rooms that no longer exist.
+    pub(super) fn current_nav_page(&self) -> NavPage {
+        use crate::ui::spaces::ManageKind;
+        let space = self.navigation.selected_space.clone();
+        let room = self.navigation.selected_room.clone();
+        if let Some(page) = &self.management {
+            match &page.kind {
+                ManageKind::Directory(directory_space) => {
+                    return NavPage::Directory {
+                        space,
+                        room,
+                        directory_space: directory_space.clone(),
+                    };
+                }
+                ManageKind::Leave(leave_space) => {
+                    return NavPage::Leave {
+                        space,
+                        room,
+                        leave_space: leave_space.clone(),
+                    };
+                }
+                ManageKind::Create
+                | ManageKind::Dm
+                | ManageKind::JoinSpace
+                | ManageKind::InviteMember(_)
+                | ManageKind::LeaveRoom(_)
+                | ManageKind::InviteContact
+                | ManageKind::SignOut => {}
+            }
+        }
+        let panel = if self.search_open {
+            Some(NavPanel::Search)
+        } else if let Some(thread) = &self.thread {
+            Some(NavPanel::Thread {
+                room: thread.room.clone(),
+                root_event: thread
+                    .root
+                    .event_id
+                    .clone()
+                    .unwrap_or_else(|| thread.root.id.clone()),
+            })
+        } else if let Some((pending_room, root_event)) = &self.pending_history_thread
+            && room.as_ref() == Some(pending_room)
+        {
+            Some(NavPanel::Thread {
+                room: pending_room.clone(),
+                root_event: root_event.clone(),
+            })
+        } else {
+            self.profile.as_ref().map(|profile| NavPanel::Profile {
+                id: profile.id.clone(),
+                name: profile.name.clone(),
+            })
+        };
+        NavPage::Workspace { space, room, panel }
+    }
+
+    pub(super) fn record_history(&mut self, before: NavPage) {
+        if self.navigating_history {
+            return;
+        }
+        let after = self.current_nav_page();
+        if before == after {
+            return;
+        }
+        if matches!(
+            (&before, &after),
+            (
+                NavPage::Workspace {
+                    room: None,
+                    panel: None,
+                    ..
+                },
+                NavPage::Workspace { room: Some(_), .. }
+            )
+        ) {
+            self.history_forward.clear();
+            return;
+        }
+        if self.history_back.last() != Some(&before) {
+            self.history_back.push(before);
+            if self.history_back.len() > 100 {
+                self.history_back.remove(0);
+            }
+        }
+        self.history_forward.clear();
+    }
+
+    fn workspace_target_valid(&self, space: Option<&str>, room: Option<&str>) -> bool {
+        if let Some(space_id) = space
+            && !self.snapshot.spaces.iter().any(|s| s.id == space_id)
+        {
+            return false;
+        }
+        if let Some(room_id) = room
+            && (!self.snapshot.rooms.iter().any(|r| r.id == room_id)
+                || (self.snapshot.spaces_loaded
+                    && !Navigation::room_visible_in(space, room_id, &self.snapshot)))
+        {
+            return false;
+        }
+        true
+    }
+
+    fn nav_page_valid(&self, page: &NavPage) -> bool {
+        match page {
+            NavPage::Workspace { space, room, panel } => {
+                if !self.workspace_target_valid(space.as_deref(), room.as_deref()) {
+                    return false;
+                }
+                if let Some(NavPanel::Thread {
+                    room: thread_room, ..
+                }) = panel
+                    && room.as_ref() != Some(thread_room)
+                {
+                    return false;
+                }
+                true
+            }
+            NavPage::Directory { space, room, .. } => {
+                self.workspace_target_valid(space.as_deref(), room.as_deref())
+            }
+            NavPage::Leave {
+                space,
+                room,
+                leave_space,
+            } => {
+                self.snapshot.spaces.iter().any(|s| &s.id == leave_space)
+                    && self.workspace_target_valid(space.as_deref(), room.as_deref())
+            }
+        }
+    }
+
+    pub(super) fn can_navigate(&self, back: bool) -> bool {
+        let current = self.current_nav_page();
+        let stack = if back {
+            &self.history_back
+        } else {
+            &self.history_forward
+        };
+        stack
+            .iter()
+            .any(|page| *page != current && self.nav_page_valid(page))
+    }
+
+    fn restore_space_and_room(
+        &mut self,
+        space: Option<String>,
+        room: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.navigation.selected_space = space;
+        if let Some(room_id) = room {
+            if self.navigation.selected_room.as_ref() != Some(&room_id) {
+                self.navigating_history = true;
+                self.select_room_inner(room_id, None, false, window, cx);
+            } else if self.management.is_some() {
+                self.management = None;
+            }
+        } else {
+            let had_room = self.navigation.selected_room.take().is_some();
+            self.management = None;
+            self.close_thread(cx);
+            self.close_profile(cx);
+            if had_room {
+                self.emoji_picker = None;
+                self.end_edit(window, cx);
+                self.clear_attachment();
+                self.reset_pagination();
+                self.groups.clear();
+                self.snapshot.messages.clear();
+                self.snapshot.timeline_ready = false;
+                self.latest_visible = None;
+                if !self.preview {
+                    self.snapshot.members.clear();
+                    self.snapshot.members_state = crate::backend::MembersState::Loading;
+                    self.snapshot.typing.clear();
+                }
+                self.scroller.update(cx, |state, cx| state.reset(0, cx));
+                self.queue_selection(None, window, cx);
+            }
+        }
+    }
+
+    fn restore_nav_page(&mut self, page: NavPage, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::ui::spaces::ManageKind;
+        self.pending_history_thread = None;
+        match page {
+            NavPage::Workspace { space, room, panel } => {
+                self.restore_space_and_room(space, room, window, cx);
+                match panel {
+                    None => {
+                        self.search_open = false;
+                        self.close_thread(cx);
+                        self.close_profile(cx);
+                        self.restore_focus(window, cx);
+                    }
+                    Some(NavPanel::Search) => {
+                        self.close_thread(cx);
+                        self.close_profile(cx);
+                        self.search_open = true;
+                    }
+                    Some(NavPanel::Thread { room, root_event }) => {
+                        self.search_open = false;
+                        self.close_profile(cx);
+                        let already_open = self.thread.as_ref().is_some_and(|t| {
+                            t.room == room
+                                && t.root.event_id.as_deref().unwrap_or(t.root.id.as_str())
+                                    == root_event
+                        });
+                        if !already_open {
+                            if self.preview
+                                || (self.snapshot.selected_room == room
+                                    && self.snapshot.timeline_ready)
+                            {
+                                self.open_thread_event_inner(root_event, false, window, cx);
+                            } else {
+                                self.close_thread(cx);
+                                self.pending_history_thread = Some((room, root_event));
+                            }
+                        }
+                    }
+                    Some(NavPanel::Profile { id, name }) => {
+                        self.search_open = false;
+                        self.close_thread(cx);
+                        if self.profile.as_ref().is_none_or(|p| p.id != id) {
+                            self.open_profile_inner(id, name, false, window, cx);
+                        }
+                    }
+                }
+                cx.notify();
+            }
+            NavPage::Directory {
+                space,
+                room,
+                directory_space,
+            } => {
+                self.restore_space_and_room(space, room, window, cx);
+                self.open_management_inner(
+                    ManageKind::Directory(directory_space),
+                    false,
+                    window,
+                    cx,
+                );
+            }
+            NavPage::Leave {
+                space,
+                room,
+                leave_space,
+            } => {
+                self.restore_space_and_room(space, room, window, cx);
+                self.open_management_inner(ManageKind::Leave(leave_space), false, window, cx);
+            }
+        }
+    }
+
+    /// Mouse Back/Forward and ⌘[ / ⌘]: move through visited pages, panels, and overlays.
     pub(super) fn navigate_history(
         &mut self,
         back: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.viewer.is_some() {
+            if back {
+                self.close_viewer(window, cx);
+            }
+            return;
+        }
+        if self.notifications_open {
+            if back {
+                self.close_notifications(window, cx);
+            }
+            return;
+        }
+        if self.adding_account {
+            if !self.busy && self.oauth_cancel.is_none() {
+                if back {
+                    if self.options.is_some() {
+                        self.last_login_options = self.options.take();
+                        self.choosing_server = true;
+                        self.password
+                            .update(cx, |state, cx| state.set_value("", window, cx));
+                        cx.notify();
+                    } else {
+                        self.cancel_add_account(window, cx);
+                    }
+                } else if self.options.is_none()
+                    && let Some(options) = self.last_login_options.take()
+                {
+                    self.options = Some(options);
+                    cx.notify();
+                }
+            }
+            return;
+        }
+        if self.call_fills_window() {
+            if back {
+                self.toggle_call_full_screen(window, cx);
+            }
+            return;
+        }
+        if self.emoji_picker.is_some() {
+            if back {
+                self.close_emoji(window, cx);
+            }
+            return;
+        }
+        if self.snapshot.session_state != twayblade_core::auth::SessionState::Active {
+            if back && self.confirm_session_reset && !self.busy {
+                self.confirm_session_reset = false;
+                cx.notify();
+            }
+            return;
+        }
+        if self.snapshot.user_id.is_empty() {
+            if !self.busy && self.oauth_cancel.is_none() {
+                if back {
+                    if self.options.is_some() {
+                        self.last_login_options = self.options.take();
+                        self.choosing_server = true;
+                        self.password
+                            .update(cx, |state, cx| state.set_value("", window, cx));
+                        cx.notify();
+                    } else if self.choosing_server {
+                        self.choosing_server = false;
+                        cx.notify();
+                    }
+                } else if self.options.is_none() {
+                    if !self.choosing_server && self.last_login_options.is_some() {
+                        self.choosing_server = true;
+                        cx.notify();
+                    } else if let Some(options) = self.last_login_options.take() {
+                        self.choosing_server = true;
+                        self.options = Some(options);
+                        cx.notify();
+                    }
+                }
+            }
+            return;
+        }
+        if self
+            .management
+            .as_ref()
+            .is_some_and(|page| page.kind.is_dialog())
+        {
+            if back {
+                self.close_management_page(window, cx);
+            }
+            return;
+        }
         loop {
             let next = if back {
                 self.history_back.pop()
@@ -2344,18 +2878,16 @@ impl MatrixApp {
                 self.history_forward.pop()
             };
             let Some(next) = next else { return };
-            if !self.snapshot.rooms.iter().any(|room| room.id == next) {
+            let current = self.current_nav_page();
+            if next == current || !self.nav_page_valid(&next) {
                 continue;
             }
-            if let Some(current) = self.navigation.selected_room.clone() {
-                if back {
-                    self.history_forward.push(current);
-                } else {
-                    self.history_back.push(current);
-                }
+            if back {
+                self.history_forward.push(current);
+            } else {
+                self.history_back.push(current);
             }
-            self.navigating_history = true;
-            self.select_room(next, window, cx);
+            self.restore_nav_page(next, window, cx);
             return;
         }
     }
@@ -2470,8 +3002,11 @@ impl MatrixApp {
                 }
                 match result {
                     Ok(crate::backend::SpaceOutcome::Room(id)) => {
-                        this.close_profile(cx);
-                        this.select_room(id, window, cx);
+                        if this.navigation.selected_room.as_ref() == Some(&id) {
+                            this.dismiss_panel(window, cx);
+                        } else {
+                            this.select_room(id, window, cx);
+                        }
                     }
                     Ok(_) => {}
                     Err(error) => this.status = error.to_string(),
@@ -2752,7 +3287,11 @@ impl MatrixApp {
         if text.is_empty() {
             return;
         }
+        let before = self.current_nav_page();
+        self.pending_history_thread = None;
+        self.management = None;
         self.search_open = true;
+        self.record_history(before);
         if self.preview {
             cx.notify();
             return;

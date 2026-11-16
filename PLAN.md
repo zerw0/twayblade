@@ -411,6 +411,38 @@ the system's own emoji data on this macOS (AppKit text draws it the same way).
 Verified by captures, an offline click test and compilation; reaction chips and
 other emoji in buttons were not changed. Linux and Windows emoji fonts unchecked.
 
+Back and forward navigation (2026-11-16, `feature/back-navigation-v3`):
+- Mouse Back/Forward (`MouseButton::Navigate`), title-bar `<`/`>` buttons and
+  keyboard shortcuts (`⌘[`/`⌘]` on macOS, `Alt+←`/`Alt+→` on Linux/Windows)
+  navigate workspace history across spaces, rooms, side panels (Search, Thread,
+  Profile) and full-page Space views (`Directory`, `Leave`), syncing
+  cross-space selections, preserving room-scoped reply-quote drafts, clearing
+  transient room edit/emoji/attachment state, and pruning invalid or explicitly
+  closed panels/pages.
+- Hierarchical escape-like Back behavior before popping workspace history: mouse
+  Back closes the image viewer, notifications popover, Add Account sheet (stepping
+  from login options back to server entry before cancelling), full-screen call view,
+  emoji picker, modal sheets (Create Room, New DM, Join Space, Invite Member,
+  Leave Room, Invite Contact, Sign Out), hard-reset confirmation (`SessionResetConfirm`),
+  or steps back through the three-step sign-in flow (login options -> server chooser
+  -> welcome, with Forward restoration).
+- Settings window tracks independent section history via mouse Back/Forward and
+  `⌘[`/`⌘]`, respecting the recovery-key acknowledgement guard across Security and
+  Devices.
+- Verified after rebasing onto `origin/develop` (`f99bc84`, including `#132`
+  Windows 8 MiB stack): `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `cargo test --workspace` (216 passed, 39 ignored), and
+  `cargo test -p twayblade --features capture` (196 passed, 0 failed; offline
+  GPUI tests simulate `MouseButton::Navigate` events, clicks, actions,
+  `add-account-backdrop` occlusion handling, `notifications_open` popover, and
+  `reply_to` quote preservation across Back/Forward).
+- Not yet verified: live homeserver session navigation (including asynchronous
+  `pending_history_thread` reopening on Back/Forward), physical OS mouse
+  Back/Forward hardware buttons, keyboard Back/Forward shortcuts inside a live
+  Settings window, full-screen call Back toggle in a live call, and Linux/Windows
+  builds and runtime.
+
 ## Workspace
 
 ```text

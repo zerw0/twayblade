@@ -16,11 +16,15 @@ pub(super) struct Navigation {
 
 impl Navigation {
     pub fn room_visible(&self, id: &str, snapshot: &Snapshot) -> bool {
-        if let Some(selected) = &self.selected_space {
+        Self::room_visible_in(self.selected_space.as_deref(), id, snapshot)
+    }
+
+    pub fn room_visible_in(space: Option<&str>, id: &str, snapshot: &Snapshot) -> bool {
+        if let Some(selected) = space {
             return snapshot
                 .spaces
                 .iter()
-                .find(|space| &space.id == selected)
+                .find(|space| space.id == selected)
                 .is_some_and(|space| space.room_ids.contains(id));
         }
         // Home holds rooms outside any space, plus every archived

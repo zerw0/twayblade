@@ -76,6 +76,22 @@ impl MatrixApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.open_management_inner(kind, true, window, cx);
+    }
+
+    pub(crate) fn open_management_inner(
+        &mut self,
+        kind: ManageKind,
+        record_history: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let before = self.current_nav_page();
+        let is_dialog = kind.is_dialog();
+        if !is_dialog {
+            self.pending_history_thread = None;
+            self.search_open = false;
+        }
         self.close_viewer(window, cx);
         self.close_thread(cx);
         self.close_profile(cx);
@@ -149,6 +165,9 @@ impl MatrixApp {
                 }
                 _ => {}
             }
+        }
+        if record_history && !is_dialog {
+            self.record_history(before);
         }
         if self.preview {
             if let Some(page) = &mut self.management {
@@ -273,7 +292,7 @@ impl MatrixApp {
                             let space = matches!(page.kind, ManageKind::JoinSpace);
                             this.management = None;
                             if space {
-                                this.navigation.selected_space = Some(id);
+                                this.select_space(Some(id), window, cx);
                             } else {
                                 this.select_room(id, window, cx);
                             }
@@ -293,8 +312,7 @@ impl MatrixApp {
                         if matches!(page.kind, ManageKind::LeaveRoom(_)) {
                             this.status = "You left the room.".into();
                         }
-                        this.management = None;
-                        this.restore_focus(window, cx);
+                        this.close_management_page(window, cx);
                     }
                     Err(error) => page.status = error.to_string(),
                 }
@@ -972,9 +990,7 @@ impl MatrixApp {
                             .accessibility_label("Close")
                             .tooltip("Close · Escape")
                             .on_click(cx.listener(|this, _, window, cx| {
-                                this.management = None;
-                                this.restore_focus(window, cx);
-                                cx.notify();
+                                this.close_management_page(window, cx);
                             })),
                     ),
             )

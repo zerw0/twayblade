@@ -3744,3 +3744,616 @@ fn an_available_update_shows_a_title_bar_notice_that_opens_settings(cx: &mut Tes
         assert!(app.settings.is_some(), "the notice opens Settings");
     });
 }
+
+fn mouse_navigate(
+    window: &mut gpui_kit::Window,
+    point: gpui_kit::Point<gpui_kit::Pixels>,
+    direction: gpui_kit::NavigationDirection,
+    cx: &mut gpui_kit::App,
+) {
+    use gpui_kit::test::TestEventExt;
+    window.render_frame(cx);
+    window.pointer_move(point, None, cx);
+    window.pointer_down(point, gpui_kit::MouseButton::Navigate(direction), cx);
+}
+
+#[gpui_kit::test]
+fn mouse_back_and_forward_navigate_across_spaces_and_skip_invalid_entries(cx: &mut TestAppContext) {
+    use gpui_kit::{NavigationDirection, point};
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.find("nav-back").disabled(), Some(true));
+        assert_eq!(window.find("nav-forward").disabled(), Some(true));
+
+        // Design space: #general -> #critique -> Home -> #notes.
+        window.click("room-critique", cx);
+        window.click("home", cx);
+        window.click("room-notes", cx);
+        window.render_frame(cx);
+        assert_eq!(window.find("nav-back").disabled(), None);
+
+        // Mouse Back from Home #notes skips the empty Home transition and returns
+        // straight to Design space #critique.
+        mouse_navigate(
+            window,
+            point(px(500.), px(300.)),
+            NavigationDirection::Back,
+            cx,
+        );
+        window.render_frame(cx);
+    })
+    .expect("mouse back across spaces");
+    cx.update(|cx| {
+        let app = app.read(cx);
+        assert_eq!(app.navigation.selected_space.as_deref(), Some("design"));
+        assert_eq!(app.navigation.selected_room.as_deref(), Some("critique"));
+    });
+
+    // A subsequent snapshot update must keep the restored space+room rather than wiping it.
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            let mut snapshot = app.snapshot.clone();
+            snapshot.revision += 1;
+            app.apply(snapshot, window, cx);
+        });
+        window.render_frame(cx);
+    })
+    .expect("snapshot reconcile keeps restored cross-space selection");
+    cx.update(|cx| {
+        let app = app.read(cx);
+        assert_eq!(app.navigation.selected_space.as_deref(), Some("design"));
+        assert_eq!(app.navigation.selected_room.as_deref(), Some("critique"));
+    });
+
+    // Mouse Forward returns to Home #notes; Back returns to #critique, then #general.
+    cx.update_window(window, |_, window, cx| {
+        mouse_navigate(
+            window,
+            point(px(500.), px(300.)),
+            NavigationDirection::Forward,
+            cx,
+        );
+        window.render_frame(cx);
+    })
+    .expect("mouse forward across spaces");
+    cx.update(|cx| {
+        let app = app.read(cx);
+        assert!(app.navigation.selected_space.is_none());
+        assert_eq!(app.navigation.selected_room.as_deref(), Some("notes"));
+    });
+
+    cx.update_window(window, |_, window, cx| {
+        window.click("nav-back", cx);
+        window.render_frame(cx);
+    })
+    .expect("titlebar back to critique");
+    cx.update(|cx| {
+        assert_eq!(
+            app.read(cx).navigation.selected_room.as_deref(),
+            Some("critique")
+        );
+    });
+
+    // Remove #general from the workspace; nav-back must reflect there is no valid back entry.
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.snapshot.rooms.retain(|room| room.id != "general");
+            cx.notify();
+        });
+        window.render_frame(cx);
+        assert_eq!(window.find("nav-back").disabled(), Some(true));
+        app.update(cx, |app, cx| app.focus.focus(window, cx));
+        window.render_frame(cx);
+        window.dispatch_action(Box::new(crate::app::NavigateForward), cx);
+        window.render_frame(cx);
+    })
+    .expect("invalid entry disables nav-back and action navigates forward");
+    cx.update(|cx| {
+        assert_eq!(
+            app.read(cx).navigation.selected_room.as_deref(),
+            Some("notes")
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn back_and_forward_navigate_pages_panels_and_prune_on_close(cx: &mut TestAppContext) {
+    use gpui_kit::{NavigationDirection, point};
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        // Visit #critique -> open thread -> mouse Back closes thread -> Forward reopens it.
+        window.click("room-critique", cx);
+        app.update(cx, |app, cx| {
+            app.open_thread_event("$critique-root:preview.invalid".into(), window, cx);
+        });
+        window.render_frame(cx);
+        assert!(window.find("close-thread").visible());
+
+        mouse_navigate(
+            window,
+            point(px(500.), px(300.)),
+            NavigationDirection::Back,
+            cx,
+        );
+        window.render_frame(cx);
+        assert!(window.try_find("close-thread").is_none());
+
+        mouse_navigate(
+            window,
+            point(px(500.), px(300.)),
+            NavigationDirection::Forward,
+            cx,
+        );
+        window.render_frame(cx);
+        assert!(window.find("close-thread").visible());
+
+        // Clicking X explicitly dismisses the thread and prunes it from history_back so
+        // the next Back returns to #general rather than reopening the thread.
+        window.click("close-thread", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("close-thread").is_none());
+        mouse_navigate(
+            window,
+            point(px(500.), px(300.)),
+            NavigationDirection::Back,
+            cx,
+        );
+        window.render_frame(cx);
+    })
+    .expect("thread history and prune");
+    cx.update(|cx| {
+        assert_eq!(
+            app.read(cx).navigation.selected_room.as_deref(),
+            Some("general")
+        );
+    });
+
+    // Search panel -> open search result in another room -> Back returns to search in #general -> Back closes search.
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.search
+                .update(cx, |s, cx| s.set_value("matrix", window, cx));
+            app.run_message_search(window, cx);
+        });
+        window.render_frame(cx);
+        assert!(window.find("close-search").visible());
+
+        app.update(cx, |app, cx| {
+            app.open_event("research".into(), "$hit:preview.invalid".into(), window, cx);
+        });
+        window.render_frame(cx);
+        assert_eq!(
+            app.read(cx).navigation.selected_room.as_deref(),
+            Some("research")
+        );
+        assert!(window.find("close-search").visible());
+
+        mouse_navigate(
+            window,
+            point(px(500.), px(300.)),
+            NavigationDirection::Back,
+            cx,
+        );
+        window.render_frame(cx);
+        assert_eq!(
+            app.read(cx).navigation.selected_room.as_deref(),
+            Some("general")
+        );
+        assert!(window.find("close-search").visible());
+
+        mouse_navigate(
+            window,
+            point(px(500.), px(300.)),
+            NavigationDirection::Back,
+            cx,
+        );
+        window.render_frame(cx);
+        assert!(window.try_find("close-search").is_none());
+    })
+    .expect("search panel history across rooms");
+
+    // Profile -> Directory -> Nested Subspace Directory -> Back -> X prune.
+    cx.update_window(window, |_, window, cx| {
+        window.click("details", cx);
+        window.click("info-tab-Members", cx);
+        window.render_frame(cx);
+        window.click("member-@alex:preview.invalid", cx);
+        window.render_frame(cx);
+        assert!(window.find("copy-profile-id").visible());
+
+        mouse_navigate(
+            window,
+            point(px(500.), px(300.)),
+            NavigationDirection::Back,
+            cx,
+        );
+        window.render_frame(cx);
+        assert!(window.try_find("copy-profile-id").is_none());
+
+        app.update(cx, |app, cx| {
+            app.open_management(
+                crate::ui::spaces::ManageKind::Directory("design".into()),
+                window,
+                cx,
+            );
+        });
+        window.render_frame(cx);
+        window.click("browse-sample-nested", cx);
+        window.render_frame(cx);
+    })
+    .expect("open nested directory");
+    cx.update(|cx| {
+        assert!(matches!(
+            app.read(cx).management.as_ref().map(|m| &m.kind),
+            Some(crate::ui::spaces::ManageKind::Directory(id)) if id == "sample-nested"
+        ));
+    });
+
+    cx.update_window(window, |_, window, cx| {
+        mouse_navigate(
+            window,
+            point(px(500.), px(300.)),
+            NavigationDirection::Back,
+            cx,
+        );
+        window.render_frame(cx);
+    })
+    .expect("back from nested directory");
+    cx.update(|cx| {
+        assert!(matches!(
+            app.read(cx).management.as_ref().map(|m| &m.kind),
+            Some(crate::ui::spaces::ManageKind::Directory(id)) if id == "design"
+        ));
+    });
+
+    cx.update_window(window, |_, window, cx| {
+        window.click("close-management", cx);
+        window.render_frame(cx);
+        assert_eq!(window.find("nav-back").disabled(), Some(true));
+    })
+    .expect("close-management prunes directory chain");
+}
+
+#[gpui_kit::test]
+fn mouse_back_closes_viewer_and_modal_dialogs_before_workspace_history(cx: &mut TestAppContext) {
+    use gpui_kit::{NavigationDirection, point};
+    let (window, app) = preview_window(cx);
+    let initial_messages = cx.update(|cx| app.read(cx).snapshot.messages.clone());
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("room-critique", cx);
+        app.update(cx, |app, cx| {
+            app.snapshot.messages = initial_messages;
+            app.preview_viewer(window, cx);
+        });
+        window.render_frame(cx);
+        let centre = window.find("viewer-canvas").bounds().center();
+
+        // Forward inside viewer is ignored; Back closes viewer without changing rooms.
+        mouse_navigate(window, centre, NavigationDirection::Forward, cx);
+        mouse_navigate(window, centre, NavigationDirection::Back, cx);
+        window.render_frame(cx);
+    })
+    .expect("mouse back closes image viewer");
+    cx.update(|cx| {
+        let app = app.read(cx);
+        assert!(app.viewer.is_none());
+        assert_eq!(app.navigation.selected_room.as_deref(), Some("critique"));
+    });
+
+    // Open a modal dialog (New Room) over #critique; mouse Back closes only the dialog,
+    // then another mouse Back navigates from #critique to #general.
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_management(crate::ui::spaces::ManageKind::Create, window, cx);
+        });
+        window.render_frame(cx);
+        let dialog_centre = window.find("create-room-submit").bounds().center();
+        mouse_navigate(window, dialog_centre, NavigationDirection::Forward, cx);
+        mouse_navigate(window, dialog_centre, NavigationDirection::Back, cx);
+        window.render_frame(cx);
+    })
+    .expect("mouse back closes modal dialog");
+    cx.update(|cx| {
+        let app = app.read(cx);
+        assert!(app.management.is_none());
+        assert_eq!(app.navigation.selected_room.as_deref(), Some("critique"));
+    });
+
+    // Opening the notifications popover or Add Account sheet intercepts mouse Back before
+    // workspace room history is touched.
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.notifications_open = true;
+            cx.notify();
+        });
+        window.render_frame(cx);
+        mouse_navigate(
+            window,
+            point(px(500.), px(300.)),
+            NavigationDirection::Back,
+            cx,
+        );
+        window.render_frame(cx);
+    })
+    .expect("mouse back closes notifications popover");
+    cx.update(|cx| {
+        let app = app.read(cx);
+        assert!(!app.notifications_open);
+        assert_eq!(app.navigation.selected_room.as_deref(), Some("critique"));
+    });
+
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.begin_add_account(window, cx);
+            app.options = Some(crate::backend::LoginOptions {
+                homeserver: "https://twayblade.example.org/".into(),
+                password: true,
+                browser: true,
+                sso: false,
+                providers: Vec::new(),
+            });
+            cx.notify();
+        });
+        window.render_frame(cx);
+        assert!(window.find("browser-sign-in").visible());
+        mouse_navigate(
+            window,
+            point(px(500.), px(300.)),
+            NavigationDirection::Back,
+            cx,
+        );
+        window.render_frame(cx);
+        assert!(window.find("discover").visible());
+        mouse_navigate(
+            window,
+            point(px(500.), px(300.)),
+            NavigationDirection::Back,
+            cx,
+        );
+        window.render_frame(cx);
+        assert!(window.try_find("add-account-backdrop").is_none());
+    })
+    .expect("mouse back steps back and closes add-account sheet");
+    cx.update(|cx| {
+        let app = app.read(cx);
+        assert!(!app.adding_account);
+        assert_eq!(app.navigation.selected_room.as_deref(), Some("critique"));
+    });
+
+    cx.update_window(window, |_, window, cx| {
+        mouse_navigate(
+            window,
+            point(px(500.), px(300.)),
+            NavigationDirection::Back,
+            cx,
+        );
+        window.render_frame(cx);
+    })
+    .expect("subsequent mouse back returns to general");
+    cx.update(|cx| {
+        assert_eq!(
+            app.read(cx).navigation.selected_room.as_deref(),
+            Some("general")
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn reply_quote_draft_survives_room_back_and_forward_without_colliding_with_escape(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::{NavigationDirection, point};
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let msg = app
+            .read(cx)
+            .snapshot
+            .messages
+            .iter()
+            .find(|m| m.event_id.is_some())
+            .expect("message with event_id")
+            .id
+            .clone();
+        app.update(cx, |app, cx| {
+            app.start_reply(msg, window, cx);
+        });
+        window.render_frame(cx);
+        assert!(window.find("reply-bar").visible());
+
+        // Switching to #critique hides #general's reply bar; mouse Back restores #general with it intact.
+        window.click("room-critique", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("reply-bar").is_none());
+
+        mouse_navigate(
+            window,
+            point(px(500.), px(300.)),
+            NavigationDirection::Back,
+            cx,
+        );
+        window.render_frame(cx);
+        assert_eq!(
+            app.read(cx).navigation.selected_room.as_deref(),
+            Some("general")
+        );
+        assert!(window.find("reply-bar").visible());
+
+        // Forward to #critique still keeps the quote scoped to #general, and Back returns cleanly.
+        mouse_navigate(
+            window,
+            point(px(500.), px(300.)),
+            NavigationDirection::Forward,
+            cx,
+        );
+        window.render_frame(cx);
+        assert!(window.try_find("reply-bar").is_none());
+        mouse_navigate(
+            window,
+            point(px(500.), px(300.)),
+            NavigationDirection::Back,
+            cx,
+        );
+        window.render_frame(cx);
+        assert!(window.find("reply-bar").visible());
+    })
+    .expect("reply quote preserved across back/forward navigation");
+}
+
+#[gpui_kit::test]
+fn mouse_back_and_forward_handle_sign_in_and_session_reset(cx: &mut TestAppContext) {
+    use gpui_kit::{NavigationDirection, point};
+    let (window, app) = preview_window(cx);
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            app.snapshot = crate::backend::Snapshot::default();
+            app.choosing_server = true;
+            app.options = Some(crate::backend::LoginOptions {
+                homeserver: "https://twayblade.example.org/".into(),
+                password: true,
+                browser: true,
+                sso: false,
+                providers: Vec::new(),
+            });
+            cx.notify();
+        });
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("sign-in").visible());
+        mouse_navigate(
+            window,
+            point(px(400.), px(300.)),
+            NavigationDirection::Back,
+            cx,
+        );
+        window.render_frame(cx);
+        assert!(window.find("discover").visible());
+
+        mouse_navigate(
+            window,
+            point(px(400.), px(300.)),
+            NavigationDirection::Back,
+            cx,
+        );
+        window.render_frame(cx);
+        assert!(window.find("start-sign-in").visible());
+
+        mouse_navigate(
+            window,
+            point(px(400.), px(300.)),
+            NavigationDirection::Forward,
+            cx,
+        );
+        window.render_frame(cx);
+        assert!(window.find("discover").visible());
+
+        mouse_navigate(
+            window,
+            point(px(400.), px(300.)),
+            NavigationDirection::Forward,
+            cx,
+        );
+        window.render_frame(cx);
+        assert!(window.find("sign-in").visible());
+    })
+    .expect("sign-in step back and forward");
+
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.snapshot.session_state = twayblade_core::auth::SessionState::HardLoggedOut;
+            app.confirm_session_reset = true;
+            cx.notify();
+        });
+        window.render_frame(cx);
+        assert!(window.find("confirm-session-reset").visible());
+        mouse_navigate(
+            window,
+            point(px(400.), px(300.)),
+            NavigationDirection::Back,
+            cx,
+        );
+        window.render_frame(cx);
+        assert!(window.find("sign-in-again").visible());
+    })
+    .expect("mouse back cancels hard logout reset confirmation");
+}
+
+#[gpui_kit::test]
+fn settings_window_mouse_back_and_forward_switch_sections_and_respect_security_guard(
+    cx: &mut TestAppContext,
+) {
+    use crate::ui::settings::Section;
+    use gpui_kit::{NavigationDirection, point};
+    let (main_window, app) = preview_window(cx);
+    cx.update_window(main_window, |_, window, cx| {
+        window.render_frame(cx);
+        app.update(cx, |app, cx| app.open_settings(Section::Appearance, cx));
+        window.render_frame(cx);
+    })
+    .unwrap();
+    let settings = cx.update(|cx| app.read(cx).settings.as_ref().unwrap().0);
+    let view = cx.update(|cx| app.read(cx).settings.as_ref().unwrap().1.upgrade().unwrap());
+
+    cx.update_window(settings, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("settings-Chat", cx);
+        window.click("settings-Notifications", cx);
+        window.click("settings-Security", cx);
+        window.render_frame(cx);
+        assert_eq!(view.read(cx).section, Section::Security);
+
+        // Lock navigation while recovery key is unacknowledged.
+        app.update(cx, |app, cx| {
+            app.security_key = Some(zeroize::Zeroizing::new("ABCD 1234".into()));
+            cx.notify();
+        });
+        mouse_navigate(
+            window,
+            point(px(400.), px(300.)),
+            NavigationDirection::Back,
+            cx,
+        );
+        assert_eq!(view.read(cx).section, Section::Security);
+
+        // Once acknowledged, mouse Back walks Security -> Notifications -> Chat -> Appearance.
+        app.update(cx, |app, cx| {
+            app.security_key = None;
+            cx.notify();
+        });
+        mouse_navigate(
+            window,
+            point(px(400.), px(300.)),
+            NavigationDirection::Back,
+            cx,
+        );
+        assert_eq!(view.read(cx).section, Section::Notifications);
+        mouse_navigate(
+            window,
+            point(px(400.), px(300.)),
+            NavigationDirection::Back,
+            cx,
+        );
+        assert_eq!(view.read(cx).section, Section::Chat);
+        mouse_navigate(
+            window,
+            point(px(400.), px(300.)),
+            NavigationDirection::Back,
+            cx,
+        );
+        assert_eq!(view.read(cx).section, Section::Appearance);
+
+        // Forward walks back to Chat.
+        mouse_navigate(
+            window,
+            point(px(400.), px(300.)),
+            NavigationDirection::Forward,
+            cx,
+        );
+        assert_eq!(view.read(cx).section, Section::Chat);
+    })
+    .expect("settings mouse back/forward");
+}
