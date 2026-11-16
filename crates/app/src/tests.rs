@@ -2383,6 +2383,52 @@ fn reply_names_the_message_and_can_be_cancelled(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn the_composer_shows_who_has_seen_the_latest_message(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    let seen = |cx: &mut TestAppContext| {
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            !window.find_all("seen-by").is_empty()
+        })
+        .expect("render")
+    };
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            app.snapshot.typing.clear();
+            let reader = app.snapshot.members[0].user_id.clone();
+            let latest = app
+                .snapshot
+                .messages
+                .iter_mut()
+                .rev()
+                .find(|m| m.event_id.is_some())
+                .expect("a sent message");
+            latest.read_by = vec![reader];
+            cx.notify();
+        })
+    });
+    assert!(seen(cx), "a reader of the latest message is shown");
+    // Someone typing takes the line instead.
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            app.snapshot.typing = app
+                .snapshot
+                .members
+                .iter()
+                .take(1)
+                .map(|m| twayblade_core::room_state::TypingUser {
+                    user_id: m.user_id.clone(),
+                    name: m.display_name.clone(),
+                    avatar: None,
+                })
+                .collect();
+            cx.notify();
+        })
+    });
+    assert!(!seen(cx), "typing replaces the read line");
+}
+
+#[gpui_kit::test]
 fn a_thread_reply_has_its_own_attachments(cx: &mut TestAppContext) {
     let (window, app) = preview_window(cx);
     cx.update_window(window, |_, window, cx| {
