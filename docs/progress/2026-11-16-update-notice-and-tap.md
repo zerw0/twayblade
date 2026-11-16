@@ -34,3 +34,28 @@
 - The tap itself: no repository, no `brew install` from it, no real release
   to fill it from.
 - `brew audit` and `brew style`: Homebrew is not installed here.
+
+## Test pre-release v0.1.0-rc.1 (#55)
+
+Tagged on `main` after #101. The release workflow built every package and
+created a draft pre-release with nine assets. Checks on the draft:
+- `SHA256SUMS` matches the downloaded DMG, MSI and AppImage.
+- The DMG mounts with `Twayblade.app` and an Applications link. The app is
+  ad hoc signed, `codesign --verify --deep --strict` passes, and Gatekeeper
+  (`spctl`) rejects it as expected.
+
+Fixed here after the draft:
+- The DMG was named from the bundle version (`Twayblade-0.1.0-arm64.dmg`)
+  rather than the tag, so the cask script could not find it. It is now named
+  after the tag, like the other packages.
+- GitHub renames `~` to `.` in asset names, so the deb and rpm lines in
+  `SHA256SUMS` did not match the downloadable files. The release job now
+  renames the files before computing checksums.
+- The distributed app carried the development identifier
+  (`com.twayblade.desktop.development`). CI now builds it as
+  `com.twayblade.desktop`; local builds keep the development identifier.
+
+The rc.1 draft has the old names and identifier and stays unpublished. A
+second test tag after this change can confirm the fixes. The draft is not
+published: draft assets are not public, so the tap and the in-app download
+cannot use it until a person publishes a pre-release.

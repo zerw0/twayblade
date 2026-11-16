@@ -30,6 +30,16 @@ app="$repo_root/target/$profile/bundle/Twayblade.app"
 mkdir -p "$app/Contents/MacOS"
 cp "target/$profile/twayblade" "$app/Contents/MacOS/"
 cp macos/Info.plist "$app/Contents/Info.plist"
+# Local builds keep the development identifier, so they never share
+# notification permission or preferences with an installed release. CI sets
+# TWAYBLADE_BUNDLE_ID=com.twayblade.desktop for the distributed bundle.
+if [[ -n "${TWAYBLADE_BUNDLE_ID:-}" ]]; then
+    if [[ ! "$TWAYBLADE_BUNDLE_ID" =~ ^[A-Za-z0-9.-]+$ ]]; then
+        printf 'TWAYBLADE_BUNDLE_ID is not a bundle identifier.\n' >&2
+        exit 1
+    fi
+    /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $TWAYBLADE_BUNDLE_ID" "$app/Contents/Info.plist"
+fi
 # Remove the superseded helper from a previously built development bundle.
 rm -rf "$app/Contents/Helpers/Twayblade Call.app"
 mkdir -p "$app/Contents/Resources/licenses"

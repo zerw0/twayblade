@@ -70,12 +70,19 @@ jobs:
 
       - name: Build macOS app bundle
         if: runner.os == 'macOS'
+        env:
+          # The distributed identifier; local builds keep ".development".
+          TWAYBLADE_BUNDLE_ID: com.twayblade.desktop
         run: |
           bash macos/build.sh --release
           mkdir -p dist
           # ditto keeps the bundle's symlinks, metadata and signature intact.
           ditto -c -k --keepParent "target/release/bundle/Twayblade.app" "dist/twayblade-${{ matrix.name }}.zip"
-          # The disk image for direct downloads and the Homebrew cask (#52).
+          # The disk image for direct downloads and the Homebrew cask (#52),
+          # named after the tag like the other packages.
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            export TWAYBLADE_VERSION="${GITHUB_REF_NAME#v}"
+          fi
           bash macos/make-dmg.sh target/release/bundle/Twayblade.app
 
       - name: Build Linux binary
@@ -175,7 +182,14 @@ jobs:
           path: dist
           merge-multiple: true
       - name: Checksums
-        run: cd dist && sha256sum * > SHA256SUMS
+        # GitHub renames "~" in asset names to "."; rename first so the
+        # checksum lines match the downloadable files.
+        run: |
+          cd dist
+          for f in *~*; do
+            if [ -e "$f" ]; then mv -- "$f" "${f//\~/.}"; fi
+          done
+          sha256sum * > SHA256SUMS
       # Notes from the pull requests merged since the previous tag (or since
       # the first commit), grouped as New, Improved and Fixed with stated gaps.
       - name: Draft release notes

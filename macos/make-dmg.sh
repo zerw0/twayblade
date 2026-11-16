@@ -16,7 +16,9 @@ if [[ ! -d "$app/Contents/MacOS" ]]; then
     echo "make-dmg: no app bundle at $app; run macos/build.sh --release first" >&2
     exit 1
 fi
-version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")"
+# Release builds name the image after the tag (TWAYBLADE_VERSION, e.g.
+# 0.1.0-rc.1); otherwise the bundle's version.
+version="${TWAYBLADE_VERSION:-$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")}"
 arch="$(/usr/bin/lipo -archs "$app/Contents/MacOS/twayblade" | tr ' ' '-')"
 out="${2:-dist/Twayblade-$version-$arch.dmg}"
 
