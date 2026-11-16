@@ -36,8 +36,68 @@ pub fn available() -> bool {
     v4.as_deref().is_ok_and(has_default_v4) || v6.as_deref().is_ok_and(has_default_v6)
 }
 
+/// Windows: a default route (IPv4 or IPv6) on an interface that is up, has
+/// its medium connected and is not loopback. Unknown counts as available.
+#[cfg(target_os = "windows")]
+pub fn available() -> bool {
+    win::default_route_up().unwrap_or(true)
+}
+
+#[cfg(target_os = "windows")]
+#[allow(
+    unsafe_code,
+    reason = "GetIpForwardTable2 hands back an OS-allocated table that is read in place \
+              and freed once with FreeMibTable; GetIfEntry2 fills a caller-owned row"
+)]
+mod win {
+    use windows::Win32::Foundation::NO_ERROR;
+    use windows::Win32::NetworkManagement::IpHelper::{
+        FreeMibTable, GetIfEntry2, GetIpForwardTable2, IF_TYPE_SOFTWARE_LOOPBACK, MIB_IF_ROW2,
+        MIB_IPFORWARD_ROW2, MIB_IPFORWARD_TABLE2,
+    };
+    use windows::Win32::NetworkManagement::Ndis::{IfOperStatusUp, MediaConnectStateConnected};
+    use windows::Win32::Networking::WinSock::AF_UNSPEC;
+
+    pub(super) fn default_route_up() -> Option<bool> {
+        let mut table: *mut MIB_IPFORWARD_TABLE2 = std::ptr::null_mut();
+        // SAFETY: on success `table` points to an OS-owned table of
+        // `NumEntries` rows, valid until FreeMibTable below.
+        if unsafe { GetIpForwardTable2(AF_UNSPEC, &mut table) } != NO_ERROR || table.is_null() {
+            return None;
+        }
+        let up = {
+            let rows = unsafe {
+                std::slice::from_raw_parts(
+                    std::ptr::addr_of!((*table).Table).cast::<MIB_IPFORWARD_ROW2>(),
+                    (*table).NumEntries as usize,
+                )
+            };
+            rows.iter().any(|route| {
+                route.DestinationPrefix.PrefixLength == 0 && !route.Loopback && interface_up(route)
+            })
+        };
+        unsafe { FreeMibTable(table as *const std::ffi::c_void) };
+        Some(up)
+    }
+
+    /// A Wi-Fi adapter that lost its network, or a cable that was pulled,
+    /// reports its medium as disconnected even while a static route remains.
+    fn interface_up(route: &MIB_IPFORWARD_ROW2) -> bool {
+        let mut row = MIB_IF_ROW2 {
+            InterfaceLuid: route.InterfaceLuid,
+            InterfaceIndex: route.InterfaceIndex,
+            ..Default::default()
+        };
+        let found = unsafe { GetIfEntry2(&mut row) } == NO_ERROR;
+        found
+            && row.Type != IF_TYPE_SOFTWARE_LOOPBACK
+            && row.OperStatus == IfOperStatusUp
+            && row.MediaConnectState == MediaConnectStateConnected
+    }
+}
+
 /// No route check on this platform yet; sync's own timeout applies.
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 pub fn available() -> bool {
     true
 }
