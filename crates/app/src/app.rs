@@ -1658,6 +1658,8 @@ impl MatrixApp {
             move |this, state, event: &InputEvent, window, cx| {
                 match event {
                     InputEvent::Change => {
+                        let text = state.read(cx).value().to_string();
+                        this.edit_text_changed(false, &text);
                         this.update_emoji_completion(
                             state.read(cx).value().to_string(),
                             state.read(cx).cursor(),

@@ -22,6 +22,12 @@ impl State {
         }
     }
 }
+enum Operation {
+    /// Load the message's source into the composer.
+    Load,
+    Save(String),
+    Delete,
+}
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Ticket {
     account: Option<u128>,
@@ -67,6 +73,7 @@ fn wording(error: EditError) -> &'static str {
         EditError::TooLong => "This message is too long. Shorten it and try again.",
         EditError::Empty => "A message can't be empty.",
         EditError::Failed => "The edit could not be saved. Try again.",
+        EditError::DeleteFailed => "The message could not be deleted. Try again.",
     }
 }
 impl Backend {
@@ -81,15 +88,19 @@ impl Backend {
         }
     }
     pub(crate) fn begin_edit(&self, event_id: String) -> Result<(), ServiceError> {
-        self.edit_operation(Some(event_id), None)
+        self.edit_operation(Some(event_id), Operation::Load)
     }
     pub(crate) fn save_edit(&self, text: String) -> Result<(), ServiceError> {
-        self.edit_operation(None, Some(text))
+        self.edit_operation(None, Operation::Save(text))
+    }
+    /// The edited message was emptied and the deletion confirmed: redact it.
+    pub(crate) fn delete_edited(&self) -> Result<(), ServiceError> {
+        self.edit_operation(None, Operation::Delete)
     }
     fn edit_operation(
         &self,
         event: Option<String>,
-        text: Option<String>,
+        operation: Operation,
     ) -> Result<(), ServiceError> {
         let mut state = self
             .state
@@ -99,7 +110,7 @@ impl Backend {
         if view.edit_saving && event.is_none() {
             return Err(failure("The edit is still being saved."));
         }
-        let saving = text.is_some();
+        let saving = !matches!(operation, Operation::Load);
         let event_id = event
             .or_else(|| view.editing.as_ref().map(|e| e.event_id.clone()))
             .ok_or_else(|| failure("Choose a message to edit."))?;
@@ -133,9 +144,10 @@ impl Backend {
         let shared = self.state.clone();
         let updates = self.updates.clone();
         state.edit_task = Some(self.runtime.spawn(async move {
-            let result = match text {
-                Some(text) => conversation.edit(&event_id, text).await.map(|_| None),
-                None => conversation.edit_source(&event_id).await.map(Some),
+            let result = match operation {
+                Operation::Save(text) => conversation.edit(&event_id, text).await.map(|_| None),
+                Operation::Delete => conversation.delete(&event_id).await.map(|_| None),
+                Operation::Load => conversation.edit_source(&event_id).await.map(Some),
             };
             let Ok(mut state) = shared.lock() else {
                 return;
@@ -158,6 +170,7 @@ mod tests {
         let backend = Backend::with_lock(None).unwrap();
         assert!(backend.begin_edit("$missing:example.org".into()).is_err());
         assert!(backend.save_edit("private draft".into()).is_err());
+        assert!(backend.delete_edited().is_err());
         assert!(backend.snapshot().editing.is_none());
         assert_eq!(backend.snapshot().revision, 0);
     }

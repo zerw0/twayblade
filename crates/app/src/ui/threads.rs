@@ -94,10 +94,14 @@ impl MatrixApp {
             let subscription = cx.subscribe_in(
                 &input,
                 window,
-                move |this, _, event: &InputEvent, window, cx| {
+                move |this, state, event: &InputEvent, window, cx| {
                     if this.thread.as_ref().is_some_and(|t| {
                         t.room == target.0 && t.root.event_id.as_ref() == Some(&target.1)
                     }) {
+                        if matches!(event, InputEvent::Change) {
+                            let text = state.read(cx).value().to_string();
+                            this.edit_text_changed(true, &text);
+                        }
                         if matches!(event, InputEvent::PressEnter { .. }) {
                             this.send_thread(window, cx);
                         }

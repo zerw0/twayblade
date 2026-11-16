@@ -2245,6 +2245,49 @@ fn editing_loads_your_message_and_always_restores_the_draft(cx: &mut TestAppCont
     })
     .expect("editing flow");
     cx.update(|cx| assert!(app.read(cx).edit_session.is_none()));
+
+    // Emptying the message and pressing Return asks before deleting it.
+    // Composer events reach the app after each window update, so every key
+    // press gets its own update.
+    let empty_and_return = |cx: &mut TestAppContext| {
+        cx.update_window(window, |_, window, cx| {
+            app.update(cx, |app, cx| {
+                app.composer
+                    .update(cx, |state, cx| state.set_value("", window, cx))
+            });
+            window.within("composer-panel").click("input-state", cx);
+            window.key_down("enter", false, cx);
+        })
+        .expect("return");
+        cx.run_until_parked();
+    };
+    let asking = |cx: &mut TestAppContext| {
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            !window.find_all("edit-delete").is_empty()
+        })
+        .expect("render")
+    };
+    cx.update_window(window, |_, window, cx| {
+        window.click(gpui_kit::SharedString::from(format!("edit-{}", ids[1])), cx);
+        window.render_frame(cx);
+    })
+    .expect("edit");
+    empty_and_return(cx);
+    assert!(asking(cx), "asks before deleting");
+    // Typing again keeps editing instead.
+    cx.update_window(window, |_, window, cx| window.input("x", cx))
+        .expect("type");
+    cx.run_until_parked();
+    assert!(!asking(cx), "typing withdraws the question");
+    empty_and_return(cx);
+    assert!(asking(cx));
+    cx.update(|cx| assert!(app.read(cx).edit_session.is_some()));
+    // A second Return deletes: in the preview that ends the edit.
+    cx.update_window(window, |_, window, cx| window.key_down("enter", false, cx))
+        .expect("delete");
+    cx.run_until_parked();
+    cx.update(|cx| assert!(app.read(cx).edit_session.is_none()));
 }
 
 #[gpui_kit::test]

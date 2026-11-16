@@ -1,6 +1,7 @@
 //! Editing a sent message in the composer: Edit in the message actions, ↑ in an
 //! empty composer, ↑/↓ to step between your messages, Return saves, Escape
-//! cancels. The draft you were writing is kept aside and comes back afterwards.
+//! cancels. Return on an emptied message asks to delete it; Return again
+//! deletes it. The draft you were writing is kept aside and comes back afterwards.
 use crate::app::MatrixApp;
 use gpui_kit::component::input::TextareaState;
 use gpui_kit::*;
@@ -17,6 +18,8 @@ pub(crate) struct EditSession {
     pub loaded: bool,
     /// Save was requested; success is the backend clearing `editing`.
     pub saving: bool,
+    /// Return was pressed on an emptied message: the next Return deletes it.
+    pub confirm_delete: bool,
 }
 
 impl MatrixApp {
@@ -79,6 +82,7 @@ impl MatrixApp {
                 draft,
                 loaded: true,
                 saving: false,
+                confirm_delete: false,
             });
             cx.notify();
             return;
@@ -92,6 +96,7 @@ impl MatrixApp {
             draft,
             loaded: false,
             saving: false,
+            confirm_delete: false,
         });
         if let Err(error) = backend.begin_edit(event_id) {
             self.status = error.to_string();
@@ -135,15 +140,32 @@ impl MatrixApp {
         if !loaded || saving {
             return true;
         }
-        if self.preview {
-            self.end_edit(window, cx);
-            return true;
-        }
         let Some(composer) = self.edit_composer(in_thread) else {
             return true;
         };
         let text = composer.read(cx).value().to_string();
+        let emptied = text.trim().is_empty();
+        let confirmed = self
+            .edit_session
+            .as_ref()
+            .is_some_and(|session| session.confirm_delete);
+        if emptied && !confirmed {
+            // Deleting is destructive and visible to everyone: ask first.
+            if let Some(session) = &mut self.edit_session {
+                session.confirm_delete = true;
+            }
+            cx.notify();
+            return true;
+        }
+        if let Some(session) = &mut self.edit_session {
+            session.confirm_delete = false;
+        }
+        if self.preview {
+            self.end_edit(window, cx);
+            return true;
+        }
         let result = match &self.backend {
+            Some(backend) if emptied => backend.delete_edited(),
             Some(backend) => backend.save_edit(text),
             None => return true,
         };
@@ -157,6 +179,17 @@ impl MatrixApp {
         }
         cx.notify();
         true
+    }
+
+    /// Text typed back into an emptied message withdraws the delete question,
+    /// so emptying it again asks again rather than deleting at once.
+    pub(crate) fn edit_text_changed(&mut self, in_thread: bool, text: &str) {
+        if let Some(session) = &mut self.edit_session
+            && session.in_thread == in_thread
+            && !text.trim().is_empty()
+        {
+            session.confirm_delete = false;
+        }
     }
 
     /// Follow the backend: load the text once it arrives, finish after a save,
@@ -274,12 +307,21 @@ impl MatrixApp {
     pub(crate) fn edit_bar(&self, in_thread: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
         use gpui_kit::component::button::{Button, ButtonVariants};
         use gpui_kit::component::*;
+        use gpui_kit::prelude::FluentBuilder as _;
         let session = self
             .edit_session
             .as_ref()
             .filter(|s| s.in_thread == in_thread)?;
         let muted = cx.theme().muted_foreground;
-        let status = if !session.loaded {
+        // Asking only while the text is still gone: typing again keeps editing.
+        let confirming = session.confirm_delete
+            && !session.saving
+            && self
+                .edit_composer(in_thread)
+                .is_some_and(|composer| composer.read(cx).value().trim().is_empty());
+        let status = if confirming {
+            "Delete this message for everyone? Return to delete, Escape to keep it".to_owned()
+        } else if !session.loaded {
             "Loading message…".to_owned()
         } else if session.saving {
             "Saving…".to_owned()
@@ -288,7 +330,8 @@ impl MatrixApp {
         } else {
             "Editing message · Return to save, Escape to cancel".to_owned()
         };
-        let error = self.snapshot.edit_error.is_some() && !session.saving && session.loaded;
+        let error =
+            confirming || (self.snapshot.edit_error.is_some() && !session.saving && session.loaded);
         Some(
             h_flex()
                 .id(if in_thread {
@@ -302,9 +345,17 @@ impl MatrixApp {
                 .items_center()
                 .text_size(px(12.))
                 .child(
-                    Icon::new(gpui_kit::assets::IconName::Pencil)
-                        .size(px(13.))
-                        .text_color(cx.theme().primary),
+                    Icon::new(if confirming {
+                        gpui_kit::assets::IconName::Trash
+                    } else {
+                        gpui_kit::assets::IconName::Pencil
+                    })
+                    .size(px(13.))
+                    .text_color(if confirming {
+                        cx.theme().danger
+                    } else {
+                        cx.theme().primary
+                    }),
                 )
                 .child(
                     div()
@@ -314,6 +365,24 @@ impl MatrixApp {
                         .text_color(if error { cx.theme().danger } else { muted })
                         .child(status),
                 )
+                .when(confirming, |bar| {
+                    bar.child(
+                        Button::new(if in_thread {
+                            "thread-edit-delete"
+                        } else {
+                            "edit-delete"
+                        })
+                        .danger()
+                        .xsmall()
+                        .label("Delete")
+                        .accessibility_label("Delete message")
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.save_edit_from_composer(in_thread, window, cx);
+                            },
+                        )),
+                    )
+                })
                 .child(
                     Button::new(if in_thread {
                         "thread-edit-cancel"

@@ -17,6 +17,8 @@ pub enum EditError {
     Empty,
     #[error("edit_failed")]
     Failed,
+    #[error("delete_failed")]
+    DeleteFailed,
 }
 
 /// Our own sent text, notice or emote. `Timeline::edit` only requires our own
@@ -103,6 +105,20 @@ impl Conversation {
             )
             .await
             .map_err(|_| EditError::Failed)
+    }
+
+    /// Deletes (redacts) our own message, as an edit emptied of all text does.
+    pub async fn delete(&self, event_id: &str) -> Result<(), EditError> {
+        let items = self.timeline.items().await;
+        let event = items
+            .iter()
+            .filter_map(|i| i.as_event())
+            .find(|e| e.event_id().is_some_and(|id| id.as_str() == event_id) && editable(e))
+            .ok_or(EditError::NotEditable)?;
+        self.timeline
+            .redact(&event.identifier(), None)
+            .await
+            .map_err(|_| EditError::DeleteFailed)
     }
 
     /// Loaded timeline only, in SDK timeline order. A thread conversation excludes
