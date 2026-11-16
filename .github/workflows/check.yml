@@ -29,9 +29,13 @@ permissions:
 # the same commit instead of repeating its tests (see `changes`).
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
-  # Never cancel runs on main or develop: a failure on an intermediate commit
-  # must stay visible.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/develop' }}
+  # Never cancel runs on main: a failure on an intermediate commit must stay
+  # visible there. On develop a newer push cancels the older run, since the
+  # newer run tests everything the older one would have; otherwise each merge
+  # waited behind the previous merge's full run. A release pull request cut
+  # from a develop commit whose run was cancelled this way fails: cut it again
+  # from develop's tip.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   changes:
