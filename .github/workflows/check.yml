@@ -25,6 +25,8 @@ permissions:
 # A newer push to a branch cancels that branch's older run, so superseded runs
 # don't queue up on the (scarce) macOS runners. The event name is part of the
 # group: the push run and the pull-request run of a branch still both run.
+# A release/* pull request at develop's tip waits for develop's push run of
+# the same commit instead of repeating its tests (see `changes`).
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
   # Never cancel runs on main or develop: a failure on an intermediate commit
@@ -34,11 +36,15 @@ concurrency:
 jobs:
   changes:
     runs-on: ubuntu-24.04
+    # Long enough to wait for develop's run (see `reuse` below).
+    timeout-minutes: 120
     permissions:
       contents: read
       pull-requests: read
+      actions: read
     outputs:
       code: ${{ steps.files.outputs.code }}
+      tested: ${{ steps.reuse.outputs.tested }}
     steps:
       - id: files
         env:
@@ -56,6 +62,25 @@ jobs:
           else
             echo "code=false" >> "$GITHUB_OUTPUT"
           fi
+      # A release/* branch cut at develop's tip has the same commit as
+      # develop's push run, which already formats, lints and tests it. Wait for
+      # that run instead of repeating it on every OS: its success counts here,
+      # its failure fails this run. Only the app build (main-only) still runs.
+      - id: reuse
+        if: startsWith(github.head_ref, 'release/') && steps.files.outputs.code == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/check.yml/runs?event=push&branch=develop&head_sha=${SHA}" \
+            --jq '.workflow_runs | map(select(.conclusion != "cancelled")) | first | .id // empty')"
+          if [[ -z "$run" ]]; then
+            echo "No develop run for ${SHA}; testing here."
+            exit 0
+          fi
+          echo "Waiting for develop's run ${run} on the same commit."
+          gh run watch "$run" --repo "$GITHUB_REPOSITORY" --interval 60 --exit-status > /dev/null
+          echo "tested=true" >> "$GITHUB_OUTPUT"
 
   check:
     needs: changes
@@ -66,6 +91,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       CODE: ${{ needs.changes.outputs.code }}
+      # Already formatted, linted and tested by develop's run of this commit.
+      TESTED: ${{ needs.changes.outputs.tested == 'true' }}
     steps:
       - uses: actions/checkout@v7
         if: env.CODE == 'true'
@@ -92,21 +119,24 @@ jobs:
         with:
           toolchain: '1.99.0'
           components: rustfmt, clippy
+      - name: Tested by develop
+        if: env.TESTED == 'true'
+        run: echo "Formatted, linted and tested by develop's run of this commit."
       - name: Format
-        if: env.CODE == 'true'
+        if: env.CODE == 'true' && env.TESTED != 'true'
         run: cargo fmt --all -- --check
       - name: Lint
-        if: env.CODE == 'true'
+        if: env.CODE == 'true' && env.TESTED != 'true'
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - name: Test
-        if: env.CODE == 'true'
+        if: env.CODE == 'true' && env.TESTED != 'true'
         # GPUI test windows build deep element trees; in debug builds that
         # overflowed the default 2 MiB test-thread stack on Windows.
         env:
           RUST_MIN_STACK: '8388608'
         run: cargo test --locked --workspace --all-features
       - name: Release script tests
-        if: env.CODE == 'true' && runner.os == 'Linux'
+        if: env.CODE == 'true' && env.TESTED != 'true' && runner.os == 'Linux'
         run: |
           python3 scripts/test_release_notes.py
           python3 scripts/test_homebrew_cask.py
