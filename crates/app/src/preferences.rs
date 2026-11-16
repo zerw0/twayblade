@@ -180,6 +180,8 @@ pub(super) struct Appearance {
     pub custom_theme: Option<CustomTheme>,
     /// A line with the latest message under each conversation in the sidebar.
     pub room_previews: bool,
+    /// Back and Forward buttons in the title bar.
+    pub navigation_arrows: bool,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -229,6 +231,7 @@ impl Default for Appearance {
             sidebar_density: SidebarDensity::Regular,
             custom_theme: None,
             room_previews: true,
+            navigation_arrows: true,
         }
     }
 }

@@ -283,6 +283,7 @@ fn main() {
                         view.update_mention_completion(false, text.into(), text.len());
                     }
                     if args.iter().any(|arg| arg == "--preview-explore") { view.open_explore(window,cx); }
+                    if args.iter().any(|arg| arg == "--preview-create-space") { view.open_management(ui::spaces::ManageKind::CreateSpace,window,cx); }
                     if args.iter().any(|arg| arg == "--preview-dm") { view.open_management(ui::spaces::ManageKind::Dm,window,cx); }
                     if args.iter().any(|arg| arg == "--preview-invite-contact") { view.open_management(ui::spaces::ManageKind::InviteContact,window,cx); }
                     if args.iter().any(|arg| arg == "--preview-archive") { for room in view.snapshot.rooms.iter_mut().filter(|room| room.id == "announcements") { room.archived = true; } view.show_archive(window, cx); }

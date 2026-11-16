@@ -1231,6 +1231,17 @@ impl MatrixApp {
                     ),
                     form_row("Sidebar density", sidebar_density, cx),
                     form_row(
+                        "Show back and forward buttons",
+                        switch::Switch::new("navigation-arrows")
+                            .accessibility_label("Show back and forward buttons in the title bar")
+                            .checked(appearance.navigation_arrows)
+                            .on_click(cx.listener(|this, checked: &bool, window, cx| {
+                                this.preferences.appearance.navigation_arrows = *checked;
+                                this.appearance_changed(window, cx);
+                            })),
+                        cx,
+                    ),
+                    form_row(
                         "Show message previews",
                         switch::Switch::new("room-previews")
                             .accessibility_label("Show message previews in the sidebar")

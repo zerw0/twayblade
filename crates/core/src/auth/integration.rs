@@ -2007,6 +2007,48 @@ async fn spaces_hierarchy_invites_creation_restricted_join_and_selective_leave()
     let alice_sync = sync(&alice);
     let bob_sync = sync(&bob);
 
+    // Creating a space: a public space room only admins post in.
+    let created = checked(
+        alice
+            .create_space(crate::space_actions::CreateSpace {
+                name: "Created space".into(),
+                topic: "Made by create_space".into(),
+                public: true,
+            })
+            .await,
+        "create space",
+    );
+    let created_id = checked(
+        matrix_sdk::ruma::OwnedRoomId::try_from(created.as_str()),
+        "space id",
+    );
+    wait_for_room(&alice, &created_id).await;
+    let created_room = checked(
+        alice.client.get_room(&created_id).ok_or("missing"),
+        "created space",
+    );
+    assert!(created_room.is_space(), "created room is a space");
+    // The creation state arrives with sync shortly after the room.
+    let mut public = false;
+    for _ in 0..50 {
+        public = created_room.join_rule()
+            == Some(matrix_sdk::ruma::events::room::join_rules::JoinRule::Public);
+        if public {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    assert!(public, "a public space is joinable by anyone");
+    let powers = checked(created_room.power_levels().await, "space power levels");
+    assert_eq!(i64::from(powers.events_default), 100);
+    assert!(
+        alice
+            .create_space(crate::space_actions::CreateSpace::default())
+            .await
+            .is_err(),
+        "a space needs a name"
+    );
+
     let mut request = create_room::v3::Request::new();
     request.name = Some("Isolated public space".into());
     request.preset = Some(create_room::v3::RoomPreset::PublicChat);

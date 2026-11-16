@@ -138,6 +138,7 @@ impl MatrixApp {
     }
 
     pub(crate) fn rail_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        use gpui_kit::component::menu::DropdownMenu as _;
         let palette = theme::palette(cx);
         let selected = self.navigation.selected_space.clone();
         let in_any_space = |id: &str| {
@@ -271,11 +272,41 @@ impl MatrixApp {
                 .border_dashed()
                 .border_color(cx.theme().border)
                 .icon(IconName::Plus)
-                .accessibility_label("Join a space")
-                .tooltip("Join a Space…")
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.open_management(crate::ui::spaces::ManageKind::JoinSpace, window, cx)
-                })),
+                .accessibility_label("Add a space")
+                .tooltip("Create or Join a Space…")
+                .dropdown_menu_with_anchor(Anchor::TopLeft, {
+                    let weak = cx.entity().downgrade();
+                    move |menu, _, _| {
+                        let create = weak.clone();
+                        let join = weak.clone();
+                        menu.item(
+                            PopupMenuItem::new("Create Space…")
+                                .icon(IconName::SquarePlus)
+                                .on_click(move |_, window, cx| {
+                                    let _ = create.update(cx, |this, cx| {
+                                        this.open_management(
+                                            crate::ui::spaces::ManageKind::CreateSpace,
+                                            window,
+                                            cx,
+                                        )
+                                    });
+                                }),
+                        )
+                        .item(
+                            PopupMenuItem::new("Join a Space…")
+                                .icon(IconName::LogIn)
+                                .on_click(move |_, window, cx| {
+                                    let _ = join.update(cx, |this, cx| {
+                                        this.open_management(
+                                            crate::ui::spaces::ManageKind::JoinSpace,
+                                            window,
+                                            cx,
+                                        )
+                                    });
+                                }),
+                        )
+                    }
+                }),
         );
         rail.into_any_element()
     }
@@ -1119,7 +1150,46 @@ impl MatrixApp {
             .bg(palette.chrome)
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(div().flex_1().min_w_0())
+            .child({
+                // Back and Forward, as in Safari and Finder; Settings ›
+                // Appearance can hide them (⌘[ and ⌘] still work).
+                let arrows = self.preferences.appearance.navigation_arrows;
+                let arrow =
+                    |id: &'static str, icon: IconName, label: &'static str, enabled: bool| {
+                        Button::new(id)
+                            .toolbar_control()
+                            .ghost()
+                            .small()
+                            .icon(Icon::new(icon).size(px(16.)))
+                            .accessibility_label(label)
+                            .tooltip(label)
+                            .disabled(!enabled)
+                    };
+                h_flex().flex_1().min_w_0().gap(px(2.)).when(arrows, |bar| {
+                    bar.child(
+                        arrow(
+                            "nav-back",
+                            IconName::ChevronLeft,
+                            "Back  ⌘[",
+                            self.can_navigate(true),
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.navigate_history(true, window, cx)
+                        })),
+                    )
+                    .child(
+                        arrow(
+                            "nav-forward",
+                            IconName::ChevronRight,
+                            "Forward  ⌘]",
+                            self.can_navigate(false),
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.navigate_history(false, window, cx)
+                        })),
+                    )
+                })
+            })
             .child(
                 div()
                     .id("title-search")

@@ -38,6 +38,8 @@ pub(crate) enum ManageKind {
     StatusMessage,
     /// Public rooms of your server or a large public homeserver.
     Explore,
+    /// Create a new space.
+    CreateSpace,
 }
 impl ManageKind {
     /// Short forms open as a small centred dialog; browsing and leaving keep
@@ -53,6 +55,7 @@ impl ManageKind {
                 | Self::InviteContact
                 | Self::SignOut
                 | Self::StatusMessage
+                | Self::CreateSpace
         )
     }
 }
@@ -69,6 +72,8 @@ pub(crate) struct Management {
     pub topic: Entity<InputState>,
     pub encrypted: bool,
     pub voice_channel: bool,
+    /// Create Space: anyone can join (else invitation only).
+    pub public: bool,
     pub parent: Option<String>,
     /// The dialog sheet: Tab stays inside it while it is open.
     pub focus: FocusHandle,
@@ -178,6 +183,7 @@ impl MatrixApp {
             name,
             topic,
             encrypted: true,
+            public: false,
             voice_channel: false,
             parent_from_context: initial_parent.is_some(),
             parent: initial_parent,
@@ -194,6 +200,7 @@ impl MatrixApp {
                 | ManageKind::JoinSpace
                 | ManageKind::InviteMember(_)
                 | ManageKind::StatusMessage
+                | ManageKind::CreateSpace
                 | ManageKind::Explore => page.name.update(cx, |state, cx| state.focus(window, cx)),
                 ManageKind::LeaveRoom(_) | ManageKind::InviteContact | ManageKind::SignOut => {
                     page.focus.focus(window, cx)
@@ -324,7 +331,10 @@ impl MatrixApp {
                                 room.invited = false;
                             }
                         } else {
-                            let space = matches!(page.kind, ManageKind::JoinSpace);
+                            let space = matches!(
+                                page.kind,
+                                ManageKind::JoinSpace | ManageKind::CreateSpace
+                            );
                             if matches!(page.kind, ManageKind::Dm) {
                                 this.navigation.selected_space = None;
                             } else if matches!(page.kind, ManageKind::Create) {
@@ -470,6 +480,7 @@ impl MatrixApp {
             ManageKind::SignOut => "Sign Out",
             ManageKind::StatusMessage => "Status Message",
             ManageKind::Explore => "Explore Rooms",
+            ManageKind::CreateSpace => "Create Space",
         }
     }
 
@@ -1006,6 +1017,104 @@ impl MatrixApp {
             }
             ManageKind::Explore => {
                 body = body.child(self.explore_body(cx));
+            }
+            ManageKind::CreateSpace => {
+                let public = page.public;
+                let choice =
+                    |id: &'static str, label: &'static str, detail: &'static str, value: bool| {
+                        let selected = public == value;
+                        Button::new(id)
+                            .ghost()
+                            .w_full()
+                            .h_auto()
+                            .py(px(8.))
+                            .px(px(10.))
+                            .justify_start()
+                            .rounded(px(8.))
+                            .border_1()
+                            .border_color(if selected {
+                                cx.theme().primary
+                            } else {
+                                cx.theme().border
+                            })
+                            .selected(selected)
+                            .accessibility_label(format!("{label}: {detail}"))
+                            .child(
+                                v_flex()
+                                    .w_full()
+                                    .items_start()
+                                    .text_left()
+                                    .child(div().font_weight(FontWeight::SEMIBOLD).child(label))
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(detail),
+                                    ),
+                            )
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Some(page) = &mut this.management {
+                                    page.public = value;
+                                }
+                                cx.notify();
+                            }))
+                    };
+                let name = page.name.clone();
+                let topic = page.topic.clone();
+                body = body
+                    .child("Name")
+                    .child(
+                        div()
+                            .w_full()
+                            .child(Input::new(&page.name).aria_label("Space name")),
+                    )
+                    .child("Description (optional)")
+                    .child(
+                        div()
+                            .w_full()
+                            .child(Input::new(&page.topic).aria_label("Space description")),
+                    )
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .id("space-access")
+                            .gap(px(6.))
+                            .role(Role::RadioGroup)
+                            .aria_label("Who can join")
+                            .child(choice(
+                                "space-private",
+                                "Private",
+                                "Only people you invite can join.",
+                                false,
+                            ))
+                            .child(choice(
+                                "space-public",
+                                "Public",
+                                "Anyone can find and join it.",
+                                true,
+                            )),
+                    )
+                    .child(
+                        Button::new("create-space-submit")
+                            .primary()
+                            .label("Create Space")
+                            .disabled(
+                                self.preview
+                                    || page.busy
+                                    || page.name.read(cx).value().trim().is_empty(),
+                            )
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                let draft = twayblade_core::space_actions::CreateSpace {
+                                    name: name.read(cx).value().trim().to_owned(),
+                                    topic: topic.read(cx).value().trim().to_owned(),
+                                    public: this
+                                        .management
+                                        .as_ref()
+                                        .is_some_and(|page| page.public),
+                                };
+                                this.run_space_action(SpaceAction::CreateSpace(draft), window, cx);
+                            })),
+                    );
             }
             ManageKind::StatusMessage => {
                 use twayblade_core::presence::State;

@@ -2899,6 +2899,52 @@ fn explore_lists_public_rooms_and_switches_servers(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn title_bar_arrows_follow_history_and_can_be_hidden(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.find("nav-back").disabled(), Some(true));
+        window.click("room-critique", cx);
+        window.render_frame(cx);
+        assert_eq!(window.find("nav-back").disabled(), None);
+        window.click("nav-back", cx);
+        window.render_frame(cx);
+    })
+    .expect("arrows navigate");
+    cx.update(|cx| {
+        assert_eq!(
+            app.read(cx).navigation.selected_room.as_deref(),
+            Some("general")
+        )
+    });
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.preferences.appearance.navigation_arrows = false;
+            cx.notify();
+        });
+        window.render_frame(cx);
+        assert!(window.try_find("nav-back").is_none());
+    })
+    .expect("arrows hidden");
+}
+
+#[gpui_kit::test]
+fn create_space_dialog_defaults_to_private_and_switches_access(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_management(crate::ui::spaces::ManageKind::CreateSpace, window, cx)
+        });
+        window.render_frame(cx);
+        assert!(window.find("create-space-submit").visible());
+        assert!(!app.read(cx).management.as_ref().unwrap().public);
+        window.click("space-public", cx);
+    })
+    .expect("create space dialog");
+    cx.update(|cx| assert!(app.read(cx).management.as_ref().unwrap().public));
+}
+
+#[gpui_kit::test]
 fn direct_message_dialog_reopens_a_known_conversation(cx: &mut TestAppContext) {
     let (window, app) = preview_window(cx);
     cx.update_window(window, |_, window, cx| {

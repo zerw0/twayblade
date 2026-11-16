@@ -2601,7 +2601,8 @@ impl MatrixApp {
                 | ManageKind::InviteContact
                 | ManageKind::SignOut
                 | ManageKind::StatusMessage
-                | ManageKind::Explore => {}
+                | ManageKind::Explore
+                | ManageKind::CreateSpace => {}
             }
         }
         let panel = if self.search_open {

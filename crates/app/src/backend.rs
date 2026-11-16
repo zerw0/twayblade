@@ -372,6 +372,7 @@ pub(super) enum SpaceAction {
     Leave(String, std::collections::HashSet<String>),
     Create(twayblade_core::space_actions::CreateRoom),
     CreateVoice(twayblade_core::space_actions::CreateRoom),
+    CreateSpace(twayblade_core::space_actions::CreateSpace),
     Dm(String),
     InviteMember(String, String),
     LeaveRoom(String),
@@ -1486,6 +1487,11 @@ impl Backend {
                     }
                     Err(e) => Err(space_failure(e)),
                 },
+                CreateSpace(draft) => account
+                    .create_space(draft)
+                    .await
+                    .map(SpaceOutcome::Room)
+                    .map_err(space_failure),
                 Dm(id) => account
                     .start_dm(&id)
                     .await
