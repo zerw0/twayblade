@@ -1,7 +1,7 @@
 //! Media preparation and SDK queue/download operations. Filenames are untrusted.
 use super::*;
 use matrix_sdk::{
-    attachment::{AttachmentConfig, AttachmentInfo, BaseFileInfo, BaseImageInfo, Thumbnail},
+    attachment::{AttachmentInfo, BaseFileInfo, BaseImageInfo, Thumbnail},
     media::{MediaFormat, MediaRequestParameters},
     ruma::events::room::MediaSource,
 };
@@ -172,7 +172,7 @@ impl Conversation {
                 size: draft.size.try_into().ok(),
             })
         });
-        let mut config = AttachmentConfig {
+        let mut config = matrix_sdk_ui::timeline::AttachmentConfig {
             info,
             ..Default::default()
         };
@@ -197,10 +197,19 @@ impl Conversation {
             .client()
             .send_queue()
             .enable_upload_progress(true);
+        // Through the timeline, still on the send queue: a thread-focused
+        // timeline adds the thread relation, so a thread's attachment lands
+        // in the thread rather than the main room.
         self.timeline
-            .room()
-            .send_queue()
-            .send_attachment(draft.filename, draft.content_type, draft.data, config)
+            .send_attachment(
+                matrix_sdk_ui::timeline::AttachmentSource::Data {
+                    bytes: draft.data,
+                    filename: draft.filename,
+                },
+                draft.content_type,
+                config,
+            )
+            .use_send_queue()
             .await
             .map_err(|_| AttachmentError::Upload)?;
         Ok(())

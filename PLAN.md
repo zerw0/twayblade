@@ -26,6 +26,7 @@ Element Call.
 | Accounts | Several saved accounts with switching (decision 2026-11-15, moved into 1.0 from the deferred list): one OS credential slot per account plus a non-secret index. Phase 1 syncs only the open account. |
 | Signing | No paid signing (decision 2026-11-15): no Apple Developer Program, no paid Windows certificate. macOS builds stay ad hoc signed and Windows/Linux packages unsigned, with first-launch instructions on the download page. Free OSS signing for Windows (SignPath Foundation) may be applied for once an unsigned release exists. |
 | Toolchain | Rust minimum = the version actually built and tested (1.99). Nix shell is optional. |
+| Branches | `feature/*` → `develop` → `main` (decision 2026-11-16). `main` stays the default branch. `develop` only runs the checks (format, lint, tests); `main` additionally builds the app and is the only branch that produces binaries. Both require the three `check (...)` results. `develop` → `main` merges with a merge commit. |
 
 ## 1.0 scope
 

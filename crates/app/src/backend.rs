@@ -149,6 +149,8 @@ pub(super) struct ThreadSnapshot {
 
 pub(super) enum ThreadAction {
     Send(String),
+    /// One stacked attachment, sent as a reply in the thread.
+    Attach(twayblade_core::conversation::AttachmentDraft),
     Older,
     Timeline(TimelineAction),
 }
@@ -1311,6 +1313,14 @@ impl Backend {
             }
             (conversation, state.epoch)
         };
+        // Through the thread's timeline, so the SDK adds the thread relation.
+        if let ThreadAction::Attach(draft) = action {
+            return self
+                .runtime
+                .block_on(conversation.send_attachment(draft))
+                .map(|_| false)
+                .map_err(media_failure);
+        }
         self.runtime
             .block_on(async move {
                 match action {
@@ -1320,6 +1330,8 @@ impl Backend {
                         Ok(false)
                     }
                     ThreadAction::Older => conversation.older().await,
+                    // Sent above, outside the conversation error mapping.
+                    ThreadAction::Attach(_) => Ok(false),
                     ThreadAction::Timeline(action) => match action {
                         TimelineAction::Read { event_id } => {
                             conversation.mark_read(&event_id).await

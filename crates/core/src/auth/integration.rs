@@ -1786,6 +1786,40 @@ async fn threads_send_paginate_receipts_and_closed_unread() {
         "quoted reply shows its target",
     )
     .await;
+    // An attachment sent from the thread lands in the thread, not the main room.
+    let is_thread_file = |m: &crate::conversation::MessageRow| {
+        m.body == "thread-attachment.txt"
+            || m.attachment
+                .as_ref()
+                .is_some_and(|a| a.filename == "thread-attachment.txt")
+    };
+    let draft = checked(
+        alice_conversation
+            .prepare_bytes("thread-attachment.txt".into(), b"thread file".to_vec())
+            .await,
+        "prepare thread attachment",
+    );
+    checked(
+        alice_conversation.send_attachment(draft).await,
+        "send thread attachment",
+    );
+    wait_snapshot(
+        &mut bob_thread,
+        |s| s.messages.iter().any(is_thread_file),
+        "attachment arrives in the thread",
+    )
+    .await;
+    wait_snapshot(
+        &mut main,
+        |s| {
+            !s.messages.iter().any(is_thread_file)
+                && s.messages.iter().any(|m| {
+                    m.event_id.as_deref() == Some(root_event.as_str()) && m.thread_replies >= 4
+                })
+        },
+        "attachment counted on the root, not shown in the main room",
+    )
+    .await;
     drop(bob_thread);
     for ix in 0..65 {
         checked(

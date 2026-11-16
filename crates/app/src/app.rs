@@ -380,13 +380,9 @@ pub(super) struct MatrixApp {
     pub emoji_picker: Option<crate::ui::emoji::Picker>,
     pub emoji_search: Entity<InputState>,
     pub emoji_preferences: crate::ui::emoji::Preferences,
-    /// Stacked attachments, in the order they were added, sent with the next message.
-    pub attachment_drafts: Vec<crate::ui::attachments::Staged>,
-    /// Attachments still being read or checked.
-    pub attachment_pending: usize,
-    pub attachment_next_id: u64,
+    /// The main composer's stacked attachments, sent with its next message.
+    pub attachments: crate::ui::attachments::AttachmentStack,
     pub attachment_sample: bool,
-    pub attachment_request: u64,
     pub security_open: bool,
     pub security_restore: bool,
     pub security_reset_confirmation: bool,
@@ -780,11 +776,8 @@ impl MatrixApp {
             } else {
                 crate::ui::emoji::Preferences::load()
             },
-            attachment_drafts: Vec::new(),
-            attachment_pending: 0,
-            attachment_next_id: 0,
+            attachments: Default::default(),
             attachment_sample: false,
-            attachment_request: 0,
             security_open: false,
             security_restore: false,
             security_reset_confirmation: false,
@@ -1819,8 +1812,8 @@ impl MatrixApp {
         let body = self.composer.read(cx).value().to_string();
         let has_text = !body.trim().is_empty();
         // Wait for every stacked attachment so none is left behind.
-        if (!has_text && self.attachment_drafts.is_empty())
-            || self.attachment_pending > 0
+        if (!has_text && self.attachments.drafts.is_empty())
+            || self.attachments.pending > 0
             || self.sending.contains(&room)
         {
             return;
@@ -1838,8 +1831,8 @@ impl MatrixApp {
             .then(|| self.open_reply().map(|reply| reply.event_id.clone()))
             .flatten();
         let sent_reply = reply.clone();
-        let staged = std::mem::take(&mut self.attachment_drafts);
-        let attachment_request = self.attachment_request;
+        let staged = std::mem::take(&mut self.attachments.drafts);
+        let attachment_request = self.attachments.request;
         self.job(
             window,
             cx,
@@ -1866,12 +1859,12 @@ impl MatrixApp {
                 this.sending.remove(&room);
                 // Put unsent attachments back while the same conversation is open.
                 if !unsent.is_empty()
-                    && this.attachment_request == attachment_request
+                    && this.attachments.request == attachment_request
                     && this.navigation.selected_room.as_ref() == Some(&room)
                 {
                     let mut restored = unsent;
-                    restored.append(&mut this.attachment_drafts);
-                    this.attachment_drafts = restored;
+                    restored.append(&mut this.attachments.drafts);
+                    this.attachments.drafts = restored;
                 }
                 match result {
                     Ok(()) if !has_text => {}
