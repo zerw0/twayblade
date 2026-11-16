@@ -36,3 +36,27 @@ selection was cleared (`empty`).
 
 - A cold launch from a notification after the change.
 - Linux and Windows notification clicks.
+
+# Homebrew cask passes style, audit and livecheck (#112)
+
+The tap cask failed `brew style` with 3 offences: the `depends_on macos`
+form and the stanza order. It also failed `brew audit --cask --strict
+--online`. Its livecheck used `:github_latest`, and GitHub's latest-release
+API returns 404 while every release is a pre-release. The audit also rejects
+pre-release versions.
+
+The template (`packaging/homebrew/twayblade.rb`) now reads every non-draft
+GitHub release in livecheck and uses `depends_on macos: :sonoma`. Its stanzas
+are in Homebrew's order, and `zap` also removes the logs and the saved window
+state. The tap (`zerw0/homebrew-twayblade`, commit `eaaf1d6`) carries the
+regenerated rc.2 cask and an `audit_exceptions/github_prerelease_allowlist.json`
+entry (`"any"`), which allows both pre-release and stable versions.
+
+Verification: `brew style`, `brew audit --cask --strict --online` and
+`brew livecheck` pass for `zerw0/twayblade/twayblade` (0.1.0-rc.2). The
+`scripts/test_homebrew_cask.py` tests pass.
+
+The official `homebrew/cask` repository remains out of reach. The app does not
+pass Gatekeeper without notarisation. The repository is below the
+self-submission notability bar (90 forks, 90 watchers or 225 stars) and is
+younger than 30 days. Only pre-releases exist so far.
