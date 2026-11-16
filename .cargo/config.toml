@@ -1,4 +1,6 @@
 # libwebrtc (call media) is prebuilt against the static MSVC runtime (/MT), so
 # everything linked with it must use the static runtime too.
 [target.'cfg(all(windows, target_env = "msvc"))']
-rustflags = ["-C", "target-feature=+crt-static"]
+# GPUI lays out and paints on the main thread, whose stack Windows sizes at
+# 1 MiB by default; reserve 8 MiB like macOS and Linux give it.
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=/STACK:8388608"]

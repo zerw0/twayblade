@@ -100,6 +100,10 @@ jobs:
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - name: Test
         if: env.CODE == 'true'
+        # GPUI test windows build deep element trees; in debug builds that
+        # overflowed the default 2 MiB test-thread stack on Windows.
+        env:
+          RUST_MIN_STACK: '8388608'
         run: cargo test --locked --workspace --all-features
       - name: Release script tests
         if: env.CODE == 'true' && runner.os == 'Linux'
