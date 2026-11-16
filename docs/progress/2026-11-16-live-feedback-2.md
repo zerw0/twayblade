@@ -29,3 +29,24 @@ has the same limit.
 - Physical Windows: Wi-Fi and cable off, then on again; queued messages send
   on reconnect; sleep/wake.
 - VPN and Hyper-V virtual switch behaviour.
+
+# Membership lines start at the message text (#104 follow-up)
+
+## Behaviour
+
+Membership lines ("Fabian joined", "Fabian left") were centred. The owner
+asked during live acceptance for them to sit on the left. They now start at the
+same x as message text in each chat style:
+- Minimal: after the avatar gutter (32 + 10 px; 0 without avatars).
+- IRC: after the time and name columns (178 px).
+- Bubbles: at the sender-name inset (26 + 8 + 10 px; 10 without avatars).
+
+Also restored the doc comment on `accessible_message`, which #106 had attached
+to `delivery_opacity`.
+
+## Verification
+
+- Offline captures of all three styles: in each one, "Robin joined" lines up
+  with the message text.
+- `cargo test -p twayblade --all-features --locked`: 179 passed.
+- Not verified: live account on the physical Mac.

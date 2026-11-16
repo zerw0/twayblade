@@ -734,7 +734,9 @@ impl MatrixApp {
         }
     }
 
-    /// A membership change as a quiet centred line, not a message (#104).
+    /// A membership change as a quiet line, not a message (#104). It starts
+    /// where message text starts in the current chat style, so the eye reads
+    /// it with the conversation rather than as a centred banner.
     fn membership_line(
         &self,
         message: &crate::backend::Message,
@@ -748,7 +750,7 @@ impl MatrixApp {
             .aria_label(format!("{}, {text}", time_label(message.timestamp_ms)))
             .relative()
             .w_full()
-            .justify_center()
+            .pl(px(self.membership_indent()))
             .py(px(2.))
             .gap(px(6.))
             .text_size(px(11.5))
@@ -757,6 +759,19 @@ impl MatrixApp {
             .children(self.latest_visibility(message, in_thread, cx))
             .test_support()
             .into_any_element()
+    }
+
+    /// Left inset of message text: the avatar gutter in Minimal, the time and
+    /// name columns in IRC, the avatar plus the sender-name inset in Bubbles.
+    fn membership_indent(&self) -> f32 {
+        let avatars = self.preferences.chat.avatars;
+        match self.preferences.chat.style {
+            ChatStyle::Minimal if avatars => 32. + 10.,
+            ChatStyle::Minimal => 0.,
+            ChatStyle::Irc => 38. + 10. + 120. + 10.,
+            ChatStyle::Bubbles if avatars => 26. + 8. + 10.,
+            ChatStyle::Bubbles => 10.,
+        }
     }
 
     pub(crate) fn message_group(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -1145,8 +1160,6 @@ impl MatrixApp {
     }
 }
 
-/// What a screen reader announces for one message: who, when, what, and its
-/// state. Uses the same text the row shows; nothing is logged.
 /// Full strength once the server has a message; dimmed while it waits in the
 /// send queue or after it failed (#107).
 pub(crate) fn delivery_opacity(delivery: DeliveryState) -> f32 {
@@ -1194,6 +1207,8 @@ pub(crate) fn membership_text(message: &crate::backend::Message, own_user: &str)
     }
 }
 
+/// What a screen reader announces for one message: who, when, what, and its
+/// state. Uses the same text the row shows; nothing is logged.
 pub(crate) fn accessible_message(message: &crate::backend::Message, own_user: &str) -> String {
     let who = if message.sender == own_user {
         "You".to_owned()
