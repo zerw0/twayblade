@@ -3,6 +3,9 @@ use super::*;
 
 /// Sticker size in the timeline, in points.
 const STICKER: f32 = 160.;
+/// Width of the leading time column ("23:59" at 11 pt) and the gap after it.
+const TIME_COLUMN: f32 = 38.;
+const TIME_COLUMN_GAP: f32 = 10.;
 
 impl MatrixApp {
     pub(crate) fn message_body(
@@ -675,7 +678,8 @@ impl MatrixApp {
             });
         }
         line = line.child(actions);
-        if self.preferences.chat.style != ChatStyle::Irc {
+        // IRC and always-on Minimal show the time in a left column instead.
+        if self.preferences.chat.style != ChatStyle::Irc && !self.time_gutter() {
             line = line.child(
                 div()
                     .flex_none()
@@ -993,7 +997,9 @@ impl MatrixApp {
         let text = membership_text(message, &self.snapshot.user_id);
         // Minimal and IRC drop the centred pause markers (their rows carry a
         // time), so a membership line shows its own time in passing.
-        let time = (self.preferences.chat.style != ChatStyle::Bubbles)
+        // With the time column, the time leads the line like a message's.
+        let gutter = self.time_gutter();
+        let time = (self.preferences.chat.style != ChatStyle::Bubbles && !gutter)
             .then(|| time_label(message.timestamp_ms));
         h_flex()
             .id(SharedString::from(format!("message-row-{}", message.id)))
@@ -1001,11 +1007,17 @@ impl MatrixApp {
             .aria_label(format!("{}, {text}", time_label(message.timestamp_ms)))
             .relative()
             .w_full()
-            .pl(px(self.membership_indent()))
+            .when(!gutter, |line| line.pl(px(self.membership_indent())))
             .py(px(1.))
             .gap(px(6.))
             .text_size(px(11.5))
             .text_color(cx.theme().muted_foreground)
+            .when(gutter, |line| {
+                line.child(
+                    self.time_column(message.timestamp_ms, cx)
+                        .mr(px(self.membership_indent() + TIME_COLUMN_GAP - 6.)),
+                )
+            })
             .child(div().truncate().child(text))
             .children(time.map(|time| div().flex_none().text_size(px(10.5)).child(time)))
             .children(self.latest_visibility(message, in_thread, cx))
@@ -1024,6 +1036,24 @@ impl MatrixApp {
             ChatStyle::Bubbles if avatars => 26. + 8. + 10.,
             ChatStyle::Bubbles => 10.,
         }
+    }
+
+    /// Minimal with always-on timestamps puts every time in a left column,
+    /// so the times line up instead of trailing each message (#193).
+    fn time_gutter(&self) -> bool {
+        self.preferences.chat.style == ChatStyle::Minimal
+            && self.preferences.chat.timestamps == Timestamps::Always
+    }
+
+    /// The fixed-width time that leads a line in IRC and the Minimal time column.
+    fn time_column(&self, timestamp_ms: i64, cx: &Context<Self>) -> Div {
+        div()
+            .w(px(TIME_COLUMN))
+            .flex_none()
+            .pt(px(1.))
+            .text_color(cx.theme().muted_foreground)
+            .text_size(px(11.))
+            .child(time_label(timestamp_ms))
     }
 
     pub(crate) fn message_group(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -1155,6 +1185,12 @@ impl MatrixApp {
                 // sender or a pause), then the group's lines in one text column.
                 let id = first.sender.clone();
                 let name = first.display_name.clone();
+                let gutter = self.time_gutter();
+                // From the time column's left edge to the text: the time, its
+                // gap, then the avatar and its gap when avatars show.
+                let lead = TIME_COLUMN
+                    + TIME_COLUMN_GAP
+                    + if self.preferences.chat.avatars { 32. + 10. } else { 0. };
                 let header = h_flex()
                     .gap(px(8.))
                     .items_baseline()
@@ -1180,29 +1216,51 @@ impl MatrixApp {
                                 }
                             })),
                     )
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(muted)
-                            .child(time_label(first.timestamp_ms)),
-                    );
+                    // The time column already shows when the group starts.
+                    .when(!gutter, |header| {
+                        header.child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(muted)
+                                .child(time_label(first.timestamp_ms)),
+                        )
+                    });
                 let mut column = v_flex().flex_1().min_w_0().child(header);
                 for message in &messages[range] {
-                    column = column.child(
-                        div()
-                            .id(SharedString::from(format!("style-row-{}", message.id)))
-                            .w_full()
+                    let body = div()
+                        .id(SharedString::from(format!("style-row-{}", message.id)))
+                        .w_full()
+                        .min_w_0()
+                        .py(px(if compact { 0. } else { 1. }))
+                        .child(self.message_body(message, false, in_thread, cx))
+                        .test_support();
+                    column = column.child(if gutter {
+                        // Each line leads with its own time at the group's left
+                        // edge, reaching back past the avatar gutter.
+                        h_flex()
                             .min_w_0()
-                            .py(px(if compact { 0. } else { 1. }))
-                            .child(self.message_body(message, false, in_thread, cx))
-                            .test_support(),
-                    );
+                            .items_start()
+                            .ml(px(-lead))
+                            .child(
+                                self.time_column(message.timestamp_ms, cx)
+                                    .mt(px(if compact { 0. } else { 1. })),
+                            )
+                            .child(div().flex_none().w(px(lead - TIME_COLUMN)))
+                            .child(body)
+                            .into_any_element()
+                    } else {
+                        body.into_any_element()
+                    });
                     if let Some(label) = delivered(message) {
                         column =
                             column.child(div().text_size(px(10.5)).text_color(muted).child(label));
                     }
                 }
-                let mut row = h_flex().w_full().items_start().gap(px(10.));
+                let mut row = h_flex()
+                    .w_full()
+                    .items_start()
+                    .gap(px(10.))
+                    .when(gutter, |row| row.pl(px(TIME_COLUMN + TIME_COLUMN_GAP)));
                 if self.preferences.chat.avatars {
                     row = row.child(
                         Button::new(SharedString::from(format!("avatar-{}", first.id)))
@@ -1245,17 +1303,7 @@ impl MatrixApp {
                     .rounded(px(4.))
                     .hover(|style| style.bg(cx.theme().secondary.opacity(0.4)));
                 // IRC always shows the time: it fills the gutter and aids scanning.
-                {
-                    line = line.child(
-                        div()
-                            .w(px(38.))
-                            .flex_none()
-                            .pt(px(1.))
-                            .text_color(muted)
-                            .text_size(px(11.))
-                            .child(time_label(message.timestamp_ms)),
-                    );
-                }
+                line = line.child(self.time_column(message.timestamp_ms, cx));
                 line = line
                     .child(
                         div().w(px(120.)).flex_none().flex().justify_end().child(

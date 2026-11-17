@@ -151,6 +151,7 @@ fn main() {
                     if let Some(name) = args.iter().position(|arg| arg == "--preview-scheme").and_then(|ix| args.get(ix + 1)) && let Some(scheme) = preferences::Scheme::ALL.into_iter().find(|scheme| scheme.name() == name) { view.preferences.appearance.scheme = scheme; theme::set_appearance(view.preferences.appearance.clone(), cx); }
                     if args.iter().any(|arg| arg == "--preview-style-irc") { view.preferences.chat.style = preferences::ChatStyle::Irc; }
                     if args.iter().any(|arg| arg == "--preview-style-minimal") { view.preferences.chat.style = preferences::ChatStyle::Minimal; }
+                    if args.iter().any(|arg| arg == "--preview-timestamps") { view.preferences.chat.timestamps = preferences::Timestamps::Always; }
                     if args.iter().any(|arg| arg == "--preview-signin") {
                         view.snapshot = backend::Snapshot::default();
                         view.groups.clear();
