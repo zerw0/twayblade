@@ -503,7 +503,24 @@ impl MatrixApp {
             self.preview || pending || self.backend.is_none() || !self.snapshot.timeline_ready;
         // Message actions sit beside the bubble and appear on hover, so the
         // timeline is not doubled in height by a control under every message.
+        // The action buttons exist only for the message under the pointer or
+        // with keyboard focus, so screen readers do not step through four
+        // buttons per message (#156); elsewhere a same-size gap keeps layout.
+        let active = show_actions || self.hovered_message.as_deref() == Some(message.id.as_str());
+        let hover_id = message.id.clone();
         let mut line = h_flex()
+            .id(SharedString::from(format!("message-line-{}", message.id)))
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                if *hovered {
+                    if this.hovered_message.as_deref() != Some(hover_id.as_str()) {
+                        this.hovered_message = Some(hover_id.clone());
+                        cx.notify();
+                    }
+                } else if this.hovered_message.as_deref() == Some(hover_id.as_str()) {
+                    this.hovered_message = None;
+                    cx.notify();
+                }
+            }))
             .group("message")
             .max_w_full()
             .min_w_0()
@@ -539,7 +556,7 @@ impl MatrixApp {
             let focus = self
                 .image_focus(&format!("reaction-action-{}", message.id), cx)
                 .tab_stop(stops);
-            actions = actions.child(
+            actions = actions.child(if active {
                 div()
                     .flex_none()
                     .track_focus(&focus)
@@ -560,15 +577,18 @@ impl MatrixApp {
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.open_emoji(Some(message_id.clone()), window, cx)
                             })),
-                    ),
-            );
+                    )
+                    .into_any_element()
+            } else {
+                div().flex_none().size_5().into_any_element()
+            });
         }
         if !in_thread && message.event_id.is_some() {
             let id = message.id.clone();
             let focus = self
                 .image_focus(&format!("reply-action-{id}"), cx)
                 .tab_stop(stops);
-            actions = actions.child(
+            actions = actions.child(if active {
                 div()
                     .track_focus(&focus)
                     .focus(|style| style.opacity(1.))
@@ -587,8 +607,11 @@ impl MatrixApp {
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.start_reply(id.clone(), window, cx)
                             })),
-                    ),
-            );
+                    )
+                    .into_any_element()
+            } else {
+                div().flex_none().size_5().into_any_element()
+            });
         }
         if message.editable
             && let Some(event_id) = message.event_id.clone()
@@ -596,7 +619,7 @@ impl MatrixApp {
             let focus = self
                 .image_focus(&format!("edit-action-{}", message.id), cx)
                 .tab_stop(stops);
-            actions = actions.child(
+            actions = actions.child(if active {
                 div()
                     .track_focus(&focus)
                     .focus(|style| style.opacity(1.))
@@ -615,15 +638,18 @@ impl MatrixApp {
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.start_edit(event_id.clone(), in_thread, window, cx)
                             })),
-                    ),
-            );
+                    )
+                    .into_any_element()
+            } else {
+                div().flex_none().size_5().into_any_element()
+            });
         }
         if !in_thread && message.event_id.is_some() {
             let id = message.id.clone();
             let focus = self
                 .image_focus(&format!("thread-action-{id}"), cx)
                 .tab_stop(stops);
-            actions = actions.child(
+            actions = actions.child(if active {
                 div()
                     .track_focus(&focus)
                     .focus(|style| style.opacity(1.))
@@ -642,8 +668,11 @@ impl MatrixApp {
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.open_thread(id.clone(), window, cx)
                             })),
-                    ),
-            );
+                    )
+                    .into_any_element()
+            } else {
+                div().flex_none().size_5().into_any_element()
+            });
         }
         line = line.child(actions);
         if self.preferences.chat.style != ChatStyle::Irc {
@@ -662,7 +691,7 @@ impl MatrixApp {
                     .child(time_label(message.timestamp_ms)),
             );
         }
-        row = row.child(line);
+        row = row.child(line.test_support());
         if !message.reactions.is_empty() {
             let mut chips = h_flex().gap(px(4.)).flex_wrap();
             for reaction in &message.reactions {

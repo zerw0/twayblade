@@ -911,6 +911,32 @@ fn voice_messages_show_a_play_button_and_their_length(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn message_actions_exist_only_for_the_hovered_or_focused_message(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        // At rest no message exposes its action buttons (#156).
+        assert!(window.try_find("add-reaction-sample-0").is_none());
+        assert!(window.try_find("reply-to-sample-1").is_none());
+        window.hover("message-line-sample-0", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("add-reaction-sample-0").is_some());
+        assert!(window.try_find("add-reaction-sample-1").is_none());
+        // Keyboard: the focused message shows its actions too.
+        app.update(cx, |app, cx| {
+            app.hovered_message = None;
+            app.set_message_cursor(false, "sample-1".into(), cx);
+            app.message_focus(false, "sample-1", cx).focus(window, cx);
+        });
+        window.render_frame(cx);
+        window.render_frame(cx);
+        assert!(window.try_find("add-reaction-sample-1").is_some());
+        assert!(window.try_find("add-reaction-sample-0").is_none());
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
 fn attachment_controls_require_an_explicit_action_and_samples_cannot_upload(
     cx: &mut TestAppContext,
 ) {
@@ -1095,6 +1121,12 @@ fn shortcode_skin_tone_and_reaction_share_the_picker(cx: &mut TestAppContext) {
     .expect("shortcode replacement");
     let id = cx.update(|cx| app.read(cx).snapshot.messages.last().unwrap().id.clone());
     cx.update_window(window, |_, window, cx| {
+        // Message actions appear for the message under the pointer.
+        window.hover(
+            gpui_kit::SharedString::from(format!("message-line-{id}")),
+            cx,
+        );
+        window.render_frame(cx);
         window.click(
             gpui_kit::SharedString::from(format!("add-reaction-{id}")),
             cx,
@@ -2257,6 +2289,10 @@ fn switching_all_styles_preserves_visible_ids_draft_anchor_thread_and_actions(
                 "retry-sample-5",
                 "cancel-sample-5",
             ] {
+                if action == "add-reaction-sample-0" {
+                    window.within("messages").hover("message-line-sample-0", cx);
+                    window.render_frame(cx);
+                }
                 window.within("messages").hover(action, cx);
                 assert!(
                     window.within("messages").find(action).visible(),
@@ -2576,6 +2612,11 @@ fn editing_loads_your_message_and_always_restores_the_draft(cx: &mut TestAppCont
         assert!(window.find_all("edit-bar").is_empty());
         // Edit from the message actions keeps what you were typing.
         window.input("half-written reply", cx);
+        window.hover(
+            gpui_kit::SharedString::from(format!("message-line-{}", ids[0])),
+            cx,
+        );
+        window.render_frame(cx);
         window.click(gpui_kit::SharedString::from(format!("edit-{}", ids[0])), cx);
         window.render_frame(cx);
         assert_eq!(composer_value(window).as_deref(), Some("first"));
@@ -2612,6 +2653,11 @@ fn editing_loads_your_message_and_always_restores_the_draft(cx: &mut TestAppCont
         .expect("render")
     };
     cx.update_window(window, |_, window, cx| {
+        window.hover(
+            gpui_kit::SharedString::from(format!("message-line-{}", ids[1])),
+            cx,
+        );
+        window.render_frame(cx);
         window.click(gpui_kit::SharedString::from(format!("edit-{}", ids[1])), cx);
         window.render_frame(cx);
     })
@@ -2706,6 +2752,11 @@ fn reply_names_the_message_and_can_be_cancelled(cx: &mut TestAppContext) {
             .expect("someone else's message")
     });
     cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.hover(
+            gpui_kit::SharedString::from(format!("message-line-{id}")),
+            cx,
+        );
         window.render_frame(cx);
         window.click(gpui_kit::SharedString::from(format!("reply-to-{id}")), cx);
         window.render_frame(cx);
