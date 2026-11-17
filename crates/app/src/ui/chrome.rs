@@ -184,7 +184,13 @@ impl MatrixApp {
             },
             cx,
         ));
-        for space in self.snapshot.spaces.clone() {
+        for space in self
+            .snapshot
+            .spaces
+            .clone()
+            .into_iter()
+            .filter(|space| crate::model::Navigation::rail_space(space, &self.snapshot))
+        {
             let unread = self
                 .snapshot
                 .rooms
@@ -214,7 +220,10 @@ impl MatrixApp {
             let tile = self.rail_tile(
                 RailTile {
                     fill: Some(theme::avatar_color(&space.id)),
-                    selected: selected.as_ref() == Some(&space.id),
+                    selected: selected.as_ref() == Some(&space.id)
+                        || selected
+                            .as_ref()
+                            .is_some_and(|id| space.room_ids.contains(id)),
                     space: Some(space.id.clone()),
                     name,
                     content: label,
@@ -972,9 +981,143 @@ impl MatrixApp {
             .into_any_element()
     }
 
+    fn subspace_group(
+        &self,
+        space: &crate::backend::Space,
+        path: &mut std::collections::HashSet<String>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let expanded = self.expanded_subspaces.contains(&space.id);
+        let id = space.id.clone();
+        let avatar =
+            self.avatar_image(space.avatar.as_deref(), &space.id, &space.name, 24., 6., cx);
+        let header = Button::new(SharedString::from(format!("subspace-toggle-{}", space.id)))
+            .ghost()
+            .w_full()
+            .h(px(36.))
+            .px(px(4.))
+            .rounded(px(6.))
+            .accessibility_label(format!(
+                "{}, {}",
+                space.name,
+                if expanded { "expanded" } else { "collapsed" }
+            ))
+            .child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap(px(6.))
+                    .child(
+                        Icon::new(if expanded {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        })
+                        .size(px(12.)),
+                    )
+                    .child(avatar)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_left()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(space.name.clone()),
+                    ),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if !this.expanded_subspaces.remove(&id) {
+                    this.expanded_subspaces.insert(id.clone());
+                }
+                cx.notify();
+            }));
+        let weak = cx.weak_entity();
+        let browse_id = space.id.clone();
+        let leave_id = space.id.clone();
+        let mut group = v_flex()
+            .id(SharedString::from(format!("subspace-group-{}", space.id)))
+            .role(Role::Group)
+            .aria_label(space.name.clone())
+            .aria_expanded(expanded)
+            .child(
+                div()
+                    .id(SharedString::from(format!("subspace-context-{}", space.id)))
+                    .child(header)
+                    .context_menu(move |menu, _, _| {
+                        let browse = browse_id.clone();
+                        let leave = leave_id.clone();
+                        let view = weak.clone();
+                        let leave_view = weak.clone();
+                        menu.item(
+                            PopupMenuItem::new("Browse rooms")
+                                .icon(IconName::Compass)
+                                .on_click(move |_, window, cx| {
+                                    let _ = view.update(cx, |this, cx| {
+                                        this.open_management(
+                                            crate::ui::spaces::ManageKind::Directory(
+                                                browse.clone(),
+                                            ),
+                                            window,
+                                            cx,
+                                        )
+                                    });
+                                }),
+                        )
+                        .item(
+                            PopupMenuItem::new("Leave space…")
+                                .icon(IconName::LogOut)
+                                .on_click(move |_, window, cx| {
+                                    let _ = leave_view.update(cx, |this, cx| {
+                                        this.open_management(
+                                            crate::ui::spaces::ManageKind::Leave(leave.clone()),
+                                            window,
+                                            cx,
+                                        )
+                                    });
+                                }),
+                        )
+                    }),
+            );
+        if expanded && path.len() < 32 && path.insert(space.id.clone()) {
+            let mut contents = v_flex().pl(px(12.));
+            for room in &self.snapshot.rooms {
+                if !room.is_space
+                    && !room.direct
+                    && !room.archived
+                    && crate::model::Navigation::room_in_space_group(
+                        space,
+                        &room.id,
+                        &self.snapshot,
+                    )
+                {
+                    contents = contents.child(self.room_row(room, cx));
+                }
+            }
+            for child in crate::model::Navigation::child_spaces(space, &self.snapshot) {
+                if !path.contains(&child.id) {
+                    contents = contents.child(self.subspace_group(child, path, cx));
+                }
+            }
+            path.remove(&space.id);
+            group = group.child(contents);
+        }
+        group.into_any_element()
+    }
+
     pub(crate) fn sidebar_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let muted = cx.theme().muted_foreground;
         let query = self.search.read(cx).value().to_lowercase();
+        let selected_space = self
+            .snapshot
+            .spaces
+            .iter()
+            .find(|space| Some(&space.id) == self.navigation.selected_space.as_ref());
+        let subspaces = selected_space
+            .filter(|_| query.is_empty())
+            .map(|space| crate::model::Navigation::child_spaces(space, &self.snapshot))
+            .unwrap_or_default();
         let visible: Vec<Room> = self
             .snapshot
             .rooms
@@ -985,6 +1128,14 @@ impl MatrixApp {
                 !room.is_space
                     && if query.is_empty() {
                         self.navigation.room_visible(&room.id, &self.snapshot)
+                            && (room.archived
+                                || selected_space.is_none_or(|space| {
+                                    crate::model::Navigation::room_in_space_group(
+                                        space,
+                                        &room.id,
+                                        &self.snapshot,
+                                    )
+                                }))
                     } else {
                         room.name.to_lowercase().contains(&query)
                     }
@@ -1046,6 +1197,14 @@ impl MatrixApp {
             ));
             children += 1;
         }
+        for space in &subspaces {
+            let mut path = std::collections::HashSet::new();
+            if let Some(parent) = selected_space {
+                path.insert(parent.id.clone());
+            }
+            list = list.child(self.subspace_group(space, &mut path, cx));
+            children += 1;
+        }
         if !direct.is_empty() {
             list = list.child(self.sidebar_section(
                 "direct",
@@ -1062,7 +1221,7 @@ impl MatrixApp {
                 self.sidebar_scroll.scroll_to_item(children);
             }
         }
-        if visible.is_empty() {
+        if visible.is_empty() && subspaces.is_empty() {
             let empty = if !query.is_empty() {
                 "No conversations match your search."
             } else if self.snapshot.spaces_loaded {

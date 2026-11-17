@@ -15,6 +15,8 @@ pub struct SpaceSummary {
     pub avatar: Option<String>,
     pub can_add_rooms: bool,
     pub room_ids: HashSet<String>,
+    /// Immediate child links, distinct from inclusive descendant membership.
+    pub child_ids: HashSet<String>,
 }
 
 #[derive(Clone)]
@@ -44,7 +46,7 @@ fn summaries(
     filters: impl Iterator<Item = SpaceFilter>,
     editable: &HashSet<String>,
     joined: &HashSet<String>,
-    left_edges: &HashMap<String, Vec<String>>,
+    cached_edges: &HashMap<String, Vec<String>>,
 ) -> Vec<SpaceSummary> {
     let filters: Vec<_> = filters.collect();
     let mut edges: HashMap<_, _> = filters
@@ -56,12 +58,10 @@ fn summaries(
             )
         })
         .collect();
-    // Leaving a container doesn't remove its child links. The SDK's joined
-    // graph omits those outgoing edges, but its cached state still knows them.
-    for (id, children) in left_edges {
-        if !joined.contains(id) {
-            edges.insert(id.clone(), children.clone());
-        }
+    // SDK first-level filters flatten deeper descendants. Cached child state
+    // preserves immediate links for nested navigation, including left containers.
+    for (id, children) in cached_edges {
+        edges.insert(id.clone(), children.clone());
     }
     let mut seen = HashSet::new();
     filters
@@ -75,6 +75,7 @@ fn summaries(
             let id = filter.space_room.room_id.to_string();
             SpaceSummary {
                 room_ids: descendants(&id, &edges),
+                child_ids: edges.get(&id).into_iter().flatten().cloned().collect(),
                 can_add_rooms: editable.contains(&id),
                 id,
                 avatar: filter.space_room.avatar_url.map(|url| url.to_string()),
@@ -85,13 +86,28 @@ fn summaries(
         .collect()
 }
 
+// SpaceService exposes metadata for only the first two levels. Complete the
+// reachable joined descendants using SDK room metadata, never inferred rooms.
+fn include_nested_spaces(
+    spaces: &mut Vec<SpaceSummary>,
+    candidates: impl Iterator<Item = SpaceSummary>,
+) {
+    let mut known: HashSet<_> = spaces.iter().map(|space| space.id.clone()).collect();
+    let reachable: HashSet<_> = spaces
+        .iter()
+        .flat_map(|space| space.room_ids.iter().cloned())
+        .collect();
+    let mut nested: Vec<_> = candidates
+        .filter(|space| reachable.contains(&space.id) && known.insert(space.id.clone()))
+        .collect();
+    nested.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
+    spaces.extend(nested);
+}
+
 impl Account {
-    /// Project only locally cached, reachable left-space links. This does not
+    /// Project locally cached space child links. This does not
     /// join spaces, fetch their state, or restore their navigation tiles.
-    async fn cached_left_space_edges(
-        &self,
-        filters: &[SpaceFilter],
-    ) -> HashMap<String, Vec<String>> {
+    async fn cached_space_edges(&self, filters: &[SpaceFilter]) -> HashMap<String, Vec<String>> {
         use matrix_sdk::{
             RoomState,
             deserialized_responses::SyncOrStrippedState,
@@ -99,16 +115,17 @@ impl Account {
         };
         let mut pending: Vec<_> = filters
             .iter()
-            .flat_map(|filter| filter.descendants.iter().cloned())
+            .flat_map(|filter| {
+                std::iter::once(filter.space_room.room_id.clone())
+                    .chain(filter.descendants.iter().cloned())
+            })
             .collect();
         let mut seen = HashSet::new();
         let mut edges = HashMap::new();
         while let Some(id) = pending.pop() {
-            let Some(room) = self
-                .client
-                .get_room(&id)
-                .filter(|room| room.is_space() && room.state() == RoomState::Left)
-            else {
+            let Some(room) = self.client.get_room(&id).filter(|room| {
+                room.is_space() && matches!(room.state(), RoomState::Joined | RoomState::Left)
+            }) else {
                 continue;
             };
             if !seen.insert(id.clone()) {
@@ -160,16 +177,29 @@ impl Account {
             let (mut filters, updates) = service.subscribe_to_space_filters().await;
             let mut updates = Box::pin(updates);
             let mut room_updates = account.client.subscribe_to_all_room_updates();
-            let mut left_edges = HashMap::new();
+            let mut cached_edges = HashMap::new();
             loop {
                 let editable = service.editable_spaces().await.into_iter().map(|r| r.room_id.to_string()).collect();
                 let joined = account.client.joined_space_rooms().iter().map(|room| room.room_id().to_string()).collect();
-                if let Ok(edges) = tokio::time::timeout(std::time::Duration::from_secs(2), account.cached_left_space_edges(&filters.iter().cloned().collect::<Vec<_>>())).await {
-                    left_edges = edges;
+                if let Ok(edges) = tokio::time::timeout(std::time::Duration::from_secs(2), account.cached_space_edges(&filters.iter().cloned().collect::<Vec<_>>())).await {
+                    cached_edges = edges;
                 }
+                let mut spaces = summaries(filters.iter().cloned(), &editable, &joined, &cached_edges);
+                include_nested_spaces(&mut spaces, account.client.joined_space_rooms().into_iter().map(|room| {
+                    let id = room.room_id().to_string();
+                    SpaceSummary {
+                        room_ids: descendants(&id, &cached_edges),
+                        child_ids: cached_edges.get(&id).into_iter().flatten().cloned().collect(),
+                        name: room.cached_display_name().map(|name| name.to_string()).or_else(|| room.name()).unwrap_or_else(|| id.clone()),
+                        avatar: room.avatar_url().map(|url| url.to_string()),
+                        can_add_rooms: editable.contains(&id),
+                        level: 1,
+                        id,
+                    }
+                }));
                 yield SpaceSnapshot {
                     account_instance: account.instance_id(),
-                    spaces: summaries(filters.iter().cloned(), &editable, &joined, &left_edges),
+                    spaces,
                 };
                 tokio::select! {
                     next = updates.next() => { let Some(diffs) = next else { break; }; for diff in diffs { diff.apply(&mut filters); } }
@@ -290,6 +320,54 @@ mod tests {
             result[0].room_ids,
             HashSet::from([child.to_owned(), room.to_owned()])
         );
+    }
+
+    #[test]
+    fn deep_joined_space_metadata_is_included_once_only_when_reachable() {
+        let mut spaces = vec![SpaceSummary {
+            id: "root".into(),
+            room_ids: ["child".into(), "deep".into()].into_iter().collect(),
+            ..Default::default()
+        }];
+        let candidates = ["root", "child", "deep", "unrelated"]
+            .into_iter()
+            .map(|id| SpaceSummary {
+                id: id.into(),
+                ..Default::default()
+            });
+        include_nested_spaces(&mut spaces, candidates);
+        assert_eq!(
+            spaces
+                .iter()
+                .map(|space| space.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["root", "child", "deep"]
+        );
+    }
+
+    #[test]
+    fn cached_child_links_preserve_deep_hierarchy_instead_of_sdk_flattening() {
+        let root = "!root:example.org";
+        let child = "!child:example.org";
+        let nested = "!nested:example.org";
+        let room = "!room:example.org";
+        let filters = vec![
+            space_filter(root, 0, &[child]),
+            space_filter(child, 1, &[nested, room]),
+            space_filter(nested, 1, &[room]),
+        ];
+        let joined = [root, child, nested]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let cached = HashMap::from([
+            (child.to_owned(), vec![nested.to_owned()]),
+            (nested.to_owned(), vec![room.to_owned()]),
+        ]);
+        let spaces = summaries(filters.into_iter(), &HashSet::new(), &joined, &cached);
+        assert_eq!(spaces[1].child_ids, HashSet::from([nested.to_owned()]));
+        assert_eq!(spaces[2].child_ids, HashSet::from([room.to_owned()]));
+        assert!(spaces[0].room_ids.contains(room));
     }
 
     #[test]
