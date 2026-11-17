@@ -334,6 +334,8 @@ pub(super) struct MatrixApp {
     pub notification_thread: Option<(String, String)>,
     pub account_name: Option<Entity<InputState>>,
     pub account_edit_busy: bool,
+    /// The message under the pointer; only it renders its action buttons.
+    pub hovered_message: Option<String>,
     /// Voice messages (#184): a recording in progress, the message playing,
     /// one loading, and whether the redraw ticker runs.
     pub voice_recorder: Option<twayblade_media::voice::Recorder>,
@@ -795,6 +797,7 @@ impl MatrixApp {
             notification_thread: None,
             notification_keyword: cx.new(|cx| InputState::new(window, cx).placeholder("Keyword")),
             account_edit_busy: false,
+            hovered_message: None,
             voice_recorder: None,
             voice_starting: false,
             voice_playback: None,
