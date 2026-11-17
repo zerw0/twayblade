@@ -486,9 +486,10 @@ fn message_content(msgtype: &MessageType) -> (MessageKind, String, Option<Attach
     match msgtype {
         MessageType::Emote(message) => (MessageKind::Emote, message.body.clone(), None),
         MessageType::Notice(message) => (MessageKind::Notice, message.body.clone(), None),
+        // An image's body is its caption, when it has one besides the filename.
         MessageType::Image(message) => (
             MessageKind::Image,
-            String::new(),
+            message.caption().unwrap_or_default().to_owned(),
             attachment(
                 message.filename(),
                 message.info.as_ref().and_then(|i| i.size),
@@ -1074,7 +1075,13 @@ mod tests {
             }))
             .expect("SDK attachment fixture");
             let (kind, body, attachment) = message_content(&content);
-            assert!(kind == expected && body.is_empty());
+            // An image keeps its caption as text; other files are only files.
+            let caption = if kind == MessageKind::Image {
+                "sample caption"
+            } else {
+                ""
+            };
+            assert!(kind == expected && body == caption);
             let attachment = attachment.expect("attachment metadata");
             assert!(attachment.filename == "sample.bin" && attachment.size == Some(2048));
         }

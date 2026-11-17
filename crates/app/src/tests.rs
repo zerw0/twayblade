@@ -118,7 +118,7 @@ fn own_profile_opens_and_closes_through_real_buttons(cx: &mut TestAppContext) {
 fn preview_window(
     cx: &mut TestAppContext,
 ) -> (gpui_kit::AnyWindowHandle, gpui_kit::Entity<MatrixApp>) {
-    preview_window_sized(cx, size(px(1120.), px(760.)))
+    preview_window_sized(cx, size(px(1120.), px(920.)))
 }
 
 fn preview_window_sized(
