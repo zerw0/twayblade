@@ -28,8 +28,10 @@
         DowngradeErrorMessage="A newer version of Twayblade is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
-    <Icon Id="TwaybladeIcon" SourceFile="$(var.Root)\packaging\icons\twayblade.ico" />
-    <Property Id="ARPPRODUCTICON" Value="TwaybladeIcon" />
+    <!-- The Id keeps the .ico extension: Windows shows an advertised shortcut's
+         and Apps & Features' icon only when the Icon table name ends in .ico. -->
+    <Icon Id="Twayblade.ico" SourceFile="$(var.Root)\packaging\icons\twayblade.ico" />
+    <Property Id="ARPPRODUCTICON" Value="Twayblade.ico" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/zerw0/twayblade" />
     <Property Id="ARPHELPLINK" Value="https://github.com/zerw0/twayblade/issues" />
 
@@ -43,7 +45,7 @@
                 Name="Twayblade"
                 Description="Native Matrix messaging and calls"
                 WorkingDirectory="INSTALLFOLDER"
-                Icon="TwaybladeIcon"
+                Icon="Twayblade.ico"
                 Advertise="yes">
               <ShortcutProperty Key="System.AppUserModel.ID" Value="com.twayblade.desktop" />
             </Shortcut>
