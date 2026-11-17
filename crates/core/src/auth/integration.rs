@@ -2285,6 +2285,26 @@ async fn spaces_hierarchy_invites_creation_restricted_join_and_selective_leave()
         page.rooms.iter().any(|r| r.id == encrypted && r.joined),
         "joined child missing"
     );
+    // Space home: the space's own details and a subspace with its children.
+    assert!(
+        page.access == JoinAccess::Public && page.members >= 2,
+        "space home details"
+    );
+    assert!(
+        page.rooms
+            .iter()
+            .any(|r| r.id == nested_id.as_str() && r.space && r.children >= 1),
+        "subspace with its child count"
+    );
+    let nested_directory = checked(bob.directory(nested_id.as_str()).await, "open subspace");
+    let nested_page = checked(nested_directory.next_page().await, "subspace children");
+    assert!(
+        nested_page
+            .rooms
+            .iter()
+            .any(|r| r.id == encrypted && r.joined && r.members >= 2),
+        "subspace lists its joined child with members"
+    );
     checked(
         bob.join_room_or_space(restricted.room_id().as_str(), vec![via.to_string()])
             .await,

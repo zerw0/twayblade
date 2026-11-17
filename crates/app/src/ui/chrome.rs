@@ -233,8 +233,8 @@ impl MatrixApp {
                         let view = weak.clone();
                         let leave_view = weak.clone();
                         menu.item(
-                            PopupMenuItem::new("Browse rooms")
-                                .icon(IconName::Compass)
+                            PopupMenuItem::new("Space Home")
+                                .icon(IconName::House)
                                 .on_click(move |_, window, cx| {
                                     let _ = view.update(cx, |this, cx| {
                                         this.open_management(
@@ -1098,18 +1098,42 @@ impl MatrixApp {
                     .pl(px(12.))
                     .pr(px(8.))
                     .gap(px(4.))
-                    .child(
-                        div()
+                    .child({
+                        let heading = div()
                             .id("sidebar-title")
                             .role(Role::Heading)
                             .aria_label(title.clone())
                             .flex_1()
                             .min_w_0()
                             .truncate()
+                            .text_left()
                             .text_size(px(14.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(title),
-                    )
+                            .child(title.clone());
+                        // A space's name opens its home (#177).
+                        match self.navigation.selected_space.clone() {
+                            Some(space) => Button::new("open-space-home")
+                                .ghost()
+                                .flex_1()
+                                .min_w_0()
+                                .h(px(28.))
+                                .px(px(4.))
+                                .ml(px(-4.))
+                                .justify_start()
+                                .accessibility_label(format!("{title}, Space Home"))
+                                .tooltip("Space Home")
+                                .child(heading)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.open_management(
+                                        crate::ui::spaces::ManageKind::Directory(space.clone()),
+                                        window,
+                                        cx,
+                                    )
+                                }))
+                                .into_any_element(),
+                            None => heading.into_any_element(),
+                        }
+                    })
                     .when(self.navigation.selected_space.is_some(), |header| {
                         header.child(
                             Button::new("new-room")

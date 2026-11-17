@@ -2306,9 +2306,14 @@ impl MatrixApp {
     }
 
     pub(super) fn close_management_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(page) = self.management.take() else {
+        let Some(mut page) = self.management.take() else {
             return;
         };
+        if let Some(behind) = page.behind.take() {
+            self.management = Some(*behind);
+            cx.notify();
+            return;
+        }
         if !page.kind.is_dialog() {
             self.prune_dismissed_panel(true);
         }

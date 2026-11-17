@@ -68,11 +68,21 @@ pub struct DirectoryRoom {
     pub suggested: bool,
     pub access: JoinAccess,
     pub via: Vec<String>,
+    /// The room's picture (mxc URI).
+    pub avatar: Option<String>,
+    /// Joined members, as the server reports them.
+    pub members: u64,
+    /// For a space, how many rooms and spaces it lists.
+    pub children: u64,
 }
 #[derive(Clone, Default)]
 pub struct DirectorySnapshot {
     pub space: String,
     pub name: String,
+    pub topic: Option<String>,
+    pub avatar: Option<String>,
+    pub members: u64,
+    pub access: JoinAccess,
     pub rooms: Vec<DirectoryRoom>,
     pub end_reached: bool,
     pub inaccessible: u64,
@@ -109,15 +119,11 @@ impl Directory {
                 joined: r.state == Some(RoomState::Joined),
                 invited: r.state == Some(RoomState::Invited),
                 suggested: r.suggested,
-                access: match r.join_rule {
-                    Some(JoinRuleSummary::Public) => JoinAccess::Public,
-                    Some(JoinRuleSummary::Restricted(_) | JoinRuleSummary::KnockRestricted(_)) => {
-                        JoinAccess::Restricted
-                    }
-                    Some(JoinRuleSummary::Invite | JoinRuleSummary::Knock) => JoinAccess::Invite,
-                    _ => JoinAccess::Unknown,
-                },
+                access: join_access(r.join_rule.as_ref()),
                 via: r.via.iter().map(ToString::to_string).collect(),
+                avatar: r.avatar_url.as_ref().map(ToString::to_string),
+                members: r.num_joined_members,
+                children: r.children_count,
             })
             .collect();
         DirectorySnapshot {
@@ -126,6 +132,12 @@ impl Directory {
                 .as_ref()
                 .map(|s| s.display_name.clone())
                 .unwrap_or_else(|| self.space.clone()),
+            topic: space.as_ref().and_then(|s| s.topic.clone()),
+            avatar: space
+                .as_ref()
+                .and_then(|s| s.avatar_url.as_ref().map(ToString::to_string)),
+            members: space.as_ref().map_or(0, |s| s.num_joined_members),
+            access: join_access(space.as_ref().and_then(|s| s.join_rule.as_ref())),
             inaccessible: if end_reached {
                 space
                     .as_ref()
@@ -137,6 +149,16 @@ impl Directory {
             rooms,
             end_reached,
         }
+    }
+}
+fn join_access(rule: Option<&JoinRuleSummary>) -> JoinAccess {
+    match rule {
+        Some(JoinRuleSummary::Public) => JoinAccess::Public,
+        Some(JoinRuleSummary::Restricted(_) | JoinRuleSummary::KnockRestricted(_)) => {
+            JoinAccess::Restricted
+        }
+        Some(JoinRuleSummary::Invite | JoinRuleSummary::Knock) => JoinAccess::Invite,
+        _ => JoinAccess::Unknown,
     }
 }
 #[derive(Clone, Default)]

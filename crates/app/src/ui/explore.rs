@@ -311,7 +311,7 @@ fn sample_rooms() -> Vec<DirectoryRoom> {
 }
 
 /// 11904 -> "11,904", as member counts read in lists.
-fn grouped(n: u64) -> String {
+pub(crate) fn grouped(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::new();
     for (i, c) in digits.chars().enumerate() {

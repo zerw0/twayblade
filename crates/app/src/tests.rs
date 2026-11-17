@@ -1336,7 +1336,7 @@ fn space_context_menu_opens_directory_with_access_states(cx: &mut TestAppContext
     cx.run_until_parked();
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
-        let point = window.find_by_label("Browse rooms").bounds().center();
+        let point = window.find_by_label("Space Home").bounds().center();
         window.pointer_move(point, None, cx);
         window.pointer_down(point, gpui_kit::MouseButton::Left, cx);
         window.pointer_up(point, gpui_kit::MouseButton::Left, cx);
@@ -1710,6 +1710,68 @@ fn room_rows_track_the_hovered_row_and_the_one_it_left(cx: &mut TestAppContext) 
         assert_eq!(app.hovered_room.as_deref(), Some("alex"));
         assert_eq!(app.unhovered_room.as_deref(), Some("notes"));
     });
+}
+
+#[gpui_kit::test]
+fn space_home_opens_from_the_space_name_and_expands_and_searches_subspaces(
+    cx: &mut TestAppContext,
+) {
+    let (main_window, app) = preview_window(cx);
+    cx.update_window(main_window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("space-design", cx);
+        window.render_frame(cx);
+        window.click("open-space-home", cx);
+        window.render_frame(cx);
+        // Header and the top level of the tree; the subspace starts closed.
+        assert!(window.try_find("space-home-name").is_some());
+        assert!(window.try_find("space-home-invite").is_some());
+        assert!(window.try_find("space-row-sample-research").is_some());
+        assert!(window.try_find("space-row-sample-roadmap").is_none());
+        window.click("space-toggle-sample-nested", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("space-row-sample-roadmap").is_some());
+        assert!(window.try_find("join-sample-feedback").is_some());
+        // A dialog opened from the space home returns to it when closed.
+        app.update(cx, |app, cx| {
+            app.open_management(
+                crate::ui::spaces::ManageKind::InviteMember("design".into()),
+                window,
+                cx,
+            )
+        });
+        window.render_frame(cx);
+        window.click("close-management", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("space-row-sample-roadmap").is_some());
+    })
+    .unwrap();
+    cx.update(|cx| {
+        assert!(matches!(
+            app.read(cx).management.as_ref().map(|m| &m.kind),
+            Some(crate::ui::spaces::ManageKind::Directory(id)) if id == "design"
+        ))
+    });
+    // Searching keeps matches from loaded subspaces and their parents.
+    cx.update_window(main_window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            let input = app.management.as_ref().unwrap().name.clone();
+            input.update(cx, |state, cx| state.set_value("feedback", window, cx));
+        });
+        window.render_frame(cx);
+        assert!(window.try_find("space-row-sample-feedback").is_some());
+        assert!(window.try_find("space-row-sample-nested").is_some());
+        assert!(window.try_find("space-row-sample-research").is_none());
+        app.update(cx, |app, cx| {
+            let input = app.management.as_ref().unwrap().name.clone();
+            input.update(cx, |state, cx| {
+                state.set_value("nothing like this", window, cx)
+            });
+        });
+        window.render_frame(cx);
+        assert!(window.try_find("space-home-status").is_some());
+    })
+    .unwrap();
 }
 
 #[gpui_kit::test]

@@ -1361,6 +1361,27 @@ impl Backend {
             .map_err(conversation_failure)
     }
 
+    /// The first page of a subspace's rooms, for expanding it on the space
+    /// home. Independent of the open directory and its pagination.
+    pub(super) fn space_children(
+        &self,
+        expected: u128,
+        id: String,
+    ) -> Result<twayblade_core::space_actions::DirectorySnapshot, ServiceError> {
+        let account = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session unavailable."))?
+            .account
+            .clone()
+            .filter(|a| a.instance_id() == expected)
+            .ok_or_else(|| failure("Account changed."))?;
+        self.runtime.block_on(async {
+            let directory = account.directory(&id).await.map_err(space_failure)?;
+            directory.next_page().await.map_err(space_failure)
+        })
+    }
+
     pub(super) fn space_action(
         &self,
         expected: u128,
