@@ -10,6 +10,8 @@ use std::time::Duration;
 /// Hover/press feedback and small state changes.
 #[allow(dead_code)]
 pub(crate) const FAST: Duration = Duration::from_millis(120);
+/// A row's hover fill fading in or out.
+const HOVER: Duration = Duration::from_millis(150);
 /// Panels, popovers and dialogs arriving.
 pub(crate) const ENTER: Duration = Duration::from_millis(200);
 /// Distance an entering popover rises, in points.
@@ -81,6 +83,43 @@ where
         .with_animation(id.clone(), entering(id), move |element, t| {
             element.opacity(if visible { t } else { 1. - t })
         })
+        .into_any_element()
+}
+
+/// Fades a row's hover fill in while `hovered`, and out once when `leaving`
+/// (the row the pointer just left). Other rows paint no fill. Instant under
+/// Reduce Motion.
+pub(crate) fn hover_fill<E>(
+    element: E,
+    id: impl Into<ElementId>,
+    hovered: bool,
+    leaving: bool,
+    fill: Hsla,
+    reduce: bool,
+) -> AnyElement
+where
+    E: IntoElement + Styled + 'static,
+{
+    if !hovered && (!leaving || reduce || SETTLED) {
+        return element.into_any_element();
+    }
+    if reduce || SETTLED {
+        return element.bg(fill).into_any_element();
+    }
+    // The id changes with the state, so each change plays once.
+    let id = ElementId::NamedChild(
+        std::sync::Arc::new(id.into()),
+        if hovered { "in" } else { "out" }.into(),
+    );
+    element
+        .with_animation(
+            id,
+            Animation::new(HOVER).with_easing(ease_out),
+            move |element, t| {
+                let amount = if hovered { t } else { 1. - t };
+                element.bg(fill.opacity(fill.a * amount))
+            },
+        )
         .into_any_element()
 }
 

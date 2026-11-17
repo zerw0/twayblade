@@ -222,7 +222,7 @@ impl Account {
             }),
         })
     }
-    /// SDK decryption with its media disk cache explicitly disabled.
+    /// SDK decryption; kept in the encrypted media cache when it is on (#174).
     pub async fn media_bytes(&self, source: &Source) -> Result<Vec<u8>, MediaError> {
         self.client
             .media()
@@ -231,12 +231,12 @@ impl Account {
                     source: source.0.clone(),
                     format: MediaFormat::File,
                 },
-                false,
+                self.caches_media(),
             )
             .await
             .map_err(|_| MediaError::Unavailable)
     }
-    /// SDK decryption stays in memory; `false` disables the SDK media disk cache.
+    /// Kept in the encrypted media cache when it is on (#174).
     pub async fn gallery_thumbnail(
         &self,
         item: &MediaItem,
@@ -272,7 +272,7 @@ impl Account {
         let media = self.client.media();
         let bytes = tokio::select! {
             _ = cancel.changed() => return Err(ImageError::Cancelled),
-            result = tokio::time::timeout(std::time::Duration::from_secs(15), media.get_media_content(&request, false)) => result.map_err(|_| ImageError::Download)?.map_err(|_| ImageError::Download)?,
+            result = tokio::time::timeout(std::time::Duration::from_secs(15), media.get_media_content(&request, self.caches_media())) => result.map_err(|_| ImageError::Download)?.map_err(|_| ImageError::Download)?,
         };
         crate::conversation::decode_gallery_thumbnail(bytes, cancel).await
     }

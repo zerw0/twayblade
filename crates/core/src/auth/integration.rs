@@ -1242,6 +1242,7 @@ async fn pagination_preserves_message_identity() {
     let conversation = initial.conversation.expect("timeline");
     let mut count = initial.messages.len();
     let mut reached_start = false;
+    let mut history = 0;
     for _ in 0..10 {
         reached_start = checked(conversation.older().await, "SDK load earlier");
         let page = wait_snapshot(
@@ -1257,13 +1258,33 @@ async fn pagination_preserves_message_identity() {
         let unique: std::collections::HashSet<_> = page.messages.iter().map(|m| &m.id).collect();
         assert_eq!(unique.len(), page.messages.len());
         count = page.messages.len();
+        history = page
+            .messages
+            .iter()
+            .filter(|m| m.body.starts_with("sample history"))
+            .count();
         if reached_start {
             break;
         }
     }
+    // Rows also include room state (creation, membership); count messages.
     assert!(
-        reached_start && count == 90,
-        "Incomplete history pagination"
+        reached_start && history == 90,
+        "Incomplete history pagination: start {reached_start}, {history} of 90"
+    );
+    // Reopening the room (#173) reuses its live timeline: the first ready
+    // snapshot already holds the whole loaded history, with the same IDs.
+    drop(updates);
+    let mut reopened = Box::pin(account.conversation_updates(id.to_string(), 2));
+    let again = wait_snapshot(
+        &mut reopened,
+        |s| s.status == crate::conversation::TimelineStatus::Ready,
+        "reopened room",
+    )
+    .await;
+    assert!(
+        again.messages.len() == count && again.messages.iter().any(|m| m.id == latest),
+        "reopened room lost its loaded history"
     );
     checked(
         account.client.matrix_auth().logout().await,
@@ -2007,6 +2028,48 @@ async fn spaces_hierarchy_invites_creation_restricted_join_and_selective_leave()
     let alice_sync = sync(&alice);
     let bob_sync = sync(&bob);
 
+    // Creating a space: a public space room only admins post in.
+    let created = checked(
+        alice
+            .create_space(crate::space_actions::CreateSpace {
+                name: "Created space".into(),
+                topic: "Made by create_space".into(),
+                public: true,
+            })
+            .await,
+        "create space",
+    );
+    let created_id = checked(
+        matrix_sdk::ruma::OwnedRoomId::try_from(created.as_str()),
+        "space id",
+    );
+    wait_for_room(&alice, &created_id).await;
+    let created_room = checked(
+        alice.client.get_room(&created_id).ok_or("missing"),
+        "created space",
+    );
+    assert!(created_room.is_space(), "created room is a space");
+    // The creation state arrives with sync shortly after the room.
+    let mut public = false;
+    for _ in 0..50 {
+        public = created_room.join_rule()
+            == Some(matrix_sdk::ruma::events::room::join_rules::JoinRule::Public);
+        if public {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    assert!(public, "a public space is joinable by anyone");
+    let powers = checked(created_room.power_levels().await, "space power levels");
+    assert_eq!(i64::from(powers.events_default), 100);
+    assert!(
+        alice
+            .create_space(crate::space_actions::CreateSpace::default())
+            .await
+            .is_err(),
+        "a space needs a name"
+    );
+
     let mut request = create_room::v3::Request::new();
     request.name = Some("Isolated public space".into());
     request.preset = Some(create_room::v3::RoomPreset::PublicChat);
@@ -2242,6 +2305,26 @@ async fn spaces_hierarchy_invites_creation_restricted_join_and_selective_leave()
     assert!(
         page.rooms.iter().any(|r| r.id == encrypted && r.joined),
         "joined child missing"
+    );
+    // Space home: the space's own details and a subspace with its children.
+    assert!(
+        page.access == JoinAccess::Public && page.members >= 2,
+        "space home details"
+    );
+    assert!(
+        page.rooms
+            .iter()
+            .any(|r| r.id == nested_id.as_str() && r.space && r.children >= 1),
+        "subspace with its child count"
+    );
+    let nested_directory = checked(bob.directory(nested_id.as_str()).await, "open subspace");
+    let nested_page = checked(nested_directory.next_page().await, "subspace children");
+    assert!(
+        nested_page
+            .rooms
+            .iter()
+            .any(|r| r.id == encrypted && r.joined && r.members >= 2),
+        "subspace lists its joined child with members"
     );
     checked(
         bob.join_room_or_space(restricted.room_id().as_str(), vec![via.to_string()])

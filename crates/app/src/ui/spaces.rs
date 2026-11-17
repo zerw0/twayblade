@@ -14,7 +14,7 @@ use gpui_kit::{
     },
     *,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use twayblade_core::space_actions::{
     CreateRoom, DirectoryRoom, DirectorySnapshot, JoinAccess, LeaveCandidate,
 };
@@ -38,6 +38,8 @@ pub(crate) enum ManageKind {
     StatusMessage,
     /// Public rooms of your server or a large public homeserver.
     Explore,
+    /// Create a new space.
+    CreateSpace,
 }
 impl ManageKind {
     /// Short forms open as a small centred dialog; browsing and leaving keep
@@ -53,6 +55,7 @@ impl ManageKind {
                 | Self::InviteContact
                 | Self::SignOut
                 | Self::StatusMessage
+                | Self::CreateSpace
         )
     }
 }
@@ -69,12 +72,23 @@ pub(crate) struct Management {
     pub topic: Entity<InputState>,
     pub encrypted: bool,
     pub voice_channel: bool,
+    /// Create Space: anyone can join (else invitation only).
+    pub public: bool,
     pub parent: Option<String>,
     /// The dialog sheet: Tab stays inside it while it is open.
     pub focus: FocusHandle,
     /// The contact link was copied; the button says so until the dialog closes.
     pub copied: bool,
     pub parent_from_context: bool,
+    /// Space home: subspaces shown open, their loaded rooms, and the ones
+    /// still loading or failed.
+    pub expanded: HashSet<String>,
+    pub children: HashMap<String, DirectorySnapshot>,
+    pub loading: HashSet<String>,
+    pub failed: HashSet<String>,
+    /// The full page a dialog opened over (Invite on the space home), shown
+    /// again when the dialog closes.
+    pub behind: Option<Box<Management>>,
 }
 impl MatrixApp {
     pub fn open_management(
@@ -128,6 +142,7 @@ impl MatrixApp {
                     .placeholder("What are you up to?")
                     .default_value(current_status),
                 ManageKind::Explore => input.placeholder("Search rooms by name or topic"),
+                ManageKind::Directory(_) => input.placeholder("Search"),
                 _ => input,
             }
         });
@@ -162,6 +177,14 @@ impl MatrixApp {
             ),
             _ => (None, HashSet::new()),
         };
+        let behind = if is_dialog {
+            self.management
+                .take()
+                .filter(|page| !page.kind.is_dialog())
+                .map(Box::new)
+        } else {
+            None
+        };
         self.management = Some(Management {
             _subscriptions: subscriptions,
             kind,
@@ -178,11 +201,17 @@ impl MatrixApp {
             name,
             topic,
             encrypted: true,
+            public: false,
             voice_channel: false,
             parent_from_context: initial_parent.is_some(),
             parent: initial_parent,
             focus: cx.focus_handle(),
             copied: false,
+            expanded: HashSet::new(),
+            children: HashMap::new(),
+            loading: HashSet::new(),
+            failed: HashSet::new(),
+            behind,
         });
         // Dialogs with a text field start in it, so typing works at once. The
         // leave confirmation starts on the sheet itself, not on its
@@ -194,6 +223,7 @@ impl MatrixApp {
                 | ManageKind::JoinSpace
                 | ManageKind::InviteMember(_)
                 | ManageKind::StatusMessage
+                | ManageKind::CreateSpace
                 | ManageKind::Explore => page.name.update(cx, |state, cx| state.focus(window, cx)),
                 ManageKind::LeaveRoom(_) | ManageKind::InviteContact | ManageKind::SignOut => {
                     page.focus.focus(window, cx)
@@ -211,11 +241,16 @@ impl MatrixApp {
                         page.directory = Some(DirectorySnapshot {
                             space: id.clone(),
                             name: "Design team".into(),
+                            topic: Some("Product design, research and critique".into()),
+                            members: 24,
+                            access: JoinAccess::Invite,
+                            avatar: None,
                             rooms: vec![
                                 DirectoryRoom {
                                     id: "general".into(),
                                     name: "General".into(),
                                     joined: true,
+                                    members: 24,
                                     access: JoinAccess::Public,
                                     ..Default::default()
                                 },
@@ -224,6 +259,7 @@ impl MatrixApp {
                                     name: "Research lab".into(),
                                     topic: Some("Experiments and early ideas".into()),
                                     suggested: true,
+                                    members: 8,
                                     access: JoinAccess::Public,
                                     ..Default::default()
                                 },
@@ -231,19 +267,24 @@ impl MatrixApp {
                                     id: "sample-private".into(),
                                     name: "Private planning".into(),
                                     access: JoinAccess::Invite,
+                                    members: 3,
                                     ..Default::default()
                                 },
                                 DirectoryRoom {
                                     id: "sample-restricted".into(),
                                     name: "Members lounge".into(),
                                     access: JoinAccess::Restricted,
+                                    members: 17,
                                     ..Default::default()
                                 },
                                 DirectoryRoom {
                                     id: "sample-nested".into(),
                                     name: "Product team".into(),
                                     space: true,
+                                    joined: true,
                                     access: JoinAccess::Public,
+                                    members: 15,
+                                    children: 2,
                                     ..Default::default()
                                 },
                             ],
@@ -318,13 +359,20 @@ impl MatrixApp {
                         if let Some(joining) = joining
                             && let Some(directory) = &mut page.directory
                         {
-                            if let Some(room) = directory.rooms.iter_mut().find(|r| r.id == joining)
+                            for room in directory
+                                .rooms
+                                .iter_mut()
+                                .chain(page.children.values_mut().flat_map(|c| c.rooms.iter_mut()))
+                                .filter(|r| r.id == joining)
                             {
                                 room.joined = true;
                                 room.invited = false;
                             }
                         } else {
-                            let space = matches!(page.kind, ManageKind::JoinSpace);
+                            let space = matches!(
+                                page.kind,
+                                ManageKind::JoinSpace | ManageKind::CreateSpace
+                            );
                             if matches!(page.kind, ManageKind::Dm) {
                                 this.navigation.selected_space = None;
                             } else if matches!(page.kind, ManageKind::Create) {
@@ -459,7 +507,7 @@ impl MatrixApp {
     /// The heading of a management page or dialog, also its accessible name.
     pub fn management_title(kind: &ManageKind) -> &'static str {
         match kind {
-            ManageKind::Directory(_) => "Browse Rooms",
+            ManageKind::Directory(_) => "Space Home",
             ManageKind::Leave(_) => "Leave Space",
             ManageKind::Create => "Create Channel",
             ManageKind::Dm => "Start a Direct Message",
@@ -470,6 +518,7 @@ impl MatrixApp {
             ManageKind::SignOut => "Sign Out",
             ManageKind::StatusMessage => "Status Message",
             ManageKind::Explore => "Explore Rooms",
+            ManageKind::CreateSpace => "Create Space",
         }
     }
 
@@ -487,114 +536,7 @@ impl MatrixApp {
         match &page.kind {
             ManageKind::Directory(space) => {
                 if let Some(data) = &page.directory {
-                    body = body.child(
-                        div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(data.name.clone()),
-                    );
-                    if self
-                        .snapshot
-                        .spaces
-                        .iter()
-                        .any(|s| s.id == *space && s.can_add_rooms)
-                    {
-                        body = body.child(
-                            Button::new("directory-create-room")
-                                .small()
-                                .self_start()
-                                .label("Create Room…")
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.open_management(ManageKind::Create, window, cx)
-                                })),
-                        );
-                    }
-                    for room in &data.rooms {
-                        let id = room.id.clone();
-                        let via = room.via.clone();
-                        let directory_id = id.clone();
-                        let mut row = h_flex()
-                            .w_full()
-                            .gap(px(12.))
-                            .py(px(8.))
-                            .border_b_1()
-                            .border_color(cx.theme().border)
-                            .child(
-                                v_flex()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child(room.name.clone()),
-                                    )
-                                    .when_some(room.topic.clone(), |v, topic| {
-                                        v.child(
-                                            div()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .truncate()
-                                                .child(topic),
-                                        )
-                                    })
-                                    .child(div().text_color(cx.theme().muted_foreground).child(
-                                        if room.suggested {
-                                            "Suggested"
-                                        } else {
-                                            match room.access {
-                                                JoinAccess::Restricted => "Restricted membership",
-                                                JoinAccess::Invite => "Invitation required",
-                                                JoinAccess::Unknown => "Access unavailable",
-                                                JoinAccess::Public => {
-                                                    if room.space {
-                                                        "Space"
-                                                    } else {
-                                                        "Room"
-                                                    }
-                                                }
-                                            }
-                                        },
-                                    )),
-                            );
-                        if room.joined {
-                            row = row.child(
-                                div()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child("Joined"),
-                            );
-                        } else if room.invited
-                            || matches!(room.access, JoinAccess::Public | JoinAccess::Restricted)
-                        {
-                            row = row.child(
-                                Button::new(SharedString::from(format!("join-{id}")))
-                                    .small()
-                                    .label("Join")
-                                    .disabled(self.preview || page.busy)
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.run_space_action(
-                                            SpaceAction::Join(id.clone(), via.clone()),
-                                            window,
-                                            cx,
-                                        )
-                                    })),
-                            );
-                        }
-                        if room.space {
-                            row = row.child(
-                                Button::new(SharedString::from(format!("browse-{directory_id}")))
-                                    .ghost()
-                                    .small()
-                                    .label("Browse")
-                                    .disabled(page.busy)
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.open_management(
-                                            ManageKind::Directory(directory_id.clone()),
-                                            window,
-                                            cx,
-                                        )
-                                    })),
-                            );
-                        }
-                        body = body.child(row);
-                    }
+                    body = body.child(self.space_home(page, space, data, cx));
                     if data.inaccessible > 0 {
                         body = body.child(div().text_color(cx.theme().muted_foreground).child(
                             format!(
@@ -1006,6 +948,104 @@ impl MatrixApp {
             }
             ManageKind::Explore => {
                 body = body.child(self.explore_body(cx));
+            }
+            ManageKind::CreateSpace => {
+                let public = page.public;
+                let choice =
+                    |id: &'static str, label: &'static str, detail: &'static str, value: bool| {
+                        let selected = public == value;
+                        Button::new(id)
+                            .ghost()
+                            .w_full()
+                            .h_auto()
+                            .py(px(8.))
+                            .px(px(10.))
+                            .justify_start()
+                            .rounded(px(8.))
+                            .border_1()
+                            .border_color(if selected {
+                                cx.theme().primary
+                            } else {
+                                cx.theme().border
+                            })
+                            .selected(selected)
+                            .accessibility_label(format!("{label}: {detail}"))
+                            .child(
+                                v_flex()
+                                    .w_full()
+                                    .items_start()
+                                    .text_left()
+                                    .child(div().font_weight(FontWeight::SEMIBOLD).child(label))
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(detail),
+                                    ),
+                            )
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Some(page) = &mut this.management {
+                                    page.public = value;
+                                }
+                                cx.notify();
+                            }))
+                    };
+                let name = page.name.clone();
+                let topic = page.topic.clone();
+                body = body
+                    .child("Name")
+                    .child(
+                        div()
+                            .w_full()
+                            .child(Input::new(&page.name).aria_label("Space name")),
+                    )
+                    .child("Description (optional)")
+                    .child(
+                        div()
+                            .w_full()
+                            .child(Input::new(&page.topic).aria_label("Space description")),
+                    )
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .id("space-access")
+                            .gap(px(6.))
+                            .role(Role::RadioGroup)
+                            .aria_label("Who can join")
+                            .child(choice(
+                                "space-private",
+                                "Private",
+                                "Only people you invite can join.",
+                                false,
+                            ))
+                            .child(choice(
+                                "space-public",
+                                "Public",
+                                "Anyone can find and join it.",
+                                true,
+                            )),
+                    )
+                    .child(
+                        Button::new("create-space-submit")
+                            .primary()
+                            .label("Create Space")
+                            .disabled(
+                                self.preview
+                                    || page.busy
+                                    || page.name.read(cx).value().trim().is_empty(),
+                            )
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                let draft = twayblade_core::space_actions::CreateSpace {
+                                    name: name.read(cx).value().trim().to_owned(),
+                                    topic: topic.read(cx).value().trim().to_owned(),
+                                    public: this
+                                        .management
+                                        .as_ref()
+                                        .is_some_and(|page| page.public),
+                                };
+                                this.run_space_action(SpaceAction::CreateSpace(draft), window, cx);
+                            })),
+                    );
             }
             ManageKind::StatusMessage => {
                 use twayblade_core::presence::State;

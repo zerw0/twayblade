@@ -32,7 +32,8 @@ gpui_kit::actions!(
         JoinSpace,
         ToggleSidebar,
         NavigateBack,
-        NavigateForward
+        NavigateForward,
+        CloseWindow
     ]
 );
 
@@ -333,6 +334,10 @@ pub(super) struct MatrixApp {
     pub notification_thread: Option<(String, String)>,
     pub account_name: Option<Entity<InputState>>,
     pub account_edit_busy: bool,
+    /// Settings › Chat › Media: bytes the media cache takes, and a clear in
+    /// progress (#174).
+    pub media_cache_size: Option<u64>,
+    pub media_cache_busy: bool,
     pub snapshot: Snapshot,
     pub navigation: Navigation,
     pub groups: Vec<Range<usize>>,
@@ -522,6 +527,10 @@ pub(super) struct MatrixApp {
     pub(super) call_controls_timer: Option<Task<()>>,
     /// The pointer or focus is on the full-screen controls.
     pub(super) call_controls_pinned: bool,
+    /// The room row under the pointer and the one it just left, so only
+    /// those two animate their hover fill.
+    pub(super) hovered_room: Option<String>,
+    pub(super) unhovered_room: Option<String>,
     /// One volume slider per remote participant, by participant ID.
     pub(super) call_volume: HashMap<
         String,
@@ -779,6 +788,8 @@ impl MatrixApp {
             notification_thread: None,
             notification_keyword: cx.new(|cx| InputState::new(window, cx).placeholder("Keyword")),
             account_edit_busy: false,
+            media_cache_size: None,
+            media_cache_busy: false,
             navigation: Navigation {
                 selected_space: (preview && !home).then(|| "design".into()),
                 selected_room: preview.then(|| snapshot.selected_room.clone()),
@@ -919,6 +930,8 @@ impl MatrixApp {
             call_controls: Default::default(),
             call_controls_timer: None,
             call_controls_pinned: false,
+            hovered_room: None,
+            unhovered_room: None,
             call_volume: HashMap::new(),
             call_volume_sent: None,
             call_stage_size: Default::default(),
@@ -958,6 +971,7 @@ impl MatrixApp {
                     Ok((snapshot, backend)) => {
                         this.backend = Some(backend.clone());
                         this.notification_config();
+                        this.apply_media_preferences(window, cx);
                         this.status = if snapshot.user_id.is_empty() {
                             "Sign in to your homeserver.".into()
                         } else {
@@ -2299,9 +2313,14 @@ impl MatrixApp {
     }
 
     pub(super) fn close_management_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(page) = self.management.take() else {
+        let Some(mut page) = self.management.take() else {
             return;
         };
+        if let Some(behind) = page.behind.take() {
+            self.management = Some(*behind);
+            cx.notify();
+            return;
+        }
         if !page.kind.is_dialog() {
             self.prune_dismissed_panel(true);
         }
@@ -2601,7 +2620,8 @@ impl MatrixApp {
                 | ManageKind::InviteContact
                 | ManageKind::SignOut
                 | ManageKind::StatusMessage
-                | ManageKind::Explore => {}
+                | ManageKind::Explore
+                | ManageKind::CreateSpace => {}
             }
         }
         let panel = if self.search_open {
@@ -3495,6 +3515,13 @@ impl MatrixApp {
 impl MatrixApp {
     /// Settings: apply the size now; the caller saves preferences through the
     /// app's own writer, so this never races other settings changes on disk.
+    /// Loads one image while automatic download is off (#174).
+    pub(crate) fn load_image(&mut self, id: String, cx: &mut Context<Self>) {
+        if let Some(backend) = &self.backend {
+            let _ = backend.load_preview(id);
+        }
+        cx.notify();
+    }
     pub fn set_timeline_preview_size(&mut self, size: twayblade_core::conversation::PreviewSize) {
         self.preferences.chat.preview_size = size;
         if let Some(backend) = &self.backend {

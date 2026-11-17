@@ -146,6 +146,8 @@ pub struct Reaction {
 #[derive(Clone, Default)]
 pub struct Attachment {
     pub preview_png: Option<Arc<Vec<u8>>>,
+    /// Not downloaded because automatic download is off here (#174).
+    pub download_needed: bool,
     pub filename: String,
     pub size: Option<u64>,
 }
@@ -199,6 +201,8 @@ pub struct Conversation {
     timeline: Arc<Timeline>,
     read_updates: Option<tokio::sync::broadcast::Sender<(String, Option<String>)>>,
     root: Option<String>,
+    /// The account's media cache switch (#174).
+    media_cache: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -413,6 +417,7 @@ fn plain_excerpt(body: &str) -> String {
 fn attachment(filename: &str, size: Option<matrix_sdk::ruma::UInt>) -> Option<Attachment> {
     Some(Attachment {
         preview_png: None,
+        download_needed: false,
         filename: filename.to_owned(),
         size: size.map(u64::from),
     })
@@ -640,6 +645,45 @@ fn fetch_reply_details<'a>(
     }
 }
 
+/// Recently opened rooms' live timelines, most recent first (#173). Going
+/// back to one of them subscribes to the timeline already in memory, with
+/// its loaded history, instead of building and paginating a new one.
+pub(crate) struct RecentTimelines<T = Arc<Timeline>>(
+    Arc<std::sync::Mutex<std::collections::VecDeque<(String, T)>>>,
+);
+impl<T> Clone for RecentTimelines<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+impl<T> Default for RecentTimelines<T> {
+    fn default() -> Self {
+        Self(Default::default())
+    }
+}
+impl<T: Clone> RecentTimelines<T> {
+    /// Rooms kept open; older ones are dropped and rebuilt when reopened.
+    pub(crate) const LIMIT: usize = 8;
+
+    pub(crate) fn get(&self, room: &str) -> Option<T> {
+        let mut list = self.0.lock().ok()?;
+        let index = list.iter().position(|(id, _)| id == room)?;
+        let entry = list.remove(index)?;
+        let value = entry.1.clone();
+        list.push_front(entry);
+        Some(value)
+    }
+
+    pub(crate) fn insert(&self, room: String, value: T) {
+        let Ok(mut list) = self.0.lock() else {
+            return;
+        };
+        list.retain(|(id, _)| *id != room);
+        list.push_front((room, value));
+        list.truncate(Self::LIMIT);
+    }
+}
+
 impl Account {
     pub fn select_room(&self, room: Option<&str>) {
         let id = room.and_then(|id| RoomId::parse(id).ok());
@@ -706,7 +750,14 @@ impl Account {
             // Opening can wait on the network or the stores indefinitely. Bound
             // each attempt so a stuck one is replaced instead of loading forever.
             let mut attempt = 0u32;
-            let (timeline, mut items, updates) = loop {
+            let live = root.is_none() && target.is_none();
+            let cached = if live { account.recent_timelines.get(&room_id) } else { None };
+            let reused = cached.is_some();
+            let (timeline, mut items, updates) = if let Some(timeline) = cached {
+                tracing::info!(name: "room_open_reused", generation);
+                let (items, updates) = Box::pin(timeline.subscribe()).await;
+                (timeline, items, updates)
+            } else { loop {
                 let span = tracing::info_span!("room_open", generation, attempt, elapsed_ms=tracing::field::Empty, cancelled=tracing::field::Empty);
                 let opened = tokio::time::timeout(OPEN_TIMEOUT, open::step(span, async {
                     let timeline = Box::pin(open::timeline(&room, focus.clone())).await?;
@@ -730,8 +781,12 @@ impl Account {
                         attempt = attempt.saturating_add(1);
                     }
                 }
-            };
+            }};
+            if live && !reused {
+                account.recent_timelines.insert(room_id.clone(), timeline.clone());
+            }
             let conversation = Conversation {
+                media_cache: account.media_cache.clone(),
                 timeline: timeline.clone(),
                 read_updates: Some(account.thread_read_updates.clone()), root: root.clone(),
             };
@@ -777,8 +832,9 @@ impl Account {
             // is suspended at a yield. JoinSet also aborts it on selection/account drop.
             let mut initial_page = tokio::task::JoinSet::new();
             let initial_timeline = timeline.clone();
-            if target.is_none() { initial_page.spawn(async move { initial_timeline.paginate_backwards(30).await }); }
-            let mut initial_pending = target.is_none();
+            // A reused timeline already holds its history.
+            let mut initial_pending = target.is_none() && !reused;
+            if initial_pending { initial_page.spawn(async move { initial_timeline.paginate_backwards(30).await }); }
             let (_typing_guard, mut typing) = room.subscribe_to_typing_notifications();
             let mut room_updates = room.subscribe_to_updates();
             let mut cache_updates = account.client.event_cache().subscribe_to_room_generic_updates();
@@ -857,6 +913,33 @@ impl Account {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod recent_timeline_tests {
+    use super::RecentTimelines;
+
+    #[test]
+    fn recent_timelines_keep_the_most_recent_rooms() {
+        let recent = RecentTimelines::<u32>::default();
+        for room in 0..RecentTimelines::<u32>::LIMIT as u32 {
+            recent.insert(format!("room-{room}"), room);
+        }
+        // Reopening the oldest makes it the most recent, so the next new room
+        // evicts the one after it instead.
+        assert_eq!(recent.get("room-0"), Some(0));
+        recent.insert("room-new".into(), 99);
+        assert_eq!(recent.get("room-0"), Some(0));
+        assert_eq!(recent.get("room-1"), None);
+        assert_eq!(recent.get("room-new"), Some(99));
+        // Inserting a room again replaces its timeline without duplicating it.
+        recent.insert("room-new".into(), 100);
+        assert_eq!(recent.get("room-new"), Some(100));
+        assert_eq!(
+            recent.0.lock().unwrap().len(),
+            RecentTimelines::<u32>::LIMIT
+        );
     }
 }
 

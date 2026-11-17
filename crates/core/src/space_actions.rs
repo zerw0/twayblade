@@ -68,11 +68,21 @@ pub struct DirectoryRoom {
     pub suggested: bool,
     pub access: JoinAccess,
     pub via: Vec<String>,
+    /// The room's picture (mxc URI).
+    pub avatar: Option<String>,
+    /// Joined members, as the server reports them.
+    pub members: u64,
+    /// For a space, how many rooms and spaces it lists.
+    pub children: u64,
 }
 #[derive(Clone, Default)]
 pub struct DirectorySnapshot {
     pub space: String,
     pub name: String,
+    pub topic: Option<String>,
+    pub avatar: Option<String>,
+    pub members: u64,
+    pub access: JoinAccess,
     pub rooms: Vec<DirectoryRoom>,
     pub end_reached: bool,
     pub inaccessible: u64,
@@ -109,15 +119,11 @@ impl Directory {
                 joined: r.state == Some(RoomState::Joined),
                 invited: r.state == Some(RoomState::Invited),
                 suggested: r.suggested,
-                access: match r.join_rule {
-                    Some(JoinRuleSummary::Public) => JoinAccess::Public,
-                    Some(JoinRuleSummary::Restricted(_) | JoinRuleSummary::KnockRestricted(_)) => {
-                        JoinAccess::Restricted
-                    }
-                    Some(JoinRuleSummary::Invite | JoinRuleSummary::Knock) => JoinAccess::Invite,
-                    _ => JoinAccess::Unknown,
-                },
+                access: join_access(r.join_rule.as_ref()),
                 via: r.via.iter().map(ToString::to_string).collect(),
+                avatar: r.avatar_url.as_ref().map(ToString::to_string),
+                members: r.num_joined_members,
+                children: r.children_count,
             })
             .collect();
         DirectorySnapshot {
@@ -126,6 +132,12 @@ impl Directory {
                 .as_ref()
                 .map(|s| s.display_name.clone())
                 .unwrap_or_else(|| self.space.clone()),
+            topic: space.as_ref().and_then(|s| s.topic.clone()),
+            avatar: space
+                .as_ref()
+                .and_then(|s| s.avatar_url.as_ref().map(ToString::to_string)),
+            members: space.as_ref().map_or(0, |s| s.num_joined_members),
+            access: join_access(space.as_ref().and_then(|s| s.join_rule.as_ref())),
             inaccessible: if end_reached {
                 space
                     .as_ref()
@@ -137,6 +149,16 @@ impl Directory {
             rooms,
             end_reached,
         }
+    }
+}
+fn join_access(rule: Option<&JoinRuleSummary>) -> JoinAccess {
+    match rule {
+        Some(JoinRuleSummary::Public) => JoinAccess::Public,
+        Some(JoinRuleSummary::Restricted(_) | JoinRuleSummary::KnockRestricted(_)) => {
+            JoinAccess::Restricted
+        }
+        Some(JoinRuleSummary::Invite | JoinRuleSummary::Knock) => JoinAccess::Invite,
+        _ => JoinAccess::Unknown,
     }
 }
 #[derive(Clone, Default)]
@@ -191,6 +213,36 @@ impl Default for CreateRoom {
             encrypted: true,
             parent: None,
         }
+    }
+}
+
+/// A new space: its name, optional topic, and whether anyone may join.
+#[derive(Clone, Default)]
+pub struct CreateSpace {
+    pub name: String,
+    pub topic: String,
+    pub public: bool,
+}
+impl CreateSpace {
+    fn validate(&self) -> Result<(), SpaceError> {
+        if self.name.trim().is_empty() || self.name.chars().count() > 255 {
+            return Err(SpaceError::InvalidId);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod create_space_tests {
+    use super::*;
+    #[test]
+    fn spaces_need_a_name() {
+        let mut draft = CreateSpace::default();
+        assert!(matches!(draft.validate(), Err(SpaceError::InvalidId)));
+        draft.name = "  ".into();
+        assert!(matches!(draft.validate(), Err(SpaceError::InvalidId)));
+        draft.name = "Design team".into();
+        assert!(draft.validate().is_ok());
     }
 }
 
@@ -432,6 +484,35 @@ impl Account {
                 .map_err(|_| SpaceError::ParentLink { room: id.clone() })?;
         }
         Ok(id)
+    }
+    /// Creates a space and returns its ID. Public spaces anyone can join (and
+    /// preview); private ones need an invitation. As in Element, only admins
+    /// post in the space room itself, and members may invite.
+    pub async fn create_space(&self, draft: CreateSpace) -> Result<String, SpaceError> {
+        draft.validate()?;
+        let mut request = create_room::v3::Request::new();
+        request.name = Some(draft.name.trim().into());
+        request.topic = (!draft.topic.trim().is_empty()).then(|| draft.topic.trim().into());
+        request.preset = Some(if draft.public {
+            create_room::v3::RoomPreset::PublicChat
+        } else {
+            create_room::v3::RoomPreset::PrivateChat
+        });
+        let mut creation = create_room::v3::CreationContent::new();
+        creation.room_type = Some(matrix_sdk::ruma::room::RoomType::Space);
+        request.creation_content =
+            Some(matrix_sdk::ruma::serde::Raw::new(&creation).map_err(|_| SpaceError::Create)?);
+        let mut powers = create_room::RoomPowerLevelsContentOverride::new();
+        powers.events_default = Some(100.into());
+        powers.invite = Some(0.into());
+        request.power_level_content_override =
+            Some(matrix_sdk::ruma::serde::Raw::new(&powers).map_err(|_| SpaceError::Create)?);
+        let room = self
+            .client
+            .create_room(request)
+            .await
+            .map_err(|_| SpaceError::Create)?;
+        Ok(room.room_id().to_string())
     }
     /// Leaves one joined room or direct message. The room list updates through sync.
     pub async fn leave_room(&self, room_id: &str) -> Result<(), SpaceError> {

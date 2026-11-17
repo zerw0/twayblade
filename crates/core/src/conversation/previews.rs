@@ -33,13 +33,16 @@ impl TimelinePreview {
     }
 }
 impl Conversation {
-    /// No persistent media cache. Prefer a homeserver thumbnail; if unavailable
-    /// (including encrypted originals), decode the original under the same permit
-    /// and limits as other previews. Stable timeline IDs are never replaced.
+    /// Prefer a homeserver thumbnail; if unavailable (including encrypted
+    /// originals), decode the original under the same permit and limits as
+    /// other previews. Downloads are kept in the encrypted media cache when it
+    /// is on (#174). With `network` false only the cache is read, and a miss
+    /// is `NotDownloaded`. Stable timeline IDs are never replaced.
     pub async fn attachment_preview(
         &self,
         id: &str,
         size: PreviewSize,
+        network: bool,
         mut cancel: tokio::sync::watch::Receiver<bool>,
     ) -> Result<TimelinePreview, ImageError> {
         if *cancel.borrow() {
@@ -50,7 +53,7 @@ impl Conversation {
             .await
             .map_err(|_| ImageError::Unavailable)?;
         let client = self.timeline.room().client();
-        let media = client.media();
+        let cache = self.media_cache.load(std::sync::atomic::Ordering::Relaxed);
         let request = MediaRequestParameters {
             source: source.clone(),
             format: MediaFormat::Thumbnail(MediaThumbnailSettings::new(
@@ -60,7 +63,7 @@ impl Conversation {
         };
         let thumbnail = tokio::select! {
             _ = cancel.changed() => return Err(ImageError::Cancelled),
-            result = tokio::time::timeout(std::time::Duration::from_secs(15), media.get_media_content(&request, false)) => result.ok().and_then(Result::ok),
+            result = tokio::time::timeout(std::time::Duration::from_secs(15), crate::media_cache::fetch(&client, cache, network, &request)) => result.ok().flatten().and_then(Result::ok),
         };
         if let Some(bytes) = thumbnail {
             match super::viewer::decode_timeline_preview(bytes, size, cancel.clone()).await {
@@ -75,7 +78,7 @@ impl Conversation {
         };
         let bytes = tokio::select! {
             _ = cancel.changed() => return Err(ImageError::Cancelled),
-            result = tokio::time::timeout(std::time::Duration::from_secs(30), media.get_media_content(&request, false)) => result.map_err(|_| ImageError::Download)?.map_err(|_| ImageError::Download)?,
+            result = tokio::time::timeout(std::time::Duration::from_secs(30), crate::media_cache::fetch(&client, cache, network, &request)) => result.map_err(|_| ImageError::Download)?.ok_or(ImageError::NotDownloaded)?.map_err(|_| ImageError::Download)?,
         };
         super::viewer::decode_timeline_preview(bytes, size, cancel).await
     }

@@ -226,6 +226,21 @@ impl MatrixApp {
                                     button.w(px(w * scale)).h(px(h * scale)).max_w_full().child(
                                         img(image).size_full().object_fit(ObjectFit::Contain),
                                     );
+                            } else if attachment.download_needed {
+                                // Automatic download is off here (#174).
+                                let load = message.id.clone();
+                                button = button
+                                    .small()
+                                    .icon(IconName::Download)
+                                    .label("Load Image")
+                                    .accessibility_label(format!(
+                                        "Load image {}",
+                                        attachment.filename
+                                    ))
+                                    .tooltip("Load Image")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.load_image(load.clone(), cx)
+                                    }));
                             } else {
                                 button = button.small().label("Open Image");
                             }

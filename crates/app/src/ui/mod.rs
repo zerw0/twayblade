@@ -32,6 +32,7 @@ pub(crate) mod motion;
 pub(crate) mod replying;
 pub(crate) mod security;
 pub(crate) mod settings;
+pub(crate) mod space_home;
 pub(crate) mod spaces;
 pub(crate) mod threads;
 pub(crate) mod viewer;
