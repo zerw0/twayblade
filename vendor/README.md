@@ -36,4 +36,5 @@ first responder; AppKit asks the first responder for the focused element, so
 `AXFocusedUIElement` stayed the window and VoiceOver did not follow keyboard
 focus, although each node's `AXFocused` was right (#166).
 
-Remove the patch when upstream GPUI attaches the adapter to its view.
+Remove the patch when upstream GPUI attaches the adapter to its view
+(https://github.com/zed-industries/zed/issues/67087).
