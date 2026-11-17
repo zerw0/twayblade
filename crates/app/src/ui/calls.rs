@@ -283,9 +283,17 @@ impl MatrixApp {
         self.call_tiles
             .retain(|id, _| tracks.iter().any(|(track, _)| track == id));
         for (id, source) in tracks {
-            if !self.call_tiles.contains_key(&id)
-                && let Some(frame) = self.call_video_handle(&id)
-            {
+            let Some(frame) = self.call_video_handle(&id) else {
+                continue;
+            };
+            // A track consumed again under the same id (a resubscription after
+            // a reconnect) has a new frame slot; the old one is retired and
+            // would leave the tile empty for the rest of the call.
+            let current = self
+                .call_tiles
+                .get(&id)
+                .is_some_and(|tile| tile.read(cx).frame.same(&frame));
+            if !current {
                 let contain = source == VideoSource::Screen;
                 let tile = cx.new(|cx| VideoTile::new(frame, contain, cx));
                 self.call_tiles.insert(id, tile);

@@ -105,6 +105,14 @@ struct FrameSlot {
 }
 #[derive(Clone, Default)]
 pub struct LatestFrame(Arc<Mutex<FrameSlot>>);
+/// A slightly older frame is out of order and dropped. A much older one means
+/// the sender's clock restarted (a camera turned off and on, a reconnect):
+/// keep showing it, or the video would stay frozen until the new clock caught
+/// up with the old one.
+fn accepts(shown_us: i64, next_us: i64) -> bool {
+    const RESTART_US: i64 = 1_000_000;
+    next_us >= shown_us || shown_us - next_us > RESTART_US
+}
 impl LatestFrame {
     /// A handle holding one fixed frame, for previews and fixtures.
     pub fn fixed(frame: VideoFrame) -> Self {
@@ -115,13 +123,18 @@ impl LatestFrame {
     pub fn latest(&self) -> Option<Arc<VideoFrame>> {
         self.0.lock().ok()?.frame.clone()
     }
+    /// Whether both handles are the same track slot. A track consumed again
+    /// under the same id gets a new slot and retires the old one.
+    pub fn same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
     fn replace(&self, frame: VideoFrame) {
         if let Ok(mut slot) = self.0.lock()
             && !slot.retired
             && slot
                 .frame
                 .as_ref()
-                .is_none_or(|f| frame.timestamp_us >= f.timestamp_us)
+                .is_none_or(|f| accepts(f.timestamp_us, frame.timestamp_us))
         {
             slot.frame = Some(Arc::new(frame));
         }
@@ -764,6 +777,21 @@ pub trait CaptureSource: Send {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_restarted_sender_clock_does_not_freeze_the_video() {
+        let tracks = VideoTracks::default();
+        let slot = tracks.insert("track".into());
+        slot.replace(VideoFrame::new(1, 1, 0, 50_000_000, vec![0; 4]).unwrap());
+        // Slightly older: out of order, dropped.
+        slot.replace(VideoFrame::new(1, 1, 0, 49_900_000, vec![0; 4]).unwrap());
+        assert_eq!(slot.latest().unwrap().timestamp_us, 50_000_000);
+        // Far older: the camera restarted its clock; show it.
+        slot.replace(VideoFrame::new(1, 1, 0, 10_000, vec![0; 4]).unwrap());
+        assert_eq!(slot.latest().unwrap().timestamp_us, 10_000);
+        // Consuming the same id again is a new slot, not the old handle.
+        let again = tracks.insert("track".into());
+        assert!(!again.same(&slot) && again.same(&tracks.get("track").unwrap()));
+    }
     #[test]
     fn latest_frame_is_bounded_rejects_stale_and_clears_on_track_removal() {
         let tracks = VideoTracks::default();
