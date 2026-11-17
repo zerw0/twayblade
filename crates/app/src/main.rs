@@ -262,6 +262,29 @@ fn main() {
                         view.status = "Sample data · Emoji picker".into();
                         view.open_emoji(None, window, cx);
                     }
+                    if args.iter().any(|arg| arg == "--preview-voice") {
+                        view.status = "Sample data · Voice message".into();
+                        if let Some(message) = view.snapshot.messages.iter_mut().rev().nth(1) {
+                            message.kind = backend::MessageKind::Voice;
+                            message.rich = None;
+                            message.attachment = None;
+                            message.voice = Some(twayblade_core::conversation::Voice {
+                                duration_ms: 23_000,
+                                waveform: (0..100).map(|n| (n as f32 * 0.37).sin().abs() * 0.8 + 0.1).collect(),
+                            });
+                        }
+                    }
+                    if args.iter().any(|arg| arg == "--preview-stickers") {
+                        view.open_sticker_picker(window, cx);
+                    }
+                    if args.iter().any(|arg| arg == "--preview-create-poll") {
+                        view.open_create_poll(window, cx);
+                    }
+                    if args.iter().any(|arg| arg == "--preview-poll") {
+                        view.status = "Sample data · Polls".into();
+                        let own = view.snapshot.user_id.clone();
+                        ui::polls::sample_polls(&mut view.snapshot.messages, &own);
+                    }
                     if args.iter().any(|arg| arg == "--preview-attachments") {
                         view.status = "Sample data · Attachment preview".into();
                         view.attachment_sample = true;

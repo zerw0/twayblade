@@ -435,10 +435,36 @@ pub(super) enum SecurityOutcome {
 }
 
 pub(super) enum TimelineAction {
-    React { message: String, key: String },
-    Retry { message: String },
-    Cancel { message: String },
-    Read { event_id: String },
+    React {
+        message: String,
+        key: String,
+    },
+    /// Polls (#181): create one, vote, or end one this account started.
+    SendPoll(twayblade_core::conversation::PollDraft),
+    /// Stickers (#183).
+    SendSticker(twayblade_core::stickers::Sticker),
+    /// A recorded voice message (#184).
+    SendVoice {
+        ogg: Vec<u8>,
+        duration: std::time::Duration,
+        waveform: Vec<f32>,
+    },
+    Vote {
+        message: String,
+        answer: String,
+    },
+    EndPoll {
+        message: String,
+    },
+    Retry {
+        message: String,
+    },
+    Cancel {
+        message: String,
+    },
+    Read {
+        event_id: String,
+    },
 }
 
 pub(super) const LOADING_STATUS: &str = "Loading messages…";
@@ -553,6 +579,9 @@ fn conversation_failure(error: ConversationError) -> ServiceError {
         ConversationError::Retry => "The message could not be retried. Try again.",
         ConversationError::Cancel => "The failed message could not be cancelled. Try again.",
         ConversationError::Receipt => "The read marker could not be updated.",
+        ConversationError::InvalidPoll => {
+            "Add a question and at least two answers. Ended polls take no more votes."
+        }
     })
 }
 
@@ -1417,6 +1446,25 @@ impl Backend {
                         }
                         TimelineAction::Retry { message } => conversation.retry(&message).await,
                         TimelineAction::Cancel { message } => conversation.cancel(&message).await,
+                        TimelineAction::SendPoll(draft) => conversation.send_poll(draft).await,
+                        TimelineAction::Vote { message, answer } => {
+                            conversation.vote_poll(&message, vec![answer]).await
+                        }
+                        TimelineAction::EndPoll { message } => {
+                            conversation.end_poll(&message).await
+                        }
+                        TimelineAction::SendSticker(sticker) => conversation
+                            .send_sticker(&sticker)
+                            .await
+                            .map_err(|_| twayblade_core::conversation::ConversationError::Queue),
+                        TimelineAction::SendVoice {
+                            ogg,
+                            duration,
+                            waveform,
+                        } => conversation
+                            .send_voice(ogg, duration, waveform)
+                            .await
+                            .map_err(|_| twayblade_core::conversation::ConversationError::Queue),
                     }
                     .map(|_| false),
                 }
@@ -1701,6 +1749,66 @@ impl Backend {
         self.runtime
             .block_on(account.avatar_thumbnail(mxc, size))
             .map_err(|_| failure("Avatar unavailable."))
+    }
+
+    pub(super) fn sticker_picture(&self, mxc: String, size: u32) -> Result<Vec<u8>, ServiceError> {
+        let account = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?
+            .account
+            .clone()
+            .ok_or_else(|| failure("Sign in first."))?;
+        self.runtime
+            .block_on(account.sticker_thumbnail(mxc, size))
+            .map_err(|_| failure("Sticker unavailable."))
+    }
+
+    /// A voice message's audio as 48 kHz mono PCM (#184).
+    pub(super) fn voice_audio(
+        &self,
+        room_id: String,
+        expected_account: u128,
+        message: String,
+    ) -> Result<Vec<i16>, ServiceError> {
+        let conversation = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| failure("Session is unavailable."))?;
+            if state.account.as_ref().map(Account::instance_id) != Some(expected_account)
+                || self.updates.borrow().selected_room != room_id
+            {
+                return Err(failure("Conversation changed."));
+            }
+            state
+                .conversation
+                .clone()
+                .ok_or_else(|| failure("Conversation is still loading."))?
+        };
+        let ogg = self
+            .runtime
+            .block_on(conversation.voice_audio(&message))
+            .map_err(|_| failure("The voice message could not be downloaded."))?;
+        twayblade_media::voice::decode_ogg(&ogg)
+            .map_err(|_| failure("This voice message cannot be played."))
+    }
+
+    /// Sticker packs for the picker (#183), for the open room.
+    pub(super) fn sticker_packs(
+        &self,
+        room: Option<String>,
+    ) -> Result<Vec<twayblade_core::stickers::StickerPack>, ServiceError> {
+        let account = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?
+            .account
+            .clone()
+            .ok_or_else(|| failure("Sign in first."))?;
+        Ok(self
+            .runtime
+            .block_on(account.sticker_packs(room.as_deref())))
     }
 
     pub(super) fn own_avatar_url(&self) -> Option<String> {
@@ -2036,6 +2144,23 @@ impl Backend {
                     TimelineAction::Retry { message } => conversation.retry(&message).await,
                     TimelineAction::Cancel { message } => conversation.cancel(&message).await,
                     TimelineAction::Read { event_id } => conversation.mark_read(&event_id).await,
+                    TimelineAction::SendPoll(draft) => conversation.send_poll(draft).await,
+                    TimelineAction::Vote { message, answer } => {
+                        conversation.vote_poll(&message, vec![answer]).await
+                    }
+                    TimelineAction::EndPoll { message } => conversation.end_poll(&message).await,
+                    TimelineAction::SendSticker(sticker) => conversation
+                        .send_sticker(&sticker)
+                        .await
+                        .map_err(|_| twayblade_core::conversation::ConversationError::Queue),
+                    TimelineAction::SendVoice {
+                        ogg,
+                        duration,
+                        waveform,
+                    } => conversation
+                        .send_voice(ogg, duration, waveform)
+                        .await
+                        .map_err(|_| twayblade_core::conversation::ConversationError::Queue),
                 }
             })
             .map_err(conversation_failure)

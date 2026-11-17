@@ -1,6 +1,9 @@
 //! Message rows and groups in every chat style.
 use super::*;
 
+/// Sticker size in the timeline, in points.
+const STICKER: f32 = 160.;
+
 impl MatrixApp {
     pub(crate) fn message_body(
         &self,
@@ -374,6 +377,66 @@ impl MatrixApp {
             MessageKind::Membership => {
                 return self.membership_line(message, in_thread, cx);
             }
+            // A sticker shows as itself, without a bubble.
+            MessageKind::Sticker => {
+                let picture = message
+                    .attachment
+                    .as_ref()
+                    .and_then(|a| a.preview_png.as_ref())
+                    .and_then(|bytes| crate::ui::attachments::render_png(bytes, cx));
+                match picture {
+                    Some(image) => div()
+                        .size(px(STICKER))
+                        .child(img(image).size_full().object_fit(ObjectFit::Contain))
+                        .into_any_element(),
+                    None => {
+                        // Held back by data saving (#174): load on request.
+                        let held = message
+                            .attachment
+                            .as_ref()
+                            .is_some_and(|a| a.download_needed);
+                        let load = message.id.clone();
+                        div()
+                            .size(px(STICKER))
+                            .rounded(px(12.))
+                            .bg(cx.theme().secondary)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when(held, |tile| {
+                                tile.child(
+                                    Button::new(SharedString::from(format!(
+                                        "sticker-load-{}",
+                                        message.id
+                                    )))
+                                    .small()
+                                    .icon(IconName::Download)
+                                    .label("Load Sticker")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.load_image(load.clone(), cx)
+                                    })),
+                                )
+                            })
+                            .into_any_element()
+                    }
+                }
+            }
+            MessageKind::Voice => match &message.voice {
+                Some(voice) => {
+                    let disabled =
+                        self.preview || self.backend.is_none() || !self.snapshot.timeline_ready;
+                    self.voice_bubble(message, voice, outgoing, disabled, cx)
+                }
+                None => div().into_any_element(),
+            },
+            MessageKind::Poll => match &message.poll {
+                Some(poll) => {
+                    let disabled =
+                        self.preview || self.backend.is_none() || !self.snapshot.timeline_ready;
+                    self.poll_card(message, poll, disabled, cx)
+                }
+                None => div().into_any_element(),
+            },
             MessageKind::Redacted => div()
                 .px(px(12.))
                 .py(px(7.))
@@ -1384,6 +1447,18 @@ pub(crate) fn accessible_message(message: &crate::backend::Message, own_user: &s
         MessageKind::Redacted => "Message deleted".to_owned(),
         MessageKind::Image => format!("Image, {}", model::message_text(message)),
         MessageKind::File => format!("File, {}", model::message_text(message)),
+        MessageKind::Sticker => format!("Sticker, {}", model::message_text(message)),
+        MessageKind::Voice => format!(
+            "Voice message, {}",
+            crate::ui::voice::clock(std::time::Duration::from_millis(
+                message.voice.as_ref().map_or(0, |v| v.duration_ms)
+            ))
+        ),
+        MessageKind::Poll => message
+            .poll
+            .as_ref()
+            .map(crate::ui::polls::accessible_poll)
+            .unwrap_or_else(|| model::message_text(message)),
         _ => model::message_text(message),
     };
     let mut label = if message.kind == MessageKind::Emote {

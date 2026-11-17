@@ -768,6 +768,149 @@ fn an_image_held_back_by_data_saving_offers_load_image(cx: &mut TestAppContext) 
 }
 
 #[gpui_kit::test]
+fn polls_show_results_after_voting_and_create_poll_needs_two_answers(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestQueryExt;
+    let (window, app) = preview_window(cx);
+    let (open, ended) = cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            let own = app.snapshot.user_id.clone();
+            crate::ui::polls::sample_polls(&mut app.snapshot.messages, &own);
+            let len = app.snapshot.messages.len();
+            cx.notify();
+            (
+                app.snapshot.messages[len - 2].id.clone(),
+                app.snapshot.messages[len - 1].id.clone(),
+            )
+        })
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        // Your own open poll offers End Poll; the ended one takes no votes.
+        assert!(
+            window
+                .find(gpui_kit::SharedString::from(format!("poll-end-{open}")))
+                .visible()
+        );
+        assert!(
+            window
+                .try_find(gpui_kit::SharedString::from(format!("poll-end-{ended}")))
+                .is_none()
+        );
+        // Ended: plain rows with the final counts, no vote buttons.
+        assert!(window.find_by_label("Twayblade 1.0, 6 votes").visible());
+        assert!(window.find_by_label("Lisbon, 5 votes, your vote").visible());
+        // Create Poll from the composer's ＋ menu.
+        app.update(cx, |app, cx| app.open_create_poll(window, cx));
+        window.render_frame(cx);
+        assert_eq!(window.find("poll-create").disabled(), Some(true));
+        window.click("poll-add-answer", cx);
+        window.render_frame(cx);
+    })
+    .unwrap();
+    cx.update(|cx| {
+        let page = app.read(cx).management.as_ref().expect("Create Poll");
+        assert!(matches!(
+            page.kind,
+            crate::ui::spaces::ManageKind::CreatePoll(_)
+        ));
+        assert_eq!(page.poll_answers.len(), 3);
+        assert!(page.poll_disclosed);
+    });
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            let page = app.management.as_ref().unwrap();
+            let question = page.name.clone();
+            let answers = page.poll_answers.clone();
+            question.update(cx, |s, cx| s.set_value("Lunch?", window, cx));
+            answers[0].update(cx, |s, cx| s.set_value("Pizza", window, cx));
+            answers[1].update(cx, |s, cx| s.set_value("Soup", window, cx));
+        });
+        window.render_frame(cx);
+        // The empty third answer can go; two must stay.
+        window.click(("poll-remove-answer", 2usize), cx);
+        window.render_frame(cx);
+        assert!(window.try_find(("poll-remove-answer", 0usize)).is_none());
+    })
+    .unwrap();
+    cx.update(|cx| {
+        let app = app.read(cx);
+        let page = app.management.as_ref().unwrap();
+        assert_eq!(page.poll_answers.len(), 2);
+        assert_eq!(page.poll_answers[1].read(cx).value().as_str(), "Soup");
+    });
+}
+
+#[gpui_kit::test]
+fn sticker_picker_lists_packs_and_stickers_render_without_a_bubble(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    let id = cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            let message = app.snapshot.messages.last_mut().expect("sample message");
+            message.kind = crate::backend::MessageKind::Sticker;
+            message.body = "Waving cat".into();
+            message.rich = None;
+            message.attachment = Some(twayblade_core::conversation::Attachment {
+                filename: "Waving cat".into(),
+                ..Default::default()
+            });
+            cx.notify();
+            message.id.clone()
+        })
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window
+                .find(gpui_kit::SharedString::from(format!("message-row-{id}")))
+                .visible()
+        );
+        app.update(cx, |app, cx| app.open_sticker_picker(window, cx));
+        window.render_frame(cx);
+        // Packs by name; the offline preview never sends.
+        assert_eq!(window.find("sticker-user-wave").disabled(), Some(true));
+        assert!(window.find("sticker-!design/-lgtm").visible());
+    })
+    .unwrap();
+    cx.update(|cx| {
+        let app = app.read(cx);
+        let page = app.management.as_ref().expect("picker");
+        assert!(matches!(
+            page.kind,
+            crate::ui::spaces::ManageKind::Stickers(_)
+        ));
+        assert_eq!(page.sticker_packs.as_ref().map(Vec::len), Some(2));
+    });
+}
+
+#[gpui_kit::test]
+fn voice_messages_show_a_play_button_and_their_length(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    let id = cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            let message = app.snapshot.messages.last_mut().expect("sample message");
+            message.kind = crate::backend::MessageKind::Voice;
+            message.rich = None;
+            message.voice = Some(twayblade_core::conversation::Voice {
+                duration_ms: 75_000,
+                waveform: vec![0.2, 0.9, 0.4],
+            });
+            cx.notify();
+            message.id.clone()
+        })
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let play = window.find(gpui_kit::SharedString::from(format!("voice-play-{id}")));
+        assert!(play.visible());
+        // The offline preview has no audio to play.
+        assert_eq!(play.disabled(), Some(true));
+        // Nothing records until the menu item is chosen.
+        assert!(window.try_find("voice-recording").is_none());
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
 fn attachment_controls_require_an_explicit_action_and_samples_cannot_upload(
     cx: &mut TestAppContext,
 ) {

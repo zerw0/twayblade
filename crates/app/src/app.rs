@@ -334,6 +334,13 @@ pub(super) struct MatrixApp {
     pub notification_thread: Option<(String, String)>,
     pub account_name: Option<Entity<InputState>>,
     pub account_edit_busy: bool,
+    /// Voice messages (#184): a recording in progress, the message playing,
+    /// one loading, and whether the redraw ticker runs.
+    pub voice_recorder: Option<twayblade_media::voice::Recorder>,
+    pub voice_starting: bool,
+    pub voice_playback: Option<crate::ui::voice::VoicePlayback>,
+    pub voice_loading: Option<String>,
+    pub voice_ticking: bool,
     /// Settings › Chat › Media: bytes the media cache takes, and a clear in
     /// progress (#174).
     pub media_cache_size: Option<u64>,
@@ -788,6 +795,11 @@ impl MatrixApp {
             notification_thread: None,
             notification_keyword: cx.new(|cx| InputState::new(window, cx).placeholder("Keyword")),
             account_edit_busy: false,
+            voice_recorder: None,
+            voice_starting: false,
+            voice_playback: None,
+            voice_loading: None,
+            voice_ticking: false,
             media_cache_size: None,
             media_cache_busy: false,
             navigation: Navigation {
@@ -2620,6 +2632,8 @@ impl MatrixApp {
                 | ManageKind::InviteContact
                 | ManageKind::SignOut
                 | ManageKind::StatusMessage
+                | ManageKind::CreatePoll(_)
+                | ManageKind::Stickers(_)
                 | ManageKind::Explore
                 | ManageKind::CreateSpace => {}
             }
@@ -3540,8 +3554,10 @@ impl MatrixApp {
             let mut visible = self.visible_images.borrow_mut();
             let slot = &mut visible[usize::from(in_thread)];
             for message in messages {
-                if message.kind == crate::backend::MessageKind::Image
-                    && slot.len() < 128
+                if matches!(
+                    message.kind,
+                    crate::backend::MessageKind::Image | crate::backend::MessageKind::Sticker
+                ) && slot.len() < 128
                     && !slot.contains(&message.id)
                 {
                     slot.push(message.id.clone());

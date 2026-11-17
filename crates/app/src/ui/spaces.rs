@@ -38,6 +38,10 @@ pub(crate) enum ManageKind {
     StatusMessage,
     /// Public rooms of your server or a large public homeserver.
     Explore,
+    /// Create a poll in this room (room ID) (#181).
+    CreatePoll(String),
+    /// Pick a sticker to send in this room (room ID) (#183).
+    Stickers(String),
     /// Create a new space.
     CreateSpace,
 }
@@ -55,6 +59,8 @@ impl ManageKind {
                 | Self::InviteContact
                 | Self::SignOut
                 | Self::StatusMessage
+                | Self::CreatePoll(_)
+                | Self::Stickers(_)
                 | Self::CreateSpace
         )
     }
@@ -80,6 +86,12 @@ pub(crate) struct Management {
     /// The contact link was copied; the button says so until the dialog closes.
     pub copied: bool,
     pub parent_from_context: bool,
+    /// Create Poll (#181): one field per answer, and whether results show
+    /// before the poll ends.
+    pub poll_answers: Vec<Entity<InputState>>,
+    pub poll_disclosed: bool,
+    /// Stickers: the packs, once loaded.
+    pub sticker_packs: Option<Vec<twayblade_core::stickers::StickerPack>>,
     /// Space home: subspaces shown open, their loaded rooms, and the ones
     /// still loading or failed.
     pub expanded: HashSet<String>,
@@ -142,6 +154,7 @@ impl MatrixApp {
                     .placeholder("What are you up to?")
                     .default_value(current_status),
                 ManageKind::Explore => input.placeholder("Search rooms by name or topic"),
+                ManageKind::CreatePoll(_) => input.placeholder("Ask a question"),
                 ManageKind::Directory(_) => input.placeholder("Search"),
                 _ => input,
             }
@@ -207,6 +220,9 @@ impl MatrixApp {
             parent: initial_parent,
             focus: cx.focus_handle(),
             copied: false,
+            poll_answers: Vec::new(),
+            poll_disclosed: true,
+            sticker_packs: None,
             expanded: HashSet::new(),
             children: HashMap::new(),
             loading: HashSet::new(),
@@ -223,6 +239,7 @@ impl MatrixApp {
                 | ManageKind::JoinSpace
                 | ManageKind::InviteMember(_)
                 | ManageKind::StatusMessage
+                | ManageKind::CreatePoll(_)
                 | ManageKind::CreateSpace
                 | ManageKind::Explore => page.name.update(cx, |state, cx| state.focus(window, cx)),
                 ManageKind::LeaveRoom(_) | ManageKind::InviteContact | ManageKind::SignOut => {
@@ -517,6 +534,8 @@ impl MatrixApp {
             ManageKind::InviteContact => "Invite a Contact",
             ManageKind::SignOut => "Sign Out",
             ManageKind::StatusMessage => "Status Message",
+            ManageKind::CreatePoll(_) => "Create Poll",
+            ManageKind::Stickers(_) => "Stickers",
             ManageKind::Explore => "Explore Rooms",
             ManageKind::CreateSpace => "Create Space",
         }
@@ -948,6 +967,12 @@ impl MatrixApp {
             }
             ManageKind::Explore => {
                 body = body.child(self.explore_body(cx));
+            }
+            ManageKind::CreatePoll(_) => {
+                body = body.child(self.poll_dialog(page, cx));
+            }
+            ManageKind::Stickers(_) => {
+                body = body.child(self.sticker_dialog(page, cx));
             }
             ManageKind::CreateSpace => {
                 let public = page.public;

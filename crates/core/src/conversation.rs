@@ -18,9 +18,11 @@ pub use previews::{PreviewSize, TimelinePreview};
 mod editing;
 pub use editing::EditError;
 mod attachments;
+mod polls;
 mod unread;
 mod viewer;
 pub use attachments::{AttachmentDraft, AttachmentError, sanitize_filename};
+pub use polls::{MAX_ANSWERS, MIN_ANSWERS, Poll, PollAnswer, PollDraft};
 pub use viewer::{ImageError, ViewerImage, decode_viewer_image};
 pub(crate) use viewer::{decode_gallery_thumbnail, decode_viewer_bytes};
 
@@ -37,6 +39,12 @@ pub enum MessageKind {
     Redacted,
     /// Someone joined, left, was invited, … (`MessageRow::membership`).
     Membership,
+    /// A poll (`MessageRow::poll`).
+    Poll,
+    /// An `m.sticker`; its picture loads like an image preview.
+    Sticker,
+    /// A voice message (`MessageRow::voice`).
+    Voice,
 }
 
 /// A membership change in the timeline; the frontend words it (#104).
@@ -118,6 +126,43 @@ pub struct MessageRow {
     pub new_messages: bool,
     /// Set for `MessageKind::Membership`.
     pub membership: Option<Membership>,
+    /// Set for `MessageKind::Poll`.
+    pub poll: Option<Poll>,
+    /// Set for `MessageKind::Voice`.
+    pub voice: Option<Voice>,
+}
+
+/// A voice message's length and loudness outline (MSC3245).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Voice {
+    pub duration_ms: u64,
+    /// 0–1 per point, oldest first; empty when the sender sent none.
+    pub waveform: Vec<f32>,
+}
+
+/// Voice details of an `m.audio` message marked as a voice message.
+fn voice_of(message: &MessageType) -> Option<Voice> {
+    let MessageType::Audio(audio) = message else {
+        return None;
+    };
+    audio.voice.as_ref()?;
+    let details = audio.audio.as_ref();
+    let duration_ms = details
+        .map(|d| d.duration)
+        .or_else(|| audio.info.as_ref().and_then(|i| i.duration))
+        .map_or(0, |d| d.as_millis() as u64);
+    let waveform = details
+        .map(|d| {
+            d.waveform
+                .iter()
+                .map(|amplitude| (u64::from(amplitude.get()) as f32 / 1024.).min(1.))
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(Voice {
+        duration_ms,
+        waveform,
+    })
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -194,6 +239,8 @@ pub enum ConversationError {
     Cancel,
     #[error("receipt_failed")]
     Receipt,
+    #[error("invalid_poll")]
+    InvalidPoll,
 }
 
 #[derive(Clone)]
@@ -235,6 +282,18 @@ impl Conversation {
         }
         self.timeline
             .send(crate::rich_text::compose_with_mentions(body, mentions)?.into())
+            .await
+            .map(|_| ())
+            .map_err(|_| ConversationError::Queue)
+    }
+
+    /// Queues any message-like content on this timeline.
+    pub(crate) async fn send_content(
+        &self,
+        content: matrix_sdk::ruma::events::AnyMessageLikeEventContent,
+    ) -> Result<(), ConversationError> {
+        self.timeline
+            .send(content)
             .await
             .map(|_| ())
             .map_err(|_| ConversationError::Queue)
@@ -526,8 +585,17 @@ fn rows<'a>(
             let event = item.as_event()?;
             let content = event.content();
             let mut membership = None;
+            let mut poll = None;
+            let voice = content
+                .as_message()
+                .and_then(|message| voice_of(message.msgtype()));
             let (kind, body, attachment) = if let Some(message) = content.as_message() {
-                message_content(message.msgtype())
+                let (kind, body, attachment) = message_content(message.msgtype());
+                if voice.is_some() {
+                    (MessageKind::Voice, body, attachment)
+                } else {
+                    (kind, body, attachment)
+                }
             } else if content.is_unable_to_decrypt() {
                 (MessageKind::Undecryptable, String::new(), None)
             } else if content.is_redacted() {
@@ -542,6 +610,23 @@ fn rows<'a>(
                         .unwrap_or_else(|| change.user_id().to_string()),
                 });
                 (MessageKind::Membership, String::new(), None)
+            } else if let TimelineItemContent::MsgLike(MsgLikeContent {
+                kind: matrix_sdk_ui::timeline::MsgLikeKind::Sticker(sticker),
+                ..
+            }) = content
+            {
+                let body = sticker.content().body.clone();
+                let size = sticker.content().info.size;
+                (MessageKind::Sticker, body.clone(), attachment(&body, size))
+            } else if let TimelineItemContent::MsgLike(MsgLikeContent {
+                kind: matrix_sdk_ui::timeline::MsgLikeKind::Poll(state),
+                ..
+            }) = content
+            {
+                let projected = polls::project(state, event.sender(), own_user);
+                let question = projected.question.clone();
+                poll = Some(projected);
+                (MessageKind::Poll, question, None)
             } else {
                 return None;
             };
@@ -600,6 +685,8 @@ fn rows<'a>(
                     Some(EventSendState::SendingFailed { .. })
                 ) && event.local_echo_send_handle().is_some(),
                 membership,
+                poll,
+                voice,
             })
         })
         .collect()

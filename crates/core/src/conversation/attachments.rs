@@ -218,11 +218,19 @@ impl Conversation {
     }
     pub(super) async fn media_source(&self, id: &str) -> Result<MediaSource, AttachmentError> {
         let items = self.timeline.items().await;
-        let message = items
+        let event = items
             .iter()
             .find(|item| item.unique_id().0 == id)
             .and_then(|item| item.as_event())
-            .and_then(|event| event.content().as_message())
+            .ok_or(AttachmentError::Unavailable)?;
+        if let matrix_sdk_ui::timeline::TimelineItemContent::MsgLike(content) = event.content()
+            && let matrix_sdk_ui::timeline::MsgLikeKind::Sticker(sticker) = &content.kind
+        {
+            return Ok(sticker.content().source.clone().into());
+        }
+        let message = event
+            .content()
+            .as_message()
             .ok_or(AttachmentError::Unavailable)?;
         match message.msgtype() {
             MessageType::Image(content) => Ok(content.source.clone()),
@@ -238,6 +246,62 @@ impl Conversation {
             .await
             .map(|p| p.png)
             .map_err(|_| AttachmentError::Download)
+    }
+
+    /// A voice message's audio, decrypted in memory (#184).
+    pub async fn voice_audio(&self, id: &str) -> Result<Vec<u8>, AttachmentError> {
+        let source = self.media_source(id).await?;
+        self.timeline
+            .room()
+            .client()
+            .media()
+            .get_media_content(
+                &MediaRequestParameters {
+                    source,
+                    format: MediaFormat::File,
+                },
+                false,
+            )
+            .await
+            .map_err(|_| AttachmentError::Download)
+    }
+
+    /// Sends a recorded voice message (Ogg Opus) with its length and outline.
+    pub async fn send_voice(
+        &self,
+        ogg: Vec<u8>,
+        duration: std::time::Duration,
+        waveform: Vec<f32>,
+    ) -> Result<(), AttachmentError> {
+        self.ensure_text_channel()
+            .map_err(|_| AttachmentError::Unavailable)?;
+        let size = ogg.len() as u64;
+        let maximum = self.upload_limit().await?;
+        if size > maximum {
+            return Err(AttachmentError::Limit { maximum });
+        }
+        let config = matrix_sdk_ui::timeline::AttachmentConfig {
+            info: Some(AttachmentInfo::Voice(
+                matrix_sdk::attachment::BaseAudioInfo {
+                    duration: Some(duration),
+                    size: size.try_into().ok(),
+                    waveform: Some(waveform),
+                },
+            )),
+            ..Default::default()
+        };
+        self.timeline
+            .send_attachment(
+                matrix_sdk_ui::timeline::AttachmentSource::Data {
+                    bytes: ogg,
+                    filename: "Voice message.ogg".into(),
+                },
+                "audio/ogg".parse().map_err(|_| AttachmentError::File)?,
+                config,
+            )
+            .use_send_queue()
+            .await
+            .map_err(|_| AttachmentError::Upload)
     }
 
     pub async fn download_attachment(&self, id: &str, path: &Path) -> Result<(), AttachmentError> {
