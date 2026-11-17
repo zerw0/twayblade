@@ -854,6 +854,34 @@ fn sticker_picker_lists_packs_and_stickers_render_without_a_bubble(cx: &mut Test
 }
 
 #[gpui_kit::test]
+fn voice_messages_show_a_play_button_and_their_length(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    let id = cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            let message = app.snapshot.messages.last_mut().expect("sample message");
+            message.kind = crate::backend::MessageKind::Voice;
+            message.rich = None;
+            message.voice = Some(twayblade_core::conversation::Voice {
+                duration_ms: 75_000,
+                waveform: vec![0.2, 0.9, 0.4],
+            });
+            cx.notify();
+            message.id.clone()
+        })
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let play = window.find(gpui_kit::SharedString::from(format!("voice-play-{id}")));
+        assert!(play.visible());
+        // The offline preview has no audio to play.
+        assert_eq!(play.disabled(), Some(true));
+        // Nothing records until the menu item is chosen.
+        assert!(window.try_find("voice-recording").is_none());
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
 fn attachment_controls_require_an_explicit_action_and_samples_cannot_upload(
     cx: &mut TestAppContext,
 ) {

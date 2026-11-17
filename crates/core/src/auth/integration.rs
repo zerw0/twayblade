@@ -462,6 +462,59 @@ async fn encrypted_delivery_profile_and_same_device_store_restore() {
     drop(bob_stickers);
     eprintln!("PASS: sticker pack, encrypted sticker send and picture");
 
+    // Voice messages (#184): a recorded clip (here a generated tone) sent as
+    // Ogg Opus with its outline; Bob sees the voice message and decodes it.
+    let tone: Vec<i16> = (0..twayblade_media::voice::RATE as usize * 2)
+        .map(|n| ((n as f32 / 48_000. * 440. * std::f32::consts::TAU).sin() * 8000.) as i16)
+        .collect();
+    let ogg = checked(twayblade_media::voice::encode_ogg(&tone), "encode voice");
+    checked(
+        conversation
+            .send_voice(
+                ogg,
+                Duration::from_secs(2),
+                twayblade_media::voice::waveform(&tone, 100),
+            )
+            .await,
+        "send voice message",
+    );
+    let mut bob_voice = Box::pin(bob.conversation_updates(room_id.to_string(), 7));
+    let seen = wait_snapshot(
+        &mut bob_voice,
+        |s| {
+            s.messages.iter().any(|m| {
+                m.kind == crate::conversation::MessageKind::Voice
+                    && m.voice
+                        .as_ref()
+                        .is_some_and(|v| v.duration_ms == 2000 && !v.waveform.is_empty())
+            })
+        },
+        "voice message reaches Bob",
+    )
+    .await;
+    let voice_row = seen
+        .messages
+        .iter()
+        .find(|m| m.kind == crate::conversation::MessageKind::Voice)
+        .expect("voice row")
+        .id
+        .clone();
+    let audio = checked(
+        seen.conversation
+            .clone()
+            .expect("Bob timeline")
+            .voice_audio(&voice_row)
+            .await,
+        "download voice message",
+    );
+    let pcm = checked(twayblade_media::voice::decode_ogg(&audio), "decode voice");
+    assert!(
+        pcm.len().abs_diff(tone.len()) <= 960,
+        "voice length survives"
+    );
+    drop(bob_voice);
+    eprintln!("PASS: encrypted voice message send, details and playback audio");
+
     let notification_identity = bob.notification_identity();
     let previous_instance = bob.instance_id();
     bob_sync.abort();

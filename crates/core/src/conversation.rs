@@ -43,6 +43,8 @@ pub enum MessageKind {
     Poll,
     /// An `m.sticker`; its picture loads like an image preview.
     Sticker,
+    /// A voice message (`MessageRow::voice`).
+    Voice,
 }
 
 /// A membership change in the timeline; the frontend words it (#104).
@@ -126,6 +128,41 @@ pub struct MessageRow {
     pub membership: Option<Membership>,
     /// Set for `MessageKind::Poll`.
     pub poll: Option<Poll>,
+    /// Set for `MessageKind::Voice`.
+    pub voice: Option<Voice>,
+}
+
+/// A voice message's length and loudness outline (MSC3245).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Voice {
+    pub duration_ms: u64,
+    /// 0–1 per point, oldest first; empty when the sender sent none.
+    pub waveform: Vec<f32>,
+}
+
+/// Voice details of an `m.audio` message marked as a voice message.
+fn voice_of(message: &MessageType) -> Option<Voice> {
+    let MessageType::Audio(audio) = message else {
+        return None;
+    };
+    audio.voice.as_ref()?;
+    let details = audio.audio.as_ref();
+    let duration_ms = details
+        .map(|d| d.duration)
+        .or_else(|| audio.info.as_ref().and_then(|i| i.duration))
+        .map_or(0, |d| d.as_millis() as u64);
+    let waveform = details
+        .map(|d| {
+            d.waveform
+                .iter()
+                .map(|amplitude| (u64::from(amplitude.get()) as f32 / 1024.).min(1.))
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(Voice {
+        duration_ms,
+        waveform,
+    })
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -544,8 +581,16 @@ fn rows<'a>(
             let content = event.content();
             let mut membership = None;
             let mut poll = None;
+            let voice = content
+                .as_message()
+                .and_then(|message| voice_of(message.msgtype()));
             let (kind, body, attachment) = if let Some(message) = content.as_message() {
-                message_content(message.msgtype())
+                let (kind, body, attachment) = message_content(message.msgtype());
+                if voice.is_some() {
+                    (MessageKind::Voice, body, attachment)
+                } else {
+                    (kind, body, attachment)
+                }
             } else if content.is_unable_to_decrypt() {
                 (MessageKind::Undecryptable, String::new(), None)
             } else if content.is_redacted() {
@@ -636,6 +681,7 @@ fn rows<'a>(
                 ) && event.local_echo_send_handle().is_some(),
                 membership,
                 poll,
+                voice,
             })
         })
         .collect()

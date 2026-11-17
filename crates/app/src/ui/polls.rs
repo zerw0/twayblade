@@ -129,7 +129,16 @@ impl MatrixApp {
             .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, _| {
                 let poll = weak.clone();
                 let sticker = weak.clone();
+                let voice = weak.clone();
                 menu.item(
+                    PopupMenuItem::new("Voice Message")
+                        .icon(IconName::Mic)
+                        .on_click(move |_, window, cx| {
+                            let _ =
+                                voice.update(cx, |this, cx| this.start_voice_recording(window, cx));
+                        }),
+                )
+                .item(
                     PopupMenuItem::new("Sticker")
                         .icon(IconName::Sticker)
                         .on_click(move |_, window, cx| {

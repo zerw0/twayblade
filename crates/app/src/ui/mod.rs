@@ -37,6 +37,7 @@ pub(crate) mod spaces;
 pub(crate) mod stickers;
 pub(crate) mod threads;
 pub(crate) mod viewer;
+pub(crate) mod voice;
 
 use crate::theme::scaled_px as px;
 

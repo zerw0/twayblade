@@ -23,6 +23,9 @@ reqwest = { version = "=0.13.5", default-features = false }
 tokio-tungstenite = { version = "=0.29.0", default-features = false, features = ["handshake"] }
 async-trait = "=0.1.92"
 url.workspace = true
+# Voice messages (#184): microphone and speaker I/O, and the Ogg container.
+cpal = "=0.18.2"
+ogg = "=0.9.2"
 
 # Screen sharing through xdg-desktop-portal needs a GLib main loop on Linux.
 [target.'cfg(target_os = "linux")'.dependencies]

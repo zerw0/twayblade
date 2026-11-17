@@ -381,6 +381,14 @@ impl MatrixApp {
                         .into_any_element(),
                 }
             }
+            MessageKind::Voice => match &message.voice {
+                Some(voice) => {
+                    let disabled =
+                        self.preview || self.backend.is_none() || !self.snapshot.timeline_ready;
+                    self.voice_bubble(message, voice, outgoing, disabled, cx)
+                }
+                None => div().into_any_element(),
+            },
             MessageKind::Poll => match &message.poll {
                 Some(poll) => {
                     let disabled =
@@ -1400,6 +1408,12 @@ pub(crate) fn accessible_message(message: &crate::backend::Message, own_user: &s
         MessageKind::Image => format!("Image, {}", model::message_text(message)),
         MessageKind::File => format!("File, {}", model::message_text(message)),
         MessageKind::Sticker => format!("Sticker, {}", model::message_text(message)),
+        MessageKind::Voice => format!(
+            "Voice message, {}",
+            crate::ui::voice::clock(std::time::Duration::from_millis(
+                message.voice.as_ref().map_or(0, |v| v.duration_ms)
+            ))
+        ),
         MessageKind::Poll => message
             .poll
             .as_ref()
