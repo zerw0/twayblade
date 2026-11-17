@@ -2602,6 +2602,7 @@ impl MatrixApp {
                 | ManageKind::SignOut
                 | ManageKind::StatusMessage
                 | ManageKind::CreatePoll(_)
+                | ManageKind::Stickers(_)
                 | ManageKind::Explore => {}
             }
         }
@@ -3514,8 +3515,10 @@ impl MatrixApp {
             let mut visible = self.visible_images.borrow_mut();
             let slot = &mut visible[usize::from(in_thread)];
             for message in messages {
-                if message.kind == crate::backend::MessageKind::Image
-                    && slot.len() < 128
+                if matches!(
+                    message.kind,
+                    crate::backend::MessageKind::Image | crate::backend::MessageKind::Sticker
+                ) && slot.len() < 128
                     && !slot.contains(&message.id)
                 {
                     slot.push(message.id.clone());

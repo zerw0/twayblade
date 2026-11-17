@@ -218,11 +218,19 @@ impl Conversation {
     }
     pub(super) async fn media_source(&self, id: &str) -> Result<MediaSource, AttachmentError> {
         let items = self.timeline.items().await;
-        let message = items
+        let event = items
             .iter()
             .find(|item| item.unique_id().0 == id)
             .and_then(|item| item.as_event())
-            .and_then(|event| event.content().as_message())
+            .ok_or(AttachmentError::Unavailable)?;
+        if let matrix_sdk_ui::timeline::TimelineItemContent::MsgLike(content) = event.content()
+            && let matrix_sdk_ui::timeline::MsgLikeKind::Sticker(sticker) = &content.kind
+        {
+            return Ok(sticker.content().source.clone().into());
+        }
+        let message = event
+            .content()
+            .as_message()
             .ok_or(AttachmentError::Unavailable)?;
         match message.msgtype() {
             MessageType::Image(content) => Ok(content.source.clone()),

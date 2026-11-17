@@ -20,7 +20,7 @@ pub(crate) enum AvatarState {
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct AvatarCache(Rc<RefCell<HashMap<String, AvatarState>>>);
+pub(crate) struct AvatarCache(pub(crate) Rc<RefCell<HashMap<String, AvatarState>>>);
 
 impl MatrixApp {
     /// An avatar for `mxc`, falling back to coloured initials of `name`, seeded by

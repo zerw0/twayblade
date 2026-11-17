@@ -262,6 +262,9 @@ fn main() {
                         view.status = "Sample data · Emoji picker".into();
                         view.open_emoji(None, window, cx);
                     }
+                    if args.iter().any(|arg| arg == "--preview-stickers") {
+                        view.open_sticker_picker(window, cx);
+                    }
                     if args.iter().any(|arg| arg == "--preview-create-poll") {
                         view.open_create_poll(window, cx);
                     }

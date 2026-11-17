@@ -19,6 +19,7 @@ pub mod search;
 pub mod security;
 pub mod space_actions;
 pub mod spaces;
+pub mod stickers;
 
 use matrix_sdk::Client;
 use std::time::Duration;

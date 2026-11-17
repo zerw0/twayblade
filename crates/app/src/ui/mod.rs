@@ -34,6 +34,7 @@ pub(crate) mod replying;
 pub(crate) mod security;
 pub(crate) mod settings;
 pub(crate) mod spaces;
+pub(crate) mod stickers;
 pub(crate) mod threads;
 pub(crate) mod viewer;
 

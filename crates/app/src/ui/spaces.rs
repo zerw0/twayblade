@@ -40,6 +40,8 @@ pub(crate) enum ManageKind {
     Explore,
     /// Create a poll in this room (room ID) (#181).
     CreatePoll(String),
+    /// Pick a sticker to send in this room (room ID) (#183).
+    Stickers(String),
 }
 impl ManageKind {
     /// Short forms open as a small centred dialog; browsing and leaving keep
@@ -56,6 +58,7 @@ impl ManageKind {
                 | Self::SignOut
                 | Self::StatusMessage
                 | Self::CreatePoll(_)
+                | Self::Stickers(_)
         )
     }
 }
@@ -82,6 +85,8 @@ pub(crate) struct Management {
     /// before the poll ends.
     pub poll_answers: Vec<Entity<InputState>>,
     pub poll_disclosed: bool,
+    /// Stickers: the packs, once loaded.
+    pub sticker_packs: Option<Vec<twayblade_core::stickers::StickerPack>>,
 }
 impl MatrixApp {
     pub fn open_management(
@@ -193,6 +198,7 @@ impl MatrixApp {
             copied: false,
             poll_answers: Vec::new(),
             poll_disclosed: true,
+            sticker_packs: None,
         });
         // Dialogs with a text field start in it, so typing works at once. The
         // leave confirmation starts on the sheet itself, not on its
@@ -481,6 +487,7 @@ impl MatrixApp {
             ManageKind::SignOut => "Sign Out",
             ManageKind::StatusMessage => "Status Message",
             ManageKind::CreatePoll(_) => "Create Poll",
+            ManageKind::Stickers(_) => "Stickers",
             ManageKind::Explore => "Explore Rooms",
         }
     }
@@ -1021,6 +1028,9 @@ impl MatrixApp {
             }
             ManageKind::CreatePoll(_) => {
                 body = body.child(self.poll_dialog(page, cx));
+            }
+            ManageKind::Stickers(_) => {
+                body = body.child(self.sticker_dialog(page, cx));
             }
             ManageKind::StatusMessage => {
                 use twayblade_core::presence::State;

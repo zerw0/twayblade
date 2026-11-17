@@ -437,6 +437,8 @@ pub(super) enum TimelineAction {
     },
     /// Polls (#181): create one, vote, or end one this account started.
     SendPoll(twayblade_core::conversation::PollDraft),
+    /// Stickers (#183).
+    SendSticker(twayblade_core::stickers::Sticker),
     Vote {
         message: String,
         answer: String,
@@ -1381,6 +1383,10 @@ impl Backend {
                         TimelineAction::EndPoll { message } => {
                             conversation.end_poll(&message).await
                         }
+                        TimelineAction::SendSticker(sticker) => conversation
+                            .send_sticker(&sticker)
+                            .await
+                            .map_err(|_| twayblade_core::conversation::ConversationError::Queue),
                     }
                     .map(|_| false),
                 }
@@ -1639,6 +1645,36 @@ impl Backend {
         self.runtime
             .block_on(account.avatar_thumbnail(mxc, size))
             .map_err(|_| failure("Avatar unavailable."))
+    }
+
+    pub(super) fn sticker_picture(&self, mxc: String, size: u32) -> Result<Vec<u8>, ServiceError> {
+        let account = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?
+            .account
+            .clone()
+            .ok_or_else(|| failure("Sign in first."))?;
+        self.runtime
+            .block_on(account.sticker_thumbnail(mxc, size))
+            .map_err(|_| failure("Sticker unavailable."))
+    }
+
+    /// Sticker packs for the picker (#183), for the open room.
+    pub(super) fn sticker_packs(
+        &self,
+        room: Option<String>,
+    ) -> Result<Vec<twayblade_core::stickers::StickerPack>, ServiceError> {
+        let account = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?
+            .account
+            .clone()
+            .ok_or_else(|| failure("Sign in first."))?;
+        Ok(self
+            .runtime
+            .block_on(account.sticker_packs(room.as_deref())))
     }
 
     pub(super) fn own_avatar_url(&self) -> Option<String> {
@@ -1979,6 +2015,10 @@ impl Backend {
                         conversation.vote_poll(&message, vec![answer]).await
                     }
                     TimelineAction::EndPoll { message } => conversation.end_poll(&message).await,
+                    TimelineAction::SendSticker(sticker) => conversation
+                        .send_sticker(&sticker)
+                        .await
+                        .map_err(|_| twayblade_core::conversation::ConversationError::Queue),
                 }
             })
             .map_err(conversation_failure)

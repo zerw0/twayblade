@@ -213,7 +213,7 @@ pub(super) fn schedule(
         for id in visible {
             if messages
                 .iter()
-                .any(|m| m.id == *id && m.kind == MessageKind::Image)
+                .any(|m| m.id == *id && matches!(m.kind, MessageKind::Image | MessageKind::Sticker))
                 && !conversations.contains_key(id)
             {
                 plan.push((root.clone(), id.clone()));

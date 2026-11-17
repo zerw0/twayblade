@@ -128,7 +128,16 @@ impl MatrixApp {
             .disabled(!editable || self.preview)
             .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, _| {
                 let poll = weak.clone();
+                let sticker = weak.clone();
                 menu.item(
+                    PopupMenuItem::new("Sticker")
+                        .icon(IconName::Sticker)
+                        .on_click(move |_, window, cx| {
+                            let _ =
+                                sticker.update(cx, |this, cx| this.open_sticker_picker(window, cx));
+                        }),
+                )
+                .item(
                     PopupMenuItem::new("Poll")
                         .icon(IconName::ChartBar)
                         .on_click(move |_, window, cx| {

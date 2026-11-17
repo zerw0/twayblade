@@ -53,6 +53,32 @@ pub fn square_png(bytes: &[u8], size: u32) -> Result<Vec<u8>, AvatarError> {
     Ok(png.into_inner())
 }
 
+/// Decode with limits and scale to fit `size` (keeping the shape and
+/// transparency), encoded as PNG. For stickers.
+pub fn contain_png(bytes: &[u8], size: u32) -> Result<Vec<u8>, AvatarError> {
+    if bytes.len() > MAX_SOURCE_BYTES {
+        return Err(AvatarError::Decode);
+    }
+    let mut reader = image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|_| AvatarError::Decode)?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_SOURCE_DIMENSION);
+    limits.max_image_height = Some(MAX_SOURCE_DIMENSION);
+    limits.max_alloc = Some(64 * 1024 * 1024);
+    reader.limits(limits);
+    let image = reader.decode().map_err(|_| AvatarError::Decode)?.resize(
+        size,
+        size,
+        image::imageops::FilterType::Triangle,
+    );
+    let mut png = Cursor::new(Vec::new());
+    image
+        .write_to(&mut png, image::ImageFormat::Png)
+        .map_err(|_| AvatarError::Decode)?;
+    Ok(png.into_inner())
+}
+
 impl Account {
     /// `size` is in physical pixels; request twice the point size for Retina.
     pub async fn avatar_thumbnail(&self, mxc: String, size: u32) -> Result<Vec<u8>, AvatarError> {
@@ -80,6 +106,36 @@ impl Account {
         .map_err(|_| AvatarError::Download)?
         .map_err(|_| AvatarError::Download)?;
         tokio::task::spawn_blocking(move || square_png(&bytes, size))
+            .await
+            .map_err(|_| AvatarError::Decode)?
+    }
+
+    /// A sticker picture for the picker, fitted into `size` pixels.
+    pub async fn sticker_thumbnail(&self, mxc: String, size: u32) -> Result<Vec<u8>, AvatarError> {
+        let uri = OwnedMxcUri::from(mxc);
+        if !uri.is_valid() {
+            return Err(AvatarError::Invalid);
+        }
+        let _permit = FETCHES
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| AvatarError::Download)?;
+        let request = MediaRequestParameters {
+            source: MediaSource::Plain(uri),
+            format: MediaFormat::Thumbnail(MediaThumbnailSettings::new(
+                UInt::from(size),
+                UInt::from(size),
+            )),
+        };
+        let bytes = tokio::time::timeout(
+            Duration::from_secs(20),
+            self.client.media().get_media_content(&request, true),
+        )
+        .await
+        .map_err(|_| AvatarError::Download)?
+        .map_err(|_| AvatarError::Download)?;
+        tokio::task::spawn_blocking(move || contain_png(&bytes, size))
             .await
             .map_err(|_| AvatarError::Decode)?
     }

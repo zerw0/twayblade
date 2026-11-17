@@ -41,6 +41,8 @@ pub enum MessageKind {
     Membership,
     /// A poll (`MessageRow::poll`).
     Poll,
+    /// An `m.sticker`; its picture loads like an image preview.
+    Sticker,
 }
 
 /// A membership change in the timeline; the frontend words it (#104).
@@ -239,6 +241,18 @@ impl Conversation {
         }
         self.timeline
             .send(crate::rich_text::compose_with_mentions(body, mentions)?.into())
+            .await
+            .map(|_| ())
+            .map_err(|_| ConversationError::Queue)
+    }
+
+    /// Queues any message-like content on this timeline.
+    pub(crate) async fn send_content(
+        &self,
+        content: matrix_sdk::ruma::events::AnyMessageLikeEventContent,
+    ) -> Result<(), ConversationError> {
+        self.timeline
+            .send(content)
             .await
             .map(|_| ())
             .map_err(|_| ConversationError::Queue)
@@ -546,6 +560,14 @@ fn rows<'a>(
                         .unwrap_or_else(|| change.user_id().to_string()),
                 });
                 (MessageKind::Membership, String::new(), None)
+            } else if let TimelineItemContent::MsgLike(MsgLikeContent {
+                kind: matrix_sdk_ui::timeline::MsgLikeKind::Sticker(sticker),
+                ..
+            }) = content
+            {
+                let body = sticker.content().body.clone();
+                let size = sticker.content().info.size;
+                (MessageKind::Sticker, body.clone(), attachment(&body, size))
             } else if let TimelineItemContent::MsgLike(MsgLikeContent {
                 kind: matrix_sdk_ui::timeline::MsgLikeKind::Poll(state),
                 ..

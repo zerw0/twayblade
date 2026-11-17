@@ -390,6 +390,78 @@ async fn encrypted_delivery_profile_and_same_device_store_restore() {
     drop(bob_polls);
     eprintln!("PASS: encrypted poll create, vote, results and end");
 
+    // Stickers (#183): a personal pack in account data, sent into the
+    // encrypted room, shown to Bob as a sticker whose picture loads.
+    let png = include_bytes!("../../../app/assets/attachment-sample.png").to_vec();
+    let uploaded = checked(
+        alice
+            .client
+            .media()
+            .upload(&mime::IMAGE_PNG, png, None)
+            .await,
+        "upload sticker picture",
+    );
+    let pack = serde_json::json!({
+        "pack": {"display_name": "Isolated pack"},
+        "images": {"wave": {"url": uploaded.content_uri.to_string(), "body": "Waving", "info": {"mimetype": "image/png"}}}
+    });
+    checked(
+        alice
+            .client
+            .account()
+            .set_account_data_raw(
+                matrix_sdk::ruma::events::GlobalAccountDataEventType::from("im.ponies.user_emotes"),
+                checked(Raw::from_json_string(pack.to_string()), "pack JSON"),
+            )
+            .await,
+        "save sticker pack",
+    );
+    let packs = alice.sticker_packs(Some(room_id.as_str())).await;
+    assert!(
+        packs.len() == 1 && packs[0].name == "Isolated pack" && packs[0].stickers.len() == 1,
+        "sticker pack listed"
+    );
+    checked(
+        conversation
+            .send_sticker(&packs[0].stickers[0])
+            .await
+            .map_err(|e| e.to_string()),
+        "send sticker",
+    );
+    let mut bob_stickers = Box::pin(bob.conversation_updates(room_id.to_string(), 6));
+    let seen = wait_snapshot(
+        &mut bob_stickers,
+        |s| {
+            s.messages
+                .iter()
+                .any(|m| m.kind == crate::conversation::MessageKind::Sticker && m.body == "Waving")
+        },
+        "sticker reaches Bob",
+    )
+    .await;
+    let sticker_row = seen
+        .messages
+        .iter()
+        .find(|m| m.kind == crate::conversation::MessageKind::Sticker)
+        .expect("sticker row")
+        .id
+        .clone();
+    let (_cancel, cancel) = tokio::sync::watch::channel(false);
+    checked(
+        seen.conversation
+            .clone()
+            .expect("Bob timeline")
+            .attachment_preview(
+                &sticker_row,
+                crate::conversation::PreviewSize::Default,
+                cancel,
+            )
+            .await,
+        "sticker picture",
+    );
+    drop(bob_stickers);
+    eprintln!("PASS: sticker pack, encrypted sticker send and picture");
+
     let notification_identity = bob.notification_identity();
     let previous_instance = bob.instance_id();
     bob_sync.abort();
