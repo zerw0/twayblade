@@ -18,18 +18,21 @@ GPUI named the right node in `TreeUpdate.focus`.
 
 ## Verified
 
-- Repro, read through the macOS Accessibility API: before the patch
-  `AXFocusedUIElement` was always `AXWindow` while the buttons' `AXFocused`
-  alternated; with it, it is the focused `AXButton` each time, and the tree
-  is unchanged.
-- Twayblade preview with a temporary (uncommitted) focus cycler: the focused
-  element is reported as the Settings and Create a room buttons.
+- Read through the raw macOS Accessibility API (`AXUIElementCopyAttributeValue`
+  on the application's `AXFocusedUIElement`), as VoiceOver does:
+  - Repro without the patch: always `AXWindow`. With it: the focused button
+    (First, Second, a dropdown-menu button, a button inside a context-menu
+    wrapper, a plain button) at every step.
+  - Twayblade preview with a temporary (uncommitted) focus cycler: every Tab
+    stop is reported with its label: search field, Notifications, Settings,
+    Account and status, Home, the space tile, Add a space, Space Home,
+    Create a room, room rows, Create Room….
+- System Events (AppleScript/JXA) cannot address some of these elements and
+  reports them as missing; that is a limitation of the probe, not of the
+  app (#187).
 - Compile: strict workspace Clippy; app tests pass.
 
 ## Not verified
 
 - VoiceOver speech with a real keyboard (Tab) on a physical Mac.
-- Some focus stops have no accessible node (the cycler saw "none" between
-  buttons, likely panel areas with a focus handle but no role); VoiceOver
-  says nothing there. Follow-up.
 - Setting `AXFocused` from an assistive app does not move GPUI focus.
