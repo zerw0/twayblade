@@ -1190,7 +1190,11 @@ impl MatrixApp {
                 // gap, then the avatar and its gap when avatars show.
                 let lead = TIME_COLUMN
                     + TIME_COLUMN_GAP
-                    + if self.preferences.chat.avatars { 32. + 10. } else { 0. };
+                    + if self.preferences.chat.avatars {
+                        32. + 10.
+                    } else {
+                        0.
+                    };
                 let header = h_flex()
                     .gap(px(8.))
                     .items_baseline()
