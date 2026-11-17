@@ -10509,7 +10509,7 @@ dependencies = [
 
 [[package]]
 name = "twayblade"
-version = "0.1.1-rc.3"
+version = "0.1.1-rc.4"
 dependencies = [
  "chrono",
  "directories",
@@ -10534,7 +10534,7 @@ dependencies = [
 
 [[package]]
 name = "twayblade-core"
-version = "0.1.1-rc.3"
+version = "0.1.1-rc.4"
 dependencies = [
  "async-stream",
  "base64 0.22.1",
@@ -10562,7 +10562,7 @@ dependencies = [
 
 [[package]]
 name = "twayblade-media"
-version = "0.1.1-rc.3"
+version = "0.1.1-rc.4"
 dependencies = [
  "async-trait",
  "cpal",
@@ -10588,7 +10588,7 @@ dependencies = [
 
 [[package]]
 name = "twayblade-platform"
-version = "0.1.1-rc.3"
+version = "0.1.1-rc.4"
 dependencies = [
  "ashpd",
  "block2 0.6.2",
