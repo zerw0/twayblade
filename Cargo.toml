@@ -40,3 +40,4 @@ debug = 0
 libwebrtc = { path = "vendor/libwebrtc-0.4.0" }
 webrtc-sys = { path = "vendor/webrtc-sys-0.3.53" }
 gpui-component = { path = "vendor/gpui-component-0.9.1" }
+gpui-pre-macos = { path = "vendor/gpui-pre-macos-0.3.12" }

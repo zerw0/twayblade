@@ -22,3 +22,19 @@ rows, and their icons are `small` instead of `xsmall`. Upstream used
 `text_sm` on 1.625 rem rows, which read at about 11 pt (#149).
 
 Remove the patch when GPUI Kit offers a menu text size option.
+
+# GPUI macOS VoiceOver focus patch
+
+Source: crates.io gpui-pre-macos 0.3.12 (Zed's `gpui_macos`, Apache-2.0;
+upstream notice kept). Cargo patches keep the locked version.
+
+The only change is in `src/window.rs` `a11y_init` (marked "Twayblade
+patch"): the AccessKit adapter subclasses GPUI's own view
+(`SubclassingAdapter::new(native_view)`) instead of the window's content
+view (`for_window`). GPUI's view is a subview of the content view and the
+first responder; AppKit asks the first responder for the focused element, so
+`AXFocusedUIElement` stayed the window and VoiceOver did not follow keyboard
+focus, although each node's `AXFocused` was right (#166).
+
+Remove the patch when upstream GPUI attaches the adapter to its view
+(https://github.com/zed-industries/zed/issues/66691).
