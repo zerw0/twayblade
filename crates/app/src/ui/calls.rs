@@ -68,14 +68,23 @@ impl Render for VideoTile {
         }
         // Look for the next frame on every display refresh while shown.
         window.request_animation_frame();
+        // Pinned to the tile's edges: a size_full image under an auto-height
+        // parent takes its natural aspect, so a shared screen ran past the
+        // tile's bottom and was cut off instead of fitting inside it.
         div()
+            .relative()
             .size_full()
             .children(self.image.as_ref().map(|(_, image)| {
-                img(image.clone()).size_full().object_fit(if self.contain {
-                    ObjectFit::Contain
-                } else {
-                    ObjectFit::Cover
-                })
+                img(image.clone())
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .object_fit(if self.contain {
+                        ObjectFit::Contain
+                    } else {
+                        ObjectFit::Cover
+                    })
             }))
     }
 }
