@@ -110,58 +110,67 @@ impl MatrixApp {
                     .then(|| model::emoji_only_count(&message.body))
                     .flatten()
                     .map(|count| if count <= 3 { base * 2.6 } else { base * 1.7 });
-                    content = content.child(
-                        div()
-                            .font_family(message_font)
-                            .text_size(px(emoji_size.unwrap_or(base)))
-                            .child(
-                                TextView::markdown(
-                                    SharedString::from(format!("message-{}", message.id)),
-                                    match &message.rich {
-                                        Some(rich) => model::rich_markdown(rich),
-                                        _ => model::plain_text(&model::message_text(message)),
-                                    },
-                                )
-                                .selectable(true)
-                                // Show the real destination; a label can disguise it.
-                                .link_tooltip(|url, window, cx| {
-                                    gpui_kit::component::tooltip::Tooltip::new(url.clone())
-                                        .build(window, cx)
-                                })
-                                .on_link_click({
-                                    let weak = cx.weak_entity();
-                                    move |url, _, window, cx| {
-                                        // A mention opens the person's profile beside the chat.
-                                        if let Some(user) = model::mentioned_user(url) {
-                                            let _ = weak.update(cx, |this, cx| {
-                                                let name = this
-                                                    .snapshot
-                                                    .members
-                                                    .iter()
-                                                    .find(|member| member.user_id == user)
-                                                    .map(|member| member.display_name.clone())
-                                                    .filter(|name| !name.is_empty())
-                                                    .unwrap_or_else(|| user.clone());
-                                                this.open_profile(user, name, window, cx);
-                                            });
-                                            return;
+                    // An image shows the picture alone: its filename is in the
+                    // accessible label and the viewer, and only a caption is text.
+                    let image_text =
+                        message.kind != MessageKind::Image || !message.body.trim().is_empty();
+                    content = content.when(image_text, |content| {
+                        content.child(
+                            div()
+                                .font_family(message_font)
+                                .text_size(px(emoji_size.unwrap_or(base)))
+                                .child(
+                                    TextView::markdown(
+                                        SharedString::from(format!("message-{}", message.id)),
+                                        match &message.rich {
+                                            Some(rich) => model::rich_markdown(rich),
+                                            _ if message.kind == MessageKind::Image => {
+                                                model::plain_text(&message.body)
+                                            }
+                                            _ => model::plain_text(&model::message_text(message)),
+                                        },
+                                    )
+                                    .selectable(true)
+                                    // Show the real destination; a label can disguise it.
+                                    .link_tooltip(|url, window, cx| {
+                                        gpui_kit::component::tooltip::Tooltip::new(url.clone())
+                                            .build(window, cx)
+                                    })
+                                    .on_link_click({
+                                        let weak = cx.weak_entity();
+                                        move |url, _, window, cx| {
+                                            // A mention opens the person's profile beside the chat.
+                                            if let Some(user) = model::mentioned_user(url) {
+                                                let _ = weak.update(cx, |this, cx| {
+                                                    let name = this
+                                                        .snapshot
+                                                        .members
+                                                        .iter()
+                                                        .find(|member| member.user_id == user)
+                                                        .map(|member| member.display_name.clone())
+                                                        .filter(|name| !name.is_empty())
+                                                        .unwrap_or_else(|| user.clone());
+                                                    this.open_profile(user, name, window, cx);
+                                                });
+                                                return;
+                                            }
+                                            if url::Url::parse(url).is_ok_and(|url| {
+                                                matches!(url.scheme(), "https" | "http" | "mailto")
+                                            }) {
+                                                cx.open_url(url);
+                                            }
                                         }
-                                        if url::Url::parse(url).is_ok_and(|url| {
-                                            matches!(url.scheme(), "https" | "http" | "mailto")
-                                        }) {
-                                            cx.open_url(url);
-                                        }
-                                    }
-                                })
-                                .when(
-                                    matches!(
-                                        message.kind,
-                                        MessageKind::Emote | MessageKind::Notice
+                                    })
+                                    .when(
+                                        matches!(
+                                            message.kind,
+                                            MessageKind::Emote | MessageKind::Notice
+                                        ),
+                                        |text| text.italic(),
                                     ),
-                                    |text| text.italic(),
                                 ),
-                            ),
-                    );
+                        )
+                    });
                     if message.edited {
                         content = content.child(
                             div()
@@ -248,7 +257,27 @@ impl MatrixApp {
                                         this.load_image(load.clone(), cx)
                                     }));
                             } else {
-                                button = button.small().label("Open Image");
+                                // Still downloading or not previewable: hold the
+                                // picture's place rather than naming the file.
+                                let (w, h) = match self.preferences.chat.preview_size {
+                                    twayblade_core::conversation::PreviewSize::Default => {
+                                        (280., 180.)
+                                    }
+                                    twayblade_core::conversation::PreviewSize::Large => {
+                                        (560., 420.)
+                                    }
+                                };
+                                button = button
+                                    .w(px(w))
+                                    .h(px(h))
+                                    .max_w_full()
+                                    .rounded(px(8.))
+                                    .bg(cx.theme().secondary)
+                                    .child(
+                                        Icon::new(IconName::Image)
+                                            .size(px(24.))
+                                            .text_color(cx.theme().muted_foreground),
+                                    );
                             }
                             if self.reveal_image.as_ref() == Some(&message.id) {
                                 let target = message.id.clone();
