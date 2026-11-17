@@ -532,7 +532,7 @@ impl MatrixApp {
         match kind {
             ManageKind::Directory(_) => "Space Home",
             ManageKind::Leave(_) => "Leave Space",
-            ManageKind::Create => "Create Channel or Subspace",
+            ManageKind::Create => "Create Channel",
             ManageKind::Dm => "Start a Direct Message",
             ManageKind::JoinSpace => "Join a Space",
             ManageKind::InviteMember(_) => "Invite People",
