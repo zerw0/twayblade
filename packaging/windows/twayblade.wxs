@@ -6,7 +6,11 @@
       -d Version=0.1.0 -d BinDir=target\release -d Root=.
       -o dist\Twayblade-0.1.0-x86_64.msi
 
-  Per-machine install into Program Files with a Start menu shortcut. The
+  Per-machine install into Program Files with a Start menu shortcut and, when
+  the "Create a desktop shortcut" box stays ticked, a desktop shortcut
+  (DESKTOPSHORTCUT=1 by default; pass DESKTOPSHORTCUT="" to msiexec /qn to skip
+  it). Needs the UI extension: wix extension add -g WixToolset.UI.wixext/5.0.2
+  and -ext WixToolset.UI.wixext on wix build. The
   shortcut carries the AppUserModelID that the app's toast notifications use
   (com.twayblade.desktop); Windows shows toasts from an unpackaged app only
   when such a shortcut exists. Unsigned: signing needs the release
@@ -34,6 +38,8 @@
     <Property Id="ARPPRODUCTICON" Value="Twayblade.ico" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/zerw0/twayblade" />
     <Property Id="ARPHELPLINK" Value="https://github.com/zerw0/twayblade/issues" />
+    <!-- Ticked by default; the Shortcuts page of the installer can clear it. -->
+    <Property Id="DESKTOPSHORTCUT" Value="1" Secure="yes" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="Twayblade">
@@ -61,11 +67,80 @@
       </Directory>
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder" />
+    <!-- Only when the installer's desktop box is ticked. A non-advertised
+         shortcut needs its own key path, a per-machine registry value. -->
+    <StandardDirectory Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Condition="DESKTOPSHORTCUT" Bitness="always64">
+        <Shortcut
+            Id="DesktopShortcut"
+            Name="Twayblade"
+            Description="Native Matrix messaging and calls"
+            Target="[INSTALLFOLDER]twayblade.exe"
+            WorkingDirectory="INSTALLFOLDER"
+            Icon="Twayblade.ico">
+          <ShortcutProperty Key="System.AppUserModel.ID" Value="com.twayblade.desktop" />
+        </Shortcut>
+        <RegistryValue Root="HKLM" Key="Software\Twayblade" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
 
     <Feature Id="Main" Title="Twayblade">
       <ComponentRef Id="App" />
       <ComponentRef Id="License" />
       <ComponentRef Id="WebrtcLicense" />
+      <ComponentRef Id="DesktopShortcut" />
     </Feature>
+
+    <!-- Welcome, then a Shortcuts page with the desktop box, then Install.
+         Built from WixUI_Minimal's dialogs without its licence page. -->
+    <UI Id="TwaybladeUI">
+      <TextStyle Id="WixUI_Font_Normal" FaceName="Tahoma" Size="8" />
+      <TextStyle Id="WixUI_Font_Bigger" FaceName="Tahoma" Size="12" />
+      <TextStyle Id="WixUI_Font_Title" FaceName="Tahoma" Size="9" Bold="yes" />
+      <Property Id="DefaultUIFont" Value="WixUI_Font_Normal" />
+
+      <DialogRef Id="ErrorDlg" />
+      <DialogRef Id="FatalError" />
+      <DialogRef Id="FilesInUse" />
+      <DialogRef Id="MsiRMFilesInUse" />
+      <DialogRef Id="PrepareDlg" />
+      <DialogRef Id="ProgressDlg" />
+      <DialogRef Id="ResumeDlg" />
+      <DialogRef Id="UserExit" />
+      <DialogRef Id="WelcomeDlg" />
+
+      <Dialog Id="ShortcutsDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="WixUI_Bmp_Banner" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Shortcuts" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="Choose where to find [ProductName] after it is installed." />
+        <Control Id="StartMenuNote" Type="Text" X="20" Y="60" Width="320" Height="15" NoPrefix="yes" Text="[ProductName] is always added to the Start menu." />
+        <Control Id="DesktopCheckBox" Type="CheckBox" X="20" Y="82" Width="320" Height="17" Property="DESKTOPSHORTCUT" CheckBoxValue="1" Text="Create a &amp;desktop shortcut" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)">
+          <Publish Event="NewDialog" Value="WelcomeDlg" />
+        </Control>
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)">
+          <Publish Event="NewDialog" Value="VerifyReadyDlg" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
+
+      <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="ShortcutsDlg" Condition="NOT Installed" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Condition="Installed AND PATCH" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="ShortcutsDlg" Order="1" Condition="NOT Installed" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Order="2" Condition="Installed AND NOT PATCH" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="2" Condition="Installed AND PATCH" />
+      <Publish Dialog="MaintenanceWelcomeDlg" Control="Next" Event="NewDialog" Value="MaintenanceTypeDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="RepairButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="RemoveButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="Back" Event="NewDialog" Value="MaintenanceWelcomeDlg" />
+
+      <Property Id="ARPNOMODIFY" Value="1" />
+    </UI>
+    <UIRef Id="WixUI_Common" />
   </Package>
 </Wix>
