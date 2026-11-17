@@ -262,6 +262,29 @@ fn main() {
                         view.status = "Sample data · Emoji picker".into();
                         view.open_emoji(None, window, cx);
                     }
+                    if args.iter().any(|arg| arg == "--preview-voice") {
+                        view.status = "Sample data · Voice message".into();
+                        if let Some(message) = view.snapshot.messages.iter_mut().rev().nth(1) {
+                            message.kind = backend::MessageKind::Voice;
+                            message.rich = None;
+                            message.attachment = None;
+                            message.voice = Some(twayblade_core::conversation::Voice {
+                                duration_ms: 23_000,
+                                waveform: (0..100).map(|n| (n as f32 * 0.37).sin().abs() * 0.8 + 0.1).collect(),
+                            });
+                        }
+                    }
+                    if args.iter().any(|arg| arg == "--preview-stickers") {
+                        view.open_sticker_picker(window, cx);
+                    }
+                    if args.iter().any(|arg| arg == "--preview-create-poll") {
+                        view.open_create_poll(window, cx);
+                    }
+                    if args.iter().any(|arg| arg == "--preview-poll") {
+                        view.status = "Sample data · Polls".into();
+                        let own = view.snapshot.user_id.clone();
+                        ui::polls::sample_polls(&mut view.snapshot.messages, &own);
+                    }
                     if args.iter().any(|arg| arg == "--preview-attachments") {
                         view.status = "Sample data · Attachment preview".into();
                         view.attachment_sample = true;
@@ -269,7 +292,7 @@ fn main() {
                         if let Some(message) = view.snapshot.messages.last_mut() {
                             message.kind = backend::MessageKind::File;
                             message.body.clear();
-                            message.attachment = Some(twayblade_core::conversation::Attachment { filename: "Travel notes.pdf".into(), size: Some(234567), preview_png: None });
+                            message.attachment = Some(twayblade_core::conversation::Attachment { filename: "Travel notes.pdf".into(), size: Some(234567), preview_png: None, download_needed: false });
                             message.delivery = backend::DeliveryState::Queued;
                             message.upload_percent = Some(42);
                         }
@@ -283,6 +306,7 @@ fn main() {
                         view.update_mention_completion(false, text.into(), text.len());
                     }
                     if args.iter().any(|arg| arg == "--preview-explore") { view.open_explore(window,cx); }
+                    if args.iter().any(|arg| arg == "--preview-create-space") { view.open_management(ui::spaces::ManageKind::CreateSpace,window,cx); }
                     if args.iter().any(|arg| arg == "--preview-dm") { view.open_management(ui::spaces::ManageKind::Dm,window,cx); }
                     if args.iter().any(|arg| arg == "--preview-invite-contact") { view.open_management(ui::spaces::ManageKind::InviteContact,window,cx); }
                     if args.iter().any(|arg| arg == "--preview-archive") { for room in view.snapshot.rooms.iter_mut().filter(|room| room.id == "announcements") { room.archived = true; } view.show_archive(window, cx); }

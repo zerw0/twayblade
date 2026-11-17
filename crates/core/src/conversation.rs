@@ -18,9 +18,11 @@ pub use previews::{PreviewSize, TimelinePreview};
 mod editing;
 pub use editing::EditError;
 mod attachments;
+mod polls;
 mod unread;
 mod viewer;
 pub use attachments::{AttachmentDraft, AttachmentError, sanitize_filename};
+pub use polls::{MAX_ANSWERS, MIN_ANSWERS, Poll, PollAnswer, PollDraft};
 pub use viewer::{ImageError, ViewerImage, decode_viewer_image};
 pub(crate) use viewer::{decode_gallery_thumbnail, decode_viewer_bytes};
 
@@ -37,6 +39,12 @@ pub enum MessageKind {
     Redacted,
     /// Someone joined, left, was invited, … (`MessageRow::membership`).
     Membership,
+    /// A poll (`MessageRow::poll`).
+    Poll,
+    /// An `m.sticker`; its picture loads like an image preview.
+    Sticker,
+    /// A voice message (`MessageRow::voice`).
+    Voice,
 }
 
 /// A membership change in the timeline; the frontend words it (#104).
@@ -118,6 +126,43 @@ pub struct MessageRow {
     pub new_messages: bool,
     /// Set for `MessageKind::Membership`.
     pub membership: Option<Membership>,
+    /// Set for `MessageKind::Poll`.
+    pub poll: Option<Poll>,
+    /// Set for `MessageKind::Voice`.
+    pub voice: Option<Voice>,
+}
+
+/// A voice message's length and loudness outline (MSC3245).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Voice {
+    pub duration_ms: u64,
+    /// 0–1 per point, oldest first; empty when the sender sent none.
+    pub waveform: Vec<f32>,
+}
+
+/// Voice details of an `m.audio` message marked as a voice message.
+fn voice_of(message: &MessageType) -> Option<Voice> {
+    let MessageType::Audio(audio) = message else {
+        return None;
+    };
+    audio.voice.as_ref()?;
+    let details = audio.audio.as_ref();
+    let duration_ms = details
+        .map(|d| d.duration)
+        .or_else(|| audio.info.as_ref().and_then(|i| i.duration))
+        .map_or(0, |d| d.as_millis() as u64);
+    let waveform = details
+        .map(|d| {
+            d.waveform
+                .iter()
+                .map(|amplitude| (u64::from(amplitude.get()) as f32 / 1024.).min(1.))
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(Voice {
+        duration_ms,
+        waveform,
+    })
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -146,6 +191,8 @@ pub struct Reaction {
 #[derive(Clone, Default)]
 pub struct Attachment {
     pub preview_png: Option<Arc<Vec<u8>>>,
+    /// Not downloaded because automatic download is off here (#174).
+    pub download_needed: bool,
     pub filename: String,
     pub size: Option<u64>,
 }
@@ -192,6 +239,8 @@ pub enum ConversationError {
     Cancel,
     #[error("receipt_failed")]
     Receipt,
+    #[error("invalid_poll")]
+    InvalidPoll,
 }
 
 #[derive(Clone)]
@@ -199,6 +248,8 @@ pub struct Conversation {
     timeline: Arc<Timeline>,
     read_updates: Option<tokio::sync::broadcast::Sender<(String, Option<String>)>>,
     root: Option<String>,
+    /// The account's media cache switch (#174).
+    media_cache: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -231,6 +282,18 @@ impl Conversation {
         }
         self.timeline
             .send(crate::rich_text::compose_with_mentions(body, mentions)?.into())
+            .await
+            .map(|_| ())
+            .map_err(|_| ConversationError::Queue)
+    }
+
+    /// Queues any message-like content on this timeline.
+    pub(crate) async fn send_content(
+        &self,
+        content: matrix_sdk::ruma::events::AnyMessageLikeEventContent,
+    ) -> Result<(), ConversationError> {
+        self.timeline
+            .send(content)
             .await
             .map(|_| ())
             .map_err(|_| ConversationError::Queue)
@@ -413,6 +476,7 @@ fn plain_excerpt(body: &str) -> String {
 fn attachment(filename: &str, size: Option<matrix_sdk::ruma::UInt>) -> Option<Attachment> {
     Some(Attachment {
         preview_png: None,
+        download_needed: false,
         filename: filename.to_owned(),
         size: size.map(u64::from),
     })
@@ -521,8 +585,17 @@ fn rows<'a>(
             let event = item.as_event()?;
             let content = event.content();
             let mut membership = None;
+            let mut poll = None;
+            let voice = content
+                .as_message()
+                .and_then(|message| voice_of(message.msgtype()));
             let (kind, body, attachment) = if let Some(message) = content.as_message() {
-                message_content(message.msgtype())
+                let (kind, body, attachment) = message_content(message.msgtype());
+                if voice.is_some() {
+                    (MessageKind::Voice, body, attachment)
+                } else {
+                    (kind, body, attachment)
+                }
             } else if content.is_unable_to_decrypt() {
                 (MessageKind::Undecryptable, String::new(), None)
             } else if content.is_redacted() {
@@ -537,6 +610,23 @@ fn rows<'a>(
                         .unwrap_or_else(|| change.user_id().to_string()),
                 });
                 (MessageKind::Membership, String::new(), None)
+            } else if let TimelineItemContent::MsgLike(MsgLikeContent {
+                kind: matrix_sdk_ui::timeline::MsgLikeKind::Sticker(sticker),
+                ..
+            }) = content
+            {
+                let body = sticker.content().body.clone();
+                let size = sticker.content().info.size;
+                (MessageKind::Sticker, body.clone(), attachment(&body, size))
+            } else if let TimelineItemContent::MsgLike(MsgLikeContent {
+                kind: matrix_sdk_ui::timeline::MsgLikeKind::Poll(state),
+                ..
+            }) = content
+            {
+                let projected = polls::project(state, event.sender(), own_user);
+                let question = projected.question.clone();
+                poll = Some(projected);
+                (MessageKind::Poll, question, None)
             } else {
                 return None;
             };
@@ -595,6 +685,8 @@ fn rows<'a>(
                     Some(EventSendState::SendingFailed { .. })
                 ) && event.local_echo_send_handle().is_some(),
                 membership,
+                poll,
+                voice,
             })
         })
         .collect()
@@ -637,6 +729,45 @@ fn fetch_reply_details<'a>(
                 let _ = timeline.fetch_details_for_event(&id).await;
             });
         }
+    }
+}
+
+/// Recently opened rooms' live timelines, most recent first (#173). Going
+/// back to one of them subscribes to the timeline already in memory, with
+/// its loaded history, instead of building and paginating a new one.
+pub(crate) struct RecentTimelines<T = Arc<Timeline>>(
+    Arc<std::sync::Mutex<std::collections::VecDeque<(String, T)>>>,
+);
+impl<T> Clone for RecentTimelines<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+impl<T> Default for RecentTimelines<T> {
+    fn default() -> Self {
+        Self(Default::default())
+    }
+}
+impl<T: Clone> RecentTimelines<T> {
+    /// Rooms kept open; older ones are dropped and rebuilt when reopened.
+    pub(crate) const LIMIT: usize = 8;
+
+    pub(crate) fn get(&self, room: &str) -> Option<T> {
+        let mut list = self.0.lock().ok()?;
+        let index = list.iter().position(|(id, _)| id == room)?;
+        let entry = list.remove(index)?;
+        let value = entry.1.clone();
+        list.push_front(entry);
+        Some(value)
+    }
+
+    pub(crate) fn insert(&self, room: String, value: T) {
+        let Ok(mut list) = self.0.lock() else {
+            return;
+        };
+        list.retain(|(id, _)| *id != room);
+        list.push_front((room, value));
+        list.truncate(Self::LIMIT);
     }
 }
 
@@ -706,7 +837,14 @@ impl Account {
             // Opening can wait on the network or the stores indefinitely. Bound
             // each attempt so a stuck one is replaced instead of loading forever.
             let mut attempt = 0u32;
-            let (timeline, mut items, updates) = loop {
+            let live = root.is_none() && target.is_none();
+            let cached = if live { account.recent_timelines.get(&room_id) } else { None };
+            let reused = cached.is_some();
+            let (timeline, mut items, updates) = if let Some(timeline) = cached {
+                tracing::info!(name: "room_open_reused", generation);
+                let (items, updates) = Box::pin(timeline.subscribe()).await;
+                (timeline, items, updates)
+            } else { loop {
                 let span = tracing::info_span!("room_open", generation, attempt, elapsed_ms=tracing::field::Empty, cancelled=tracing::field::Empty);
                 let opened = tokio::time::timeout(OPEN_TIMEOUT, open::step(span, async {
                     let timeline = Box::pin(open::timeline(&room, focus.clone())).await?;
@@ -730,8 +868,12 @@ impl Account {
                         attempt = attempt.saturating_add(1);
                     }
                 }
-            };
+            }};
+            if live && !reused {
+                account.recent_timelines.insert(room_id.clone(), timeline.clone());
+            }
             let conversation = Conversation {
+                media_cache: account.media_cache.clone(),
                 timeline: timeline.clone(),
                 read_updates: Some(account.thread_read_updates.clone()), root: root.clone(),
             };
@@ -777,8 +919,9 @@ impl Account {
             // is suspended at a yield. JoinSet also aborts it on selection/account drop.
             let mut initial_page = tokio::task::JoinSet::new();
             let initial_timeline = timeline.clone();
-            if target.is_none() { initial_page.spawn(async move { initial_timeline.paginate_backwards(30).await }); }
-            let mut initial_pending = target.is_none();
+            // A reused timeline already holds its history.
+            let mut initial_pending = target.is_none() && !reused;
+            if initial_pending { initial_page.spawn(async move { initial_timeline.paginate_backwards(30).await }); }
             let (_typing_guard, mut typing) = room.subscribe_to_typing_notifications();
             let mut room_updates = room.subscribe_to_updates();
             let mut cache_updates = account.client.event_cache().subscribe_to_room_generic_updates();
@@ -857,6 +1000,33 @@ impl Account {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod recent_timeline_tests {
+    use super::RecentTimelines;
+
+    #[test]
+    fn recent_timelines_keep_the_most_recent_rooms() {
+        let recent = RecentTimelines::<u32>::default();
+        for room in 0..RecentTimelines::<u32>::LIMIT as u32 {
+            recent.insert(format!("room-{room}"), room);
+        }
+        // Reopening the oldest makes it the most recent, so the next new room
+        // evicts the one after it instead.
+        assert_eq!(recent.get("room-0"), Some(0));
+        recent.insert("room-new".into(), 99);
+        assert_eq!(recent.get("room-0"), Some(0));
+        assert_eq!(recent.get("room-1"), None);
+        assert_eq!(recent.get("room-new"), Some(99));
+        // Inserting a room again replaces its timeline without duplicating it.
+        recent.insert("room-new".into(), 100);
+        assert_eq!(recent.get("room-new"), Some(100));
+        assert_eq!(
+            recent.0.lock().unwrap().len(),
+            RecentTimelines::<u32>::LIMIT
+        );
     }
 }
 

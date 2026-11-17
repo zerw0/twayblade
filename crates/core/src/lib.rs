@@ -9,6 +9,7 @@ pub mod channels;
 pub mod conversation;
 pub mod directory;
 pub mod media;
+pub mod media_cache;
 pub mod notifications;
 pub mod presence;
 pub mod profile;
@@ -19,6 +20,7 @@ pub mod search;
 pub mod security;
 pub mod space_actions;
 pub mod spaces;
+pub mod stickers;
 
 use matrix_sdk::Client;
 use std::time::Duration;

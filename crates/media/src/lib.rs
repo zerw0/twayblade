@@ -7,6 +7,7 @@ pub mod playback;
 pub use playback::Playback;
 pub mod screen;
 mod transport;
+pub mod voice;
 use futures_util::StreamExt;
 use livekit::options::{TrackPublishOptions, VideoCodec};
 #[cfg(feature = "evidence")]

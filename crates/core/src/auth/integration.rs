@@ -302,6 +302,220 @@ async fn encrypted_delivery_profile_and_same_device_store_restore() {
         "PASS: application send queue, encrypted server event and decrypted recipient timeline"
     );
 
+    // Polls (#181) in the encrypted room: Alice asks, Bob votes, Alice sees
+    // the vote, ends the poll, and a late vote is refused.
+    checked(
+        conversation
+            .send_poll(crate::conversation::PollDraft {
+                question: "Isolated poll?".into(),
+                answers: vec!["Yes".into(), "No".into()],
+                disclosed: true,
+            })
+            .await,
+        "send poll",
+    );
+    let mut bob_polls = Box::pin(bob.conversation_updates(room_id.to_string(), 4));
+    let seen = wait_snapshot(
+        &mut bob_polls,
+        |s| {
+            s.messages.iter().any(|m| {
+                m.poll
+                    .as_ref()
+                    .is_some_and(|p| p.question == "Isolated poll?")
+            })
+        },
+        "poll reaches Bob",
+    )
+    .await;
+    let row = seen
+        .messages
+        .iter()
+        .find(|m| m.poll.is_some())
+        .expect("poll row");
+    let poll = row.poll.clone().expect("poll");
+    assert!(!poll.mine && !poll.ended && poll.answers.len() == 2 && poll.disclosed);
+    let bob_conversation = seen.conversation.clone().expect("Bob timeline");
+    checked(
+        bob_conversation
+            .vote_poll(&row.id, vec![poll.answers[0].id.clone()])
+            .await,
+        "Bob votes",
+    );
+    let mut alice_polls = Box::pin(alice.conversation_updates(room_id.to_string(), 5));
+    let voted = wait_snapshot(
+        &mut alice_polls,
+        |s| {
+            s.messages.iter().any(|m| {
+                m.poll
+                    .as_ref()
+                    .is_some_and(|p| p.mine && p.voters == 1 && p.answers[0].votes == 1)
+            })
+        },
+        "Alice sees Bob's vote",
+    )
+    .await;
+    let alice_row = voted
+        .messages
+        .iter()
+        .find(|m| m.poll.is_some())
+        .expect("Alice poll row")
+        .id
+        .clone();
+    let alice_conversation = voted.conversation.clone().expect("Alice timeline");
+    checked(alice_conversation.end_poll(&alice_row).await, "end poll");
+    let ended = wait_snapshot(
+        &mut bob_polls,
+        |s| {
+            s.messages.iter().any(|m| {
+                m.poll
+                    .as_ref()
+                    .is_some_and(|p| p.ended && p.answers[0].winner)
+            })
+        },
+        "Bob sees the ended poll",
+    )
+    .await;
+    let row = ended
+        .messages
+        .iter()
+        .find(|m| m.poll.is_some())
+        .expect("ended poll");
+    assert!(matches!(
+        bob_conversation
+            .vote_poll(&row.id, vec!["answer-1".into()])
+            .await,
+        Err(crate::conversation::ConversationError::InvalidPoll)
+    ));
+    drop(alice_polls);
+    drop(bob_polls);
+    eprintln!("PASS: encrypted poll create, vote, results and end");
+
+    // Stickers (#183): a personal pack in account data, sent into the
+    // encrypted room, shown to Bob as a sticker whose picture loads.
+    let png = include_bytes!("../../../app/assets/attachment-sample.png").to_vec();
+    let uploaded = checked(
+        alice
+            .client
+            .media()
+            .upload(&mime::IMAGE_PNG, png, None)
+            .await,
+        "upload sticker picture",
+    );
+    let pack = serde_json::json!({
+        "pack": {"display_name": "Isolated pack"},
+        "images": {"wave": {"url": uploaded.content_uri.to_string(), "body": "Waving", "info": {"mimetype": "image/png"}}}
+    });
+    checked(
+        alice
+            .client
+            .account()
+            .set_account_data_raw(
+                matrix_sdk::ruma::events::GlobalAccountDataEventType::from("im.ponies.user_emotes"),
+                checked(Raw::from_json_string(pack.to_string()), "pack JSON"),
+            )
+            .await,
+        "save sticker pack",
+    );
+    let packs = alice.sticker_packs(Some(room_id.as_str())).await;
+    assert!(
+        packs.len() == 1 && packs[0].name == "Isolated pack" && packs[0].stickers.len() == 1,
+        "sticker pack listed"
+    );
+    checked(
+        conversation
+            .send_sticker(&packs[0].stickers[0])
+            .await
+            .map_err(|e| e.to_string()),
+        "send sticker",
+    );
+    let mut bob_stickers = Box::pin(bob.conversation_updates(room_id.to_string(), 6));
+    let seen = wait_snapshot(
+        &mut bob_stickers,
+        |s| {
+            s.messages
+                .iter()
+                .any(|m| m.kind == crate::conversation::MessageKind::Sticker && m.body == "Waving")
+        },
+        "sticker reaches Bob",
+    )
+    .await;
+    let sticker_row = seen
+        .messages
+        .iter()
+        .find(|m| m.kind == crate::conversation::MessageKind::Sticker)
+        .expect("sticker row")
+        .id
+        .clone();
+    let (_cancel, cancel) = tokio::sync::watch::channel(false);
+    checked(
+        seen.conversation
+            .clone()
+            .expect("Bob timeline")
+            .attachment_preview(
+                &sticker_row,
+                crate::conversation::PreviewSize::Default,
+                true,
+                cancel,
+            )
+            .await,
+        "sticker picture",
+    );
+    drop(bob_stickers);
+    eprintln!("PASS: sticker pack, encrypted sticker send and picture");
+
+    // Voice messages (#184): a recorded clip (here a generated tone) sent as
+    // Ogg Opus with its outline; Bob sees the voice message and decodes it.
+    let tone: Vec<i16> = (0..twayblade_media::voice::RATE as usize * 2)
+        .map(|n| ((n as f32 / 48_000. * 440. * std::f32::consts::TAU).sin() * 8000.) as i16)
+        .collect();
+    let ogg = checked(twayblade_media::voice::encode_ogg(&tone), "encode voice");
+    checked(
+        conversation
+            .send_voice(
+                ogg,
+                Duration::from_secs(2),
+                twayblade_media::voice::waveform(&tone, 100),
+            )
+            .await,
+        "send voice message",
+    );
+    let mut bob_voice = Box::pin(bob.conversation_updates(room_id.to_string(), 7));
+    let seen = wait_snapshot(
+        &mut bob_voice,
+        |s| {
+            s.messages.iter().any(|m| {
+                m.kind == crate::conversation::MessageKind::Voice
+                    && m.voice
+                        .as_ref()
+                        .is_some_and(|v| v.duration_ms == 2000 && !v.waveform.is_empty())
+            })
+        },
+        "voice message reaches Bob",
+    )
+    .await;
+    let voice_row = seen
+        .messages
+        .iter()
+        .find(|m| m.kind == crate::conversation::MessageKind::Voice)
+        .expect("voice row")
+        .id
+        .clone();
+    let audio = checked(
+        seen.conversation
+            .clone()
+            .expect("Bob timeline")
+            .voice_audio(&voice_row)
+            .await,
+        "download voice message",
+    );
+    let pcm = checked(twayblade_media::voice::decode_ogg(&audio), "decode voice");
+    assert!(
+        pcm.len().abs_diff(tone.len()) <= 960,
+        "voice length survives"
+    );
+    drop(bob_voice);
+    eprintln!("PASS: encrypted voice message send, details and playback audio");
+
     let notification_identity = bob.notification_identity();
     let previous_instance = bob.instance_id();
     bob_sync.abort();
@@ -1242,6 +1456,7 @@ async fn pagination_preserves_message_identity() {
     let conversation = initial.conversation.expect("timeline");
     let mut count = initial.messages.len();
     let mut reached_start = false;
+    let mut history = 0;
     for _ in 0..10 {
         reached_start = checked(conversation.older().await, "SDK load earlier");
         let page = wait_snapshot(
@@ -1257,13 +1472,33 @@ async fn pagination_preserves_message_identity() {
         let unique: std::collections::HashSet<_> = page.messages.iter().map(|m| &m.id).collect();
         assert_eq!(unique.len(), page.messages.len());
         count = page.messages.len();
+        history = page
+            .messages
+            .iter()
+            .filter(|m| m.body.starts_with("sample history"))
+            .count();
         if reached_start {
             break;
         }
     }
+    // Rows also include room state (creation, membership); count messages.
     assert!(
-        reached_start && count == 90,
-        "Incomplete history pagination"
+        reached_start && history == 90,
+        "Incomplete history pagination: start {reached_start}, {history} of 90"
+    );
+    // Reopening the room (#173) reuses its live timeline: the first ready
+    // snapshot already holds the whole loaded history, with the same IDs.
+    drop(updates);
+    let mut reopened = Box::pin(account.conversation_updates(id.to_string(), 2));
+    let again = wait_snapshot(
+        &mut reopened,
+        |s| s.status == crate::conversation::TimelineStatus::Ready,
+        "reopened room",
+    )
+    .await;
+    assert!(
+        again.messages.len() == count && again.messages.iter().any(|m| m.id == latest),
+        "reopened room lost its loaded history"
     );
     checked(
         account.client.matrix_auth().logout().await,
@@ -2007,6 +2242,48 @@ async fn spaces_hierarchy_invites_creation_restricted_join_and_selective_leave()
     let alice_sync = sync(&alice);
     let bob_sync = sync(&bob);
 
+    // Creating a space: a public space room only admins post in.
+    let created = checked(
+        alice
+            .create_space(crate::space_actions::CreateSpace {
+                name: "Created space".into(),
+                topic: "Made by create_space".into(),
+                public: true,
+            })
+            .await,
+        "create space",
+    );
+    let created_id = checked(
+        matrix_sdk::ruma::OwnedRoomId::try_from(created.as_str()),
+        "space id",
+    );
+    wait_for_room(&alice, &created_id).await;
+    let created_room = checked(
+        alice.client.get_room(&created_id).ok_or("missing"),
+        "created space",
+    );
+    assert!(created_room.is_space(), "created room is a space");
+    // The creation state arrives with sync shortly after the room.
+    let mut public = false;
+    for _ in 0..50 {
+        public = created_room.join_rule()
+            == Some(matrix_sdk::ruma::events::room::join_rules::JoinRule::Public);
+        if public {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    assert!(public, "a public space is joinable by anyone");
+    let powers = checked(created_room.power_levels().await, "space power levels");
+    assert_eq!(i64::from(powers.events_default), 100);
+    assert!(
+        alice
+            .create_space(crate::space_actions::CreateSpace::default())
+            .await
+            .is_err(),
+        "a space needs a name"
+    );
+
     let mut request = create_room::v3::Request::new();
     request.name = Some("Isolated public space".into());
     request.preset = Some(create_room::v3::RoomPreset::PublicChat);
@@ -2242,6 +2519,26 @@ async fn spaces_hierarchy_invites_creation_restricted_join_and_selective_leave()
     assert!(
         page.rooms.iter().any(|r| r.id == encrypted && r.joined),
         "joined child missing"
+    );
+    // Space home: the space's own details and a subspace with its children.
+    assert!(
+        page.access == JoinAccess::Public && page.members >= 2,
+        "space home details"
+    );
+    assert!(
+        page.rooms
+            .iter()
+            .any(|r| r.id == nested_id.as_str() && r.space && r.children >= 1),
+        "subspace with its child count"
+    );
+    let nested_directory = checked(bob.directory(nested_id.as_str()).await, "open subspace");
+    let nested_page = checked(nested_directory.next_page().await, "subspace children");
+    assert!(
+        nested_page
+            .rooms
+            .iter()
+            .any(|r| r.id == encrypted && r.joined && r.members >= 2),
+        "subspace lists its joined child with members"
     );
     checked(
         bob.join_room_or_space(restricted.room_id().as_str(), vec![via.to_string()])

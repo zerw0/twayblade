@@ -3,7 +3,7 @@ members = ["crates/core", "crates/platform", "crates/app", "crates/media"]
 resolver = "3"
 
 [workspace.package]
-version = "0.1.1-rc.2"
+version = "0.1.1-rc.3"
 edition = "2024"
 rust-version = "1.99"
 publish = false
@@ -40,3 +40,4 @@ debug = 0
 libwebrtc = { path = "vendor/libwebrtc-0.4.0" }
 webrtc-sys = { path = "vendor/webrtc-sys-0.3.53" }
 gpui-component = { path = "vendor/gpui-component-0.9.1" }
+gpui-pre-macos = { path = "vendor/gpui-pre-macos-0.3.12" }

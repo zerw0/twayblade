@@ -218,11 +218,19 @@ impl Conversation {
     }
     pub(super) async fn media_source(&self, id: &str) -> Result<MediaSource, AttachmentError> {
         let items = self.timeline.items().await;
-        let message = items
+        let event = items
             .iter()
             .find(|item| item.unique_id().0 == id)
             .and_then(|item| item.as_event())
-            .and_then(|event| event.content().as_message())
+            .ok_or(AttachmentError::Unavailable)?;
+        if let matrix_sdk_ui::timeline::TimelineItemContent::MsgLike(content) = event.content()
+            && let matrix_sdk_ui::timeline::MsgLikeKind::Sticker(sticker) = &content.kind
+        {
+            return Ok(sticker.content().source.clone().into());
+        }
+        let message = event
+            .content()
+            .as_message()
             .ok_or(AttachmentError::Unavailable)?;
         match message.msgtype() {
             MessageType::Image(content) => Ok(content.source.clone()),
@@ -234,10 +242,66 @@ impl Conversation {
     }
     pub async fn attachment_thumbnail(&self, id: &str) -> Result<Arc<Vec<u8>>, AttachmentError> {
         let (_cancel, cancel) = tokio::sync::watch::channel(false);
-        self.attachment_preview(id, super::PreviewSize::Default, cancel)
+        self.attachment_preview(id, super::PreviewSize::Default, true, cancel)
             .await
             .map(|p| p.png)
             .map_err(|_| AttachmentError::Download)
+    }
+
+    /// A voice message's audio, decrypted in memory (#184).
+    pub async fn voice_audio(&self, id: &str) -> Result<Vec<u8>, AttachmentError> {
+        let source = self.media_source(id).await?;
+        self.timeline
+            .room()
+            .client()
+            .media()
+            .get_media_content(
+                &MediaRequestParameters {
+                    source,
+                    format: MediaFormat::File,
+                },
+                false,
+            )
+            .await
+            .map_err(|_| AttachmentError::Download)
+    }
+
+    /// Sends a recorded voice message (Ogg Opus) with its length and outline.
+    pub async fn send_voice(
+        &self,
+        ogg: Vec<u8>,
+        duration: std::time::Duration,
+        waveform: Vec<f32>,
+    ) -> Result<(), AttachmentError> {
+        self.ensure_text_channel()
+            .map_err(|_| AttachmentError::Unavailable)?;
+        let size = ogg.len() as u64;
+        let maximum = self.upload_limit().await?;
+        if size > maximum {
+            return Err(AttachmentError::Limit { maximum });
+        }
+        let config = matrix_sdk_ui::timeline::AttachmentConfig {
+            info: Some(AttachmentInfo::Voice(
+                matrix_sdk::attachment::BaseAudioInfo {
+                    duration: Some(duration),
+                    size: size.try_into().ok(),
+                    waveform: Some(waveform),
+                },
+            )),
+            ..Default::default()
+        };
+        self.timeline
+            .send_attachment(
+                matrix_sdk_ui::timeline::AttachmentSource::Data {
+                    bytes: ogg,
+                    filename: "Voice message.ogg".into(),
+                },
+                "audio/ogg".parse().map_err(|_| AttachmentError::File)?,
+                config,
+            )
+            .use_send_queue()
+            .await
+            .map_err(|_| AttachmentError::Upload)
     }
 
     pub async fn download_attachment(&self, id: &str, path: &Path) -> Result<(), AttachmentError> {
@@ -428,6 +492,7 @@ mod integration {
                 assert!(room.encryption_state().is_encrypted());
             }
             let conversation = Conversation {
+                media_cache: Default::default(),
                 read_updates: None,
                 root: None,
                 timeline: Arc::new(checked(room.timeline().await, "timeline")),
@@ -577,6 +642,7 @@ mod integration {
             restored.send_queue().set_enabled(true).await;
             let room = restored.get_room(&room_id).expect("restored room");
             let conversation = Conversation {
+                media_cache: Default::default(),
                 read_updates: None,
                 root: None,
                 timeline: Arc::new(checked(room.timeline().await, "restored timeline")),
@@ -672,6 +738,7 @@ mod integration {
                 Arc::new(std::sync::Mutex::new(())),
             );
             let conversation = Conversation {
+                media_cache: account.media_cache.clone(),
                 read_updates: None,
                 root: None,
                 timeline: Arc::new(checked(room.timeline().await, "timeline")),
@@ -755,7 +822,9 @@ mod integration {
                     ] {
                         let (_cancel, cancel) = tokio::sync::watch::channel(false);
                         let preview = checked(
-                            conversation.attachment_preview(&id, size, cancel).await,
+                            conversation
+                                .attachment_preview(&id, size, true, cancel)
+                                .await,
                             "timeline preview size",
                         );
                         assert!(preview.width <= size.pixels() && preview.height <= size.pixels());
@@ -781,6 +850,50 @@ mod integration {
                     client.media().remove_media_content(&request).await,
                     "clear upload cache before viewer",
                 );
+                if name == "preview-size.png" {
+                    // #174: with the cache off, a preview that may not use
+                    // the network is not downloaded.
+                    let preview = |network: bool| {
+                        let conversation = conversation.clone();
+                        let id = id.clone();
+                        async move {
+                            let (_cancel, cancel) = tokio::sync::watch::channel(false);
+                            conversation
+                                .attachment_preview(
+                                    &id,
+                                    super::super::PreviewSize::Default,
+                                    network,
+                                    cancel,
+                                )
+                                .await
+                        }
+                    };
+                    assert!(matches!(
+                        preview(false).await,
+                        Err(super::super::ImageError::NotDownloaded)
+                    ));
+                    // With the cache on, a download is kept (encrypted in the
+                    // store) and later served without the network.
+                    checked(
+                        account.set_media_cache_limit(Some(64 * 1024 * 1024)).await,
+                        "enable media cache",
+                    );
+                    checked(preview(true).await, "cached preview download");
+                    checked(preview(false).await, "preview from the cache only");
+                    assert!(
+                        checked(account.media_cache_size().await, "media cache size")
+                            .is_some_and(|size| size > 0)
+                    );
+                    checked(account.clear_media_cache().await, "clear media cache");
+                    assert!(matches!(
+                        preview(false).await,
+                        Err(super::super::ImageError::NotDownloaded)
+                    ));
+                    checked(
+                        account.set_media_cache_limit(None).await,
+                        "media cache off again",
+                    );
+                }
                 let gallery = checked(
                     account
                         .room_media(

@@ -304,73 +304,80 @@ impl MatrixApp {
                 .text_color(muted)
                 .child(text)
         };
-        let composer = v_flex()
-            .px(px(20.))
-            .pt(px(2.))
-            .pb(px(6.))
-            .gap(px(4.))
-            .children(notices.into_iter().enumerate().map(note))
-            .when(self.emoji_picker.is_some(), |view| {
-                view.child(motion::rise(
-                    div().child(self.emoji_panel(cx)),
-                    "emoji-picker-motion",
-                    self.snapshot.reduce_motion,
-                ))
-            })
-            .children(self.mention_panel(false, cx).map(|panel| {
-                motion::rise(
-                    div().child(panel),
-                    "mention-list-motion",
-                    self.snapshot.reduce_motion,
-                )
-            }))
-            .child(
-                div()
-                    .h(px(18.))
-                    .pl(px(4.))
-                    .text_size(px(11.))
-                    .text_color(muted)
-                    // Nobody typing: who has read up to the latest message.
-                    .when(typing.is_empty(), |line| line.children(self.seen_by_row()))
-                    .when(!typing.is_empty(), |line| {
-                        // Who is typing (avatars), a pulse, then the accessible text.
-                        let reduce = self.snapshot.reduce_motion;
-                        let typers: Vec<_> = self.snapshot.typing.iter().take(3).cloned().collect();
-                        line.child(motion::rise(
-                            h_flex()
-                                .gap(px(6.))
-                                .child(h_flex().children(typers.iter().enumerate().map(
-                                    |(index, user)| {
+        let composer =
+            v_flex()
+                .px(px(20.))
+                .pt(px(2.))
+                .pb(px(6.))
+                .gap(px(4.))
+                .children(notices.into_iter().enumerate().map(note))
+                .when(self.emoji_picker.is_some(), |view| {
+                    view.child(motion::rise(
+                        div().child(self.emoji_panel(cx)),
+                        "emoji-picker-motion",
+                        self.snapshot.reduce_motion,
+                    ))
+                })
+                .children(self.mention_panel(false, cx).map(|panel| {
+                    motion::rise(
+                        div().child(panel),
+                        "mention-list-motion",
+                        self.snapshot.reduce_motion,
+                    )
+                }))
+                .child(
+                    div()
+                        .h(px(18.))
+                        .pl(px(4.))
+                        .text_size(px(11.))
+                        .text_color(muted)
+                        // Nobody typing: who has read up to the latest message.
+                        .when(typing.is_empty(), |line| line.children(self.seen_by_row()))
+                        .when(!typing.is_empty(), |line| {
+                            // Who is typing (avatars), a pulse, then the accessible text.
+                            let reduce = self.snapshot.reduce_motion;
+                            let typers: Vec<_> =
+                                self.snapshot.typing.iter().take(3).cloned().collect();
+                            line.child(motion::rise(
+                                h_flex()
+                                    .gap(px(6.))
+                                    .child(h_flex().children(typers.iter().enumerate().map(
+                                        |(index, user)| {
+                                            div()
+                                                .when(index > 0, |avatar| avatar.ml(px(-4.)))
+                                                .rounded_full()
+                                                .border_1()
+                                                .border_color(cx.theme().background)
+                                                .child(self.avatar_image(
+                                                    user.avatar.as_deref(),
+                                                    &user.user_id,
+                                                    &user.name,
+                                                    14.,
+                                                    7.,
+                                                    cx,
+                                                ))
+                                        },
+                                    )))
+                                    .child(motion::typing_dots(muted, reduce))
+                                    .child(
                                         div()
-                                            .when(index > 0, |avatar| avatar.ml(px(-4.)))
-                                            .rounded_full()
-                                            .border_1()
-                                            .border_color(cx.theme().background)
-                                            .child(self.avatar_image(
-                                                user.avatar.as_deref(),
-                                                &user.user_id,
-                                                &user.name,
-                                                14.,
-                                                7.,
-                                                cx,
-                                            ))
-                                    },
-                                )))
-                                .child(motion::typing_dots(muted, reduce))
-                                .child(
-                                    div()
-                                        .id("typing-notice")
-                                        .child(typing.clone())
-                                        .test_support(),
-                                ),
-                            "typing-row",
-                            reduce,
-                        ))
-                    }),
-            )
-            // Reserve action width beside the growing field so text wraps
-            // before the buttons rather than underneath them.
-            .child(
+                                            .id("typing-notice")
+                                            .child(typing.clone())
+                                            .test_support(),
+                                    ),
+                                "typing-row",
+                                reduce,
+                            ))
+                        }),
+                )
+                // While a voice message records, its bar takes the composer's place.
+                .when(self.voice_recorder.is_some(), |view| {
+                    view.child(self.voice_recording_bar(cx))
+                })
+                // Reserve action width beside the growing field so text wraps
+                // before the buttons rather than underneath them.
+                .when(self.voice_recorder.is_none(), |view| {
+                    view.child(
                 v_flex()
                     .rounded(px(9.))
                     .border_1()
@@ -466,6 +473,7 @@ impl MatrixApp {
                                     .h(px(42.))
                                     .pr(px(6.))
                                     .gap(px(2.))
+                                    .child(self.composer_more_menu(editable, cx))
                                     .child(
                                         Button::new("attach-file")
                                             .ghost()
@@ -525,7 +533,8 @@ impl MatrixApp {
                                     ),
                             ),
                     ),
-            );
+            )
+                });
 
         v_flex()
             .flex_1()

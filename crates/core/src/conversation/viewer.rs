@@ -35,6 +35,9 @@ pub enum ImageError {
     Cancelled,
     #[error("image_save")]
     Save,
+    /// Not in the cache, and automatic download is off (#174).
+    #[error("image_not_downloaded")]
+    NotDownloaded,
 }
 pub struct ViewerImage {
     pub filename: String,
@@ -205,7 +208,7 @@ impl Conversation {
         };
         let bytes = tokio::select! {
             _ = cancel.changed() => return Err(ImageError::Cancelled),
-            result = tokio::time::timeout(std::time::Duration::from_secs(30),media.get_media_content(&request,false)) => result.map_err(|_| ImageError::Download)?.map_err(|_| ImageError::Download)?,
+            result = tokio::time::timeout(std::time::Duration::from_secs(30),media.get_media_content(&request,self.media_cache.load(std::sync::atomic::Ordering::Relaxed))) => result.map_err(|_| ImageError::Download)?.map_err(|_| ImageError::Download)?,
         };
         decode_viewer_bytes(bytes, filename, cancel).await
     }

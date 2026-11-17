@@ -19,6 +19,8 @@ pub(super) struct Cache {
     entries: HashMap<Key, TimelinePreview>,
     order: VecDeque<Key>,
     pixels: u64,
+    /// Images left undownloaded because automatic download is off (#174).
+    not_downloaded: std::collections::HashSet<String>,
 }
 impl Cache {
     fn get(&mut self, key: &Key) -> Option<&TimelinePreview> {
@@ -64,6 +66,8 @@ impl Cache {
                     .entries
                     .get(&(message.id.clone(), size))
                     .map(|p| p.png.clone());
+                attachment.download_needed =
+                    attachment.preview_png.is_none() && self.not_downloaded.contains(&message.id);
             }
         }
         view.preview_size = size;
@@ -76,6 +80,11 @@ pub(super) struct Previews {
     main: Vec<String>,
     thread: Vec<String>,
     plan: Vec<(Option<String>, String)>,
+    /// Automatic download choice and the connection's metering (#174).
+    pub(super) auto_download: crate::preferences::AutoDownload,
+    pub(super) metered: Option<bool>,
+    /// Images the person asked to load although automatic download is off.
+    requested: std::collections::HashSet<String>,
     request: u64,
     task: Option<JoinHandle<()>>,
     cancel: Option<watch::Sender<bool>>,
@@ -91,9 +100,15 @@ impl Previews {
         self.request = self.request.wrapping_add(1);
         self.plan.clear();
     }
+    /// Forget the current plan so the next schedule re-plans what is on
+    /// screen, for example after the connection's metering changes.
+    pub(super) fn invalidate_plan(&mut self) {
+        self.invalidate();
+    }
     fn clear(&mut self) {
         self.invalidate();
         self.cache = Cache::default();
+        self.requested.clear();
         self.main.clear();
         self.thread.clear();
     }
@@ -127,6 +142,35 @@ impl Backend {
         publish(&self.updates, |view| {
             state.previews.cache.project(view, size)
         });
+        self.schedule_previews(&mut state);
+        Ok(())
+    }
+    /// Applies the automatic download choice (#174) and fetches what it now
+    /// allows on screen.
+    pub(crate) fn apply_auto_download(
+        &self,
+        auto: crate::preferences::AutoDownload,
+    ) -> Result<(), ServiceError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?;
+        if state.previews.auto_download != auto {
+            state.previews.auto_download = auto;
+            state.previews.invalidate();
+            self.schedule_previews(&mut state);
+        }
+        Ok(())
+    }
+    /// Loads one image the person asked for while automatic download is off.
+    pub(crate) fn load_preview(&self, id: String) -> Result<(), ServiceError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?;
+        state.previews.cache.not_downloaded.remove(&id);
+        state.previews.requested.insert(id);
+        state.previews.invalidate();
         self.schedule_previews(&mut state);
         Ok(())
     }
@@ -213,7 +257,7 @@ pub(super) fn schedule(
         for id in visible {
             if messages
                 .iter()
-                .any(|m| m.id == *id && m.kind == MessageKind::Image)
+                .any(|m| m.id == *id && matches!(m.kind, MessageKind::Image | MessageKind::Sticker))
                 && !conversations.contains_key(id)
             {
                 plan.push((root.clone(), id.clone()));
@@ -243,6 +287,8 @@ pub(super) fn schedule(
     if pending.is_empty() {
         return;
     }
+    let auto = state.previews.auto_download.allows(state.previews.metered);
+    let requested = state.previews.requested.clone();
     let request = state.previews.request;
     let epoch = state.epoch;
     let selection = state.selection;
@@ -259,16 +305,28 @@ pub(super) fn schedule(
                 && let Some((id, conversation)) = pending.pop_front()
             {
                 let cancel = receiver.clone();
+                let network = auto || requested.contains(&id);
                 work.spawn(async move {
-                    let result = conversation.attachment_preview(&id, size, cancel).await;
+                    let result = conversation
+                        .attachment_preview(&id, size, network, cancel)
+                        .await;
                     (id, result)
                 });
             }
             let Some(completed) = work.join_next().await else {
                 return;
             };
-            let Ok((id, Ok(preview))) = completed else {
+            let Ok((id, result)) = completed else {
                 continue;
+            };
+            let missing = matches!(
+                result,
+                Err(twayblade_core::conversation::ImageError::NotDownloaded)
+            );
+            let preview = match result {
+                Ok(preview) => Some(preview),
+                Err(_) if missing => None,
+                Err(_) => continue,
             };
             let Ok(mut state) = shared.lock() else {
                 return;
@@ -281,7 +339,15 @@ pub(super) fn schedule(
             {
                 return;
             }
-            state.previews.cache.insert((id, size), preview);
+            match preview {
+                Some(preview) => {
+                    state.previews.cache.not_downloaded.remove(&id);
+                    state.previews.cache.insert((id, size), preview);
+                }
+                None => {
+                    state.previews.cache.not_downloaded.insert(id);
+                }
+            }
             publish(&updates, |view| state.previews.cache.project(view, size));
         }
     }));
@@ -325,6 +391,28 @@ mod tests {
                 .entries
                 .contains_key(&("oversize".into(), PreviewSize::Large))
         );
+    }
+    #[test]
+    fn undownloaded_images_are_marked_until_a_preview_arrives() {
+        let mut cache = Cache::default();
+        cache.not_downloaded.insert("held".into());
+        let row = Message {
+            id: "held".into(),
+            kind: MessageKind::Image,
+            attachment: Some(Attachment::default()),
+            ..Default::default()
+        };
+        let mut view = Snapshot {
+            messages: vec![row],
+            ..Default::default()
+        };
+        cache.project(&mut view, PreviewSize::Default);
+        let attachment = view.messages[0].attachment.as_ref().unwrap();
+        assert!(attachment.download_needed);
+        cache.insert(("held".into(), PreviewSize::Default), image(4, 4));
+        cache.project(&mut view, PreviewSize::Default);
+        let attachment = view.messages[0].attachment.as_ref().unwrap();
+        assert!(!attachment.download_needed && attachment.preview_png.is_some());
     }
     #[test]
     fn tiny_images_cannot_grow_cache_metadata_without_bound() {

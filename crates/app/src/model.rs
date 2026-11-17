@@ -323,6 +323,7 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
             message.kind = MessageKind::Image;
             message.attachment = Some(Attachment {
                 preview_png: None,
+                download_needed: false,
                 filename: "sample-mockup.png".into(),
                 size: Some(245_760),
             });
@@ -331,6 +332,7 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
             message.kind = MessageKind::File;
             message.attachment = Some(Attachment {
                 preview_png: None,
+                download_needed: false,
                 filename: "sample-notes.pdf".into(),
                 size: Some(1_048_576),
             });

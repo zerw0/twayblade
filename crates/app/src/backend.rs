@@ -219,6 +219,8 @@ struct State {
     /// Rooms whose ring was declined or dismissed here, until it ends.
     handled_rings: std::collections::HashSet<String>,
     activity_task: Option<JoinHandle<()>>,
+    /// Media kept on this device, in bytes (#174); `None` keeps it in memory.
+    media_cache_limit: Option<u64>,
 }
 
 impl State {
@@ -301,6 +303,7 @@ pub(super) struct Backend {
     motion_task: JoinHandle<()>,
     update_task: JoinHandle<()>,
     network_task: JoinHandle<()>,
+    metered_task: JoinHandle<()>,
     update_config: watch::Sender<twayblade_platform::updates::Preferences>,
     runtime: Runtime,
     state: Arc<Mutex<State>>,
@@ -372,6 +375,7 @@ pub(super) enum SpaceAction {
     Leave(String, std::collections::HashSet<String>),
     Create(twayblade_core::space_actions::CreateRoom),
     CreateVoice(twayblade_core::space_actions::CreateRoom),
+    CreateSpace(twayblade_core::space_actions::CreateSpace),
     Dm(String),
     InviteMember(String, String),
     LeaveRoom(String),
@@ -431,10 +435,36 @@ pub(super) enum SecurityOutcome {
 }
 
 pub(super) enum TimelineAction {
-    React { message: String, key: String },
-    Retry { message: String },
-    Cancel { message: String },
-    Read { event_id: String },
+    React {
+        message: String,
+        key: String,
+    },
+    /// Polls (#181): create one, vote, or end one this account started.
+    SendPoll(twayblade_core::conversation::PollDraft),
+    /// Stickers (#183).
+    SendSticker(twayblade_core::stickers::Sticker),
+    /// A recorded voice message (#184).
+    SendVoice {
+        ogg: Vec<u8>,
+        duration: std::time::Duration,
+        waveform: Vec<f32>,
+    },
+    Vote {
+        message: String,
+        answer: String,
+    },
+    EndPoll {
+        message: String,
+    },
+    Retry {
+        message: String,
+    },
+    Cancel {
+        message: String,
+    },
+    Read {
+        event_id: String,
+    },
 }
 
 pub(super) const LOADING_STATUS: &str = "Loading messages…";
@@ -549,6 +579,9 @@ fn conversation_failure(error: ConversationError) -> ServiceError {
         ConversationError::Retry => "The message could not be retried. Try again.",
         ConversationError::Cancel => "The failed message could not be cancelled. Try again.",
         ConversationError::Receipt => "The read marker could not be updated.",
+        ConversationError::InvalidPoll => {
+            "Add a question and at least two answers. Ended polls take no more votes."
+        }
     })
 }
 
@@ -599,21 +632,81 @@ impl Backend {
                 publish(&network_snapshots, |view| view.no_network = !available);
             }
         }));
+        // Metered connections pause automatic image downloads (#174).
+        let state = Arc::new(Mutex::new(State::default()));
+        let metered_state = state.clone();
+        let metered_updates = updates.clone();
+        let metered_task =
+            runtime.spawn(twayblade_platform::network::run_metered(move |metered| {
+                let Ok(mut state) = metered_state.lock() else {
+                    return;
+                };
+                state.previews.metered = metered;
+                state.previews.invalidate_plan();
+                previews::schedule(
+                    &tokio::runtime::Handle::current(),
+                    &metered_state,
+                    &metered_updates,
+                    &mut state,
+                );
+            }));
         Ok(Arc::new(Self {
             _instance: instance,
             network_task,
+            metered_task,
             motion_task,
             update_task,
             update_config,
             runtime,
             updates,
             notification_config: watch::channel(NotificationConfig::default()).0,
-            state: Arc::new(Mutex::new(State::default())),
+            state,
             lifecycle: Mutex::new(()),
             oauth: Mutex::new(None),
             update_download: Mutex::new(None),
             inactive: Default::default(),
         }))
+    }
+
+    /// Keeps up to `limit` bytes of media on this device (#174), or none.
+    pub(super) fn set_media_cache(&self, limit: Option<u64>) -> Result<(), ServiceError> {
+        let account = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| failure("Session is unavailable."))?;
+            state.media_cache_limit = limit;
+            state.account.clone()
+        };
+        if let Some(account) = account {
+            self.runtime
+                .block_on(account.set_media_cache_limit(limit))
+                .map_err(|_| failure("The media cache could not be changed."))?;
+        }
+        Ok(())
+    }
+
+    /// Bytes the media cache takes on disk, when known.
+    pub(super) fn media_cache_size(&self) -> Option<u64> {
+        let account = self.state.lock().ok()?.account.clone()?;
+        self.runtime
+            .block_on(account.media_cache_size())
+            .ok()
+            .flatten()
+    }
+
+    /// Removes all cached media of the open account.
+    pub(super) fn clear_media_cache(&self) -> Result<(), ServiceError> {
+        let account = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?
+            .account
+            .clone()
+            .ok_or_else(|| failure("No account is open."))?;
+        self.runtime
+            .block_on(account.clear_media_cache())
+            .map_err(|_| failure("The media cache could not be cleared."))
     }
 
     /// Downloads the available release's installer for this machine and checks
@@ -1353,11 +1446,51 @@ impl Backend {
                         }
                         TimelineAction::Retry { message } => conversation.retry(&message).await,
                         TimelineAction::Cancel { message } => conversation.cancel(&message).await,
+                        TimelineAction::SendPoll(draft) => conversation.send_poll(draft).await,
+                        TimelineAction::Vote { message, answer } => {
+                            conversation.vote_poll(&message, vec![answer]).await
+                        }
+                        TimelineAction::EndPoll { message } => {
+                            conversation.end_poll(&message).await
+                        }
+                        TimelineAction::SendSticker(sticker) => conversation
+                            .send_sticker(&sticker)
+                            .await
+                            .map_err(|_| twayblade_core::conversation::ConversationError::Queue),
+                        TimelineAction::SendVoice {
+                            ogg,
+                            duration,
+                            waveform,
+                        } => conversation
+                            .send_voice(ogg, duration, waveform)
+                            .await
+                            .map_err(|_| twayblade_core::conversation::ConversationError::Queue),
                     }
                     .map(|_| false),
                 }
             })
             .map_err(conversation_failure)
+    }
+
+    /// The first page of a subspace's rooms, for expanding it on the space
+    /// home. Independent of the open directory and its pagination.
+    pub(super) fn space_children(
+        &self,
+        expected: u128,
+        id: String,
+    ) -> Result<twayblade_core::space_actions::DirectorySnapshot, ServiceError> {
+        let account = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session unavailable."))?
+            .account
+            .clone()
+            .filter(|a| a.instance_id() == expected)
+            .ok_or_else(|| failure("Account changed."))?;
+        self.runtime.block_on(async {
+            let directory = account.directory(&id).await.map_err(space_failure)?;
+            directory.next_page().await.map_err(space_failure)
+        })
     }
 
     pub(super) fn space_action(
@@ -1486,6 +1619,11 @@ impl Backend {
                     }
                     Err(e) => Err(space_failure(e)),
                 },
+                CreateSpace(draft) => account
+                    .create_space(draft)
+                    .await
+                    .map(SpaceOutcome::Room)
+                    .map_err(space_failure),
                 Dm(id) => account
                     .start_dm(&id)
                     .await
@@ -1611,6 +1749,66 @@ impl Backend {
         self.runtime
             .block_on(account.avatar_thumbnail(mxc, size))
             .map_err(|_| failure("Avatar unavailable."))
+    }
+
+    pub(super) fn sticker_picture(&self, mxc: String, size: u32) -> Result<Vec<u8>, ServiceError> {
+        let account = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?
+            .account
+            .clone()
+            .ok_or_else(|| failure("Sign in first."))?;
+        self.runtime
+            .block_on(account.sticker_thumbnail(mxc, size))
+            .map_err(|_| failure("Sticker unavailable."))
+    }
+
+    /// A voice message's audio as 48 kHz mono PCM (#184).
+    pub(super) fn voice_audio(
+        &self,
+        room_id: String,
+        expected_account: u128,
+        message: String,
+    ) -> Result<Vec<i16>, ServiceError> {
+        let conversation = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| failure("Session is unavailable."))?;
+            if state.account.as_ref().map(Account::instance_id) != Some(expected_account)
+                || self.updates.borrow().selected_room != room_id
+            {
+                return Err(failure("Conversation changed."));
+            }
+            state
+                .conversation
+                .clone()
+                .ok_or_else(|| failure("Conversation is still loading."))?
+        };
+        let ogg = self
+            .runtime
+            .block_on(conversation.voice_audio(&message))
+            .map_err(|_| failure("The voice message could not be downloaded."))?;
+        twayblade_media::voice::decode_ogg(&ogg)
+            .map_err(|_| failure("This voice message cannot be played."))
+    }
+
+    /// Sticker packs for the picker (#183), for the open room.
+    pub(super) fn sticker_packs(
+        &self,
+        room: Option<String>,
+    ) -> Result<Vec<twayblade_core::stickers::StickerPack>, ServiceError> {
+        let account = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?
+            .account
+            .clone()
+            .ok_or_else(|| failure("Sign in first."))?;
+        Ok(self
+            .runtime
+            .block_on(account.sticker_packs(room.as_deref())))
     }
 
     pub(super) fn own_avatar_url(&self) -> Option<String> {
@@ -1946,6 +2144,23 @@ impl Backend {
                     TimelineAction::Retry { message } => conversation.retry(&message).await,
                     TimelineAction::Cancel { message } => conversation.cancel(&message).await,
                     TimelineAction::Read { event_id } => conversation.mark_read(&event_id).await,
+                    TimelineAction::SendPoll(draft) => conversation.send_poll(draft).await,
+                    TimelineAction::Vote { message, answer } => {
+                        conversation.vote_poll(&message, vec![answer]).await
+                    }
+                    TimelineAction::EndPoll { message } => conversation.end_poll(&message).await,
+                    TimelineAction::SendSticker(sticker) => conversation
+                        .send_sticker(&sticker)
+                        .await
+                        .map_err(|_| twayblade_core::conversation::ConversationError::Queue),
+                    TimelineAction::SendVoice {
+                        ogg,
+                        duration,
+                        waveform,
+                    } => conversation
+                        .send_voice(ogg, duration, waveform)
+                        .await
+                        .map_err(|_| twayblade_core::conversation::ConversationError::Queue),
                 }
             })
             .map_err(conversation_failure)
@@ -2040,6 +2255,13 @@ impl Backend {
         state.stop();
         state.account = Some(account.clone());
         state.security = Some(security);
+        let limit = state.media_cache_limit;
+        let cached = account.clone();
+        state.tasks.push(self.runtime.spawn(async move {
+            if cached.set_media_cache_limit(limit).await.is_err() {
+                tracing::warn!(name: "media_cache_limit", applied = false);
+            }
+        }));
         let epoch = state.epoch;
         publish(&self.updates, |snapshot| {
             snapshot.clear_account(state.previews.size);
@@ -2217,6 +2439,7 @@ impl Drop for Backend {
         self.motion_task.abort();
         self.update_task.abort();
         self.network_task.abort();
+        self.metered_task.abort();
         let state = match self.state.lock() {
             Ok(mut state) => {
                 state.stop();

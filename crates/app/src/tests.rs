@@ -739,6 +739,204 @@ fn recovery_input_is_cleared_when_leaving_the_screen(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn an_image_held_back_by_data_saving_offers_load_image(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    let id = cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            let message = app.snapshot.messages.last_mut().expect("sample message");
+            message.kind = crate::backend::MessageKind::Image;
+            message.event_id = Some("$held".into());
+            message.attachment = Some(twayblade_core::conversation::Attachment {
+                filename: "held.png".into(),
+                size: Some(2048),
+                preview_png: None,
+                download_needed: true,
+            });
+            let id = message.id.clone();
+            cx.notify();
+            id
+        })
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let button = window.find(gpui_kit::SharedString::from(format!("image-{id}")));
+        assert!(button.visible());
+        use gpui_kit::test::TestQueryExt;
+        assert!(window.find_by_label("Load image held.png").visible());
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn polls_show_results_after_voting_and_create_poll_needs_two_answers(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestQueryExt;
+    let (window, app) = preview_window(cx);
+    let (open, ended) = cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            let own = app.snapshot.user_id.clone();
+            crate::ui::polls::sample_polls(&mut app.snapshot.messages, &own);
+            let len = app.snapshot.messages.len();
+            cx.notify();
+            (
+                app.snapshot.messages[len - 2].id.clone(),
+                app.snapshot.messages[len - 1].id.clone(),
+            )
+        })
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        // Your own open poll offers End Poll; the ended one takes no votes.
+        assert!(
+            window
+                .find(gpui_kit::SharedString::from(format!("poll-end-{open}")))
+                .visible()
+        );
+        assert!(
+            window
+                .try_find(gpui_kit::SharedString::from(format!("poll-end-{ended}")))
+                .is_none()
+        );
+        // Ended: plain rows with the final counts, no vote buttons.
+        assert!(window.find_by_label("Twayblade 1.0, 6 votes").visible());
+        assert!(window.find_by_label("Lisbon, 5 votes, your vote").visible());
+        // Create Poll from the composer's ＋ menu.
+        app.update(cx, |app, cx| app.open_create_poll(window, cx));
+        window.render_frame(cx);
+        assert_eq!(window.find("poll-create").disabled(), Some(true));
+        window.click("poll-add-answer", cx);
+        window.render_frame(cx);
+    })
+    .unwrap();
+    cx.update(|cx| {
+        let page = app.read(cx).management.as_ref().expect("Create Poll");
+        assert!(matches!(
+            page.kind,
+            crate::ui::spaces::ManageKind::CreatePoll(_)
+        ));
+        assert_eq!(page.poll_answers.len(), 3);
+        assert!(page.poll_disclosed);
+    });
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            let page = app.management.as_ref().unwrap();
+            let question = page.name.clone();
+            let answers = page.poll_answers.clone();
+            question.update(cx, |s, cx| s.set_value("Lunch?", window, cx));
+            answers[0].update(cx, |s, cx| s.set_value("Pizza", window, cx));
+            answers[1].update(cx, |s, cx| s.set_value("Soup", window, cx));
+        });
+        window.render_frame(cx);
+        // The empty third answer can go; two must stay.
+        window.click(("poll-remove-answer", 2usize), cx);
+        window.render_frame(cx);
+        assert!(window.try_find(("poll-remove-answer", 0usize)).is_none());
+    })
+    .unwrap();
+    cx.update(|cx| {
+        let app = app.read(cx);
+        let page = app.management.as_ref().unwrap();
+        assert_eq!(page.poll_answers.len(), 2);
+        assert_eq!(page.poll_answers[1].read(cx).value().as_str(), "Soup");
+    });
+}
+
+#[gpui_kit::test]
+fn sticker_picker_lists_packs_and_stickers_render_without_a_bubble(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    let id = cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            let message = app.snapshot.messages.last_mut().expect("sample message");
+            message.kind = crate::backend::MessageKind::Sticker;
+            message.body = "Waving cat".into();
+            message.rich = None;
+            message.attachment = Some(twayblade_core::conversation::Attachment {
+                filename: "Waving cat".into(),
+                ..Default::default()
+            });
+            cx.notify();
+            message.id.clone()
+        })
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window
+                .find(gpui_kit::SharedString::from(format!("message-row-{id}")))
+                .visible()
+        );
+        app.update(cx, |app, cx| app.open_sticker_picker(window, cx));
+        window.render_frame(cx);
+        // Packs by name; the offline preview never sends.
+        assert_eq!(window.find("sticker-user-wave").disabled(), Some(true));
+        assert!(window.find("sticker-!design/-lgtm").visible());
+    })
+    .unwrap();
+    cx.update(|cx| {
+        let app = app.read(cx);
+        let page = app.management.as_ref().expect("picker");
+        assert!(matches!(
+            page.kind,
+            crate::ui::spaces::ManageKind::Stickers(_)
+        ));
+        assert_eq!(page.sticker_packs.as_ref().map(Vec::len), Some(2));
+    });
+}
+
+#[gpui_kit::test]
+fn voice_messages_show_a_play_button_and_their_length(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    let id = cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            let message = app.snapshot.messages.last_mut().expect("sample message");
+            message.kind = crate::backend::MessageKind::Voice;
+            message.rich = None;
+            message.voice = Some(twayblade_core::conversation::Voice {
+                duration_ms: 75_000,
+                waveform: vec![0.2, 0.9, 0.4],
+            });
+            cx.notify();
+            message.id.clone()
+        })
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let play = window.find(gpui_kit::SharedString::from(format!("voice-play-{id}")));
+        assert!(play.visible());
+        // The offline preview has no audio to play.
+        assert_eq!(play.disabled(), Some(true));
+        // Nothing records until the menu item is chosen.
+        assert!(window.try_find("voice-recording").is_none());
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn message_actions_exist_only_for_the_hovered_or_focused_message(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        // At rest no message exposes its action buttons (#156).
+        assert!(window.try_find("add-reaction-sample-0").is_none());
+        assert!(window.try_find("reply-to-sample-1").is_none());
+        window.hover("message-line-sample-0", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("add-reaction-sample-0").is_some());
+        assert!(window.try_find("add-reaction-sample-1").is_none());
+        // Keyboard: the focused message shows its actions too.
+        app.update(cx, |app, cx| {
+            app.hovered_message = None;
+            app.set_message_cursor(false, "sample-1".into(), cx);
+            app.message_focus(false, "sample-1", cx).focus(window, cx);
+        });
+        window.render_frame(cx);
+        window.render_frame(cx);
+        assert!(window.try_find("add-reaction-sample-1").is_some());
+        assert!(window.try_find("add-reaction-sample-0").is_none());
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
 fn attachment_controls_require_an_explicit_action_and_samples_cannot_upload(
     cx: &mut TestAppContext,
 ) {
@@ -752,6 +950,7 @@ fn attachment_controls_require_an_explicit_action_and_samples_cannot_upload(
                 filename: "report.pdf".into(),
                 size: Some(2048),
                 preview_png: None,
+                download_needed: false,
             });
             let id = message.id.clone();
             cx.notify();
@@ -922,6 +1121,12 @@ fn shortcode_skin_tone_and_reaction_share_the_picker(cx: &mut TestAppContext) {
     .expect("shortcode replacement");
     let id = cx.update(|cx| app.read(cx).snapshot.messages.last().unwrap().id.clone());
     cx.update_window(window, |_, window, cx| {
+        // Message actions appear for the message under the pointer.
+        window.hover(
+            gpui_kit::SharedString::from(format!("message-line-{id}")),
+            cx,
+        );
+        window.render_frame(cx);
         window.click(
             gpui_kit::SharedString::from(format!("add-reaction-{id}")),
             cx,
@@ -1336,7 +1541,7 @@ fn space_context_menu_opens_directory_with_access_states(cx: &mut TestAppContext
     cx.run_until_parked();
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
-        let point = window.find_by_label("Browse rooms").bounds().center();
+        let point = window.find_by_label("Space Home").bounds().center();
         window.pointer_move(point, None, cx);
         window.pointer_down(point, gpui_kit::MouseButton::Left, cx);
         window.pointer_up(point, gpui_kit::MouseButton::Left, cx);
@@ -1690,6 +1895,117 @@ fn viewer_pinch_double_click_pan_outside_click_and_stale_loads(cx: &mut TestAppC
 }
 
 #[gpui_kit::test]
+fn room_rows_track_the_hovered_row_and_the_one_it_left(cx: &mut TestAppContext) {
+    let (main_window, app) = preview_window(cx);
+    cx.update_window(main_window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("home", cx);
+        window.hover("room-notes", cx);
+    })
+    .unwrap();
+    cx.update(|cx| assert_eq!(app.read(cx).hovered_room.as_deref(), Some("notes")));
+    cx.update_window(main_window, |_, window, cx| {
+        window.render_frame(cx);
+        window.hover("room-alex", cx);
+    })
+    .unwrap();
+    cx.update(|cx| {
+        let app = app.read(cx);
+        // Only these two rows paint a fill: one fading in, one fading out.
+        assert_eq!(app.hovered_room.as_deref(), Some("alex"));
+        assert_eq!(app.unhovered_room.as_deref(), Some("notes"));
+    });
+}
+
+#[gpui_kit::test]
+fn space_home_opens_from_the_space_name_and_expands_and_searches_subspaces(
+    cx: &mut TestAppContext,
+) {
+    let (main_window, app) = preview_window(cx);
+    cx.update_window(main_window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("space-design", cx);
+        window.render_frame(cx);
+        window.click("open-space-home", cx);
+        window.render_frame(cx);
+        // Header and the top level of the tree; the subspace starts closed.
+        assert!(window.try_find("space-home-name").is_some());
+        assert!(window.try_find("space-home-invite").is_some());
+        assert!(window.try_find("space-row-sample-research").is_some());
+        assert!(window.try_find("space-row-sample-roadmap").is_none());
+        window.click("space-toggle-sample-nested", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("space-row-sample-roadmap").is_some());
+        assert!(window.try_find("join-sample-feedback").is_some());
+        // A dialog opened from the space home returns to it when closed.
+        app.update(cx, |app, cx| {
+            app.open_management(
+                crate::ui::spaces::ManageKind::InviteMember("design".into()),
+                window,
+                cx,
+            )
+        });
+        window.render_frame(cx);
+        window.click("close-management", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("space-row-sample-roadmap").is_some());
+    })
+    .unwrap();
+    cx.update(|cx| {
+        assert!(matches!(
+            app.read(cx).management.as_ref().map(|m| &m.kind),
+            Some(crate::ui::spaces::ManageKind::Directory(id)) if id == "design"
+        ))
+    });
+    // Searching keeps matches from loaded subspaces and their parents.
+    cx.update_window(main_window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            let input = app.management.as_ref().unwrap().name.clone();
+            input.update(cx, |state, cx| state.set_value("feedback", window, cx));
+        });
+        window.render_frame(cx);
+        assert!(window.try_find("space-row-sample-feedback").is_some());
+        assert!(window.try_find("space-row-sample-nested").is_some());
+        assert!(window.try_find("space-row-sample-research").is_none());
+        app.update(cx, |app, cx| {
+            let input = app.management.as_ref().unwrap().name.clone();
+            input.update(cx, |state, cx| {
+                state.set_value("nothing like this", window, cx)
+            });
+        });
+        window.render_frame(cx);
+        assert!(window.try_find("space-home-status").is_some());
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn command_w_closes_settings_unless_a_recovery_key_is_shown(cx: &mut TestAppContext) {
+    let (main_window, app) = preview_window(cx);
+    cx.update_window(main_window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("open-settings", cx);
+        window.render_frame(cx);
+    })
+    .unwrap();
+    let handle = cx.update(|cx| app.read(cx).settings.as_ref().unwrap().0);
+    // A new recovery key keeps Settings open.
+    cx.update(|cx| app.update(cx, |app, _| app.security_key = Some(Default::default())));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.dispatch_action(Box::new(crate::app::CloseWindow), cx);
+    })
+    .unwrap();
+    cx.update(|cx| assert!(app.read(cx).settings.is_some()));
+    cx.update(|cx| app.update(cx, |app, _| app.security_key = None));
+    cx.update_window(handle, |_, window, cx| {
+        window.dispatch_action(Box::new(crate::app::CloseWindow), cx);
+    })
+    .unwrap();
+    cx.update(|cx| assert!(app.read(cx).settings.is_none()));
+}
+
+#[gpui_kit::test]
 fn settings_sections_share_one_window_and_preserve_conversation(cx: &mut TestAppContext) {
     let (main_window, app) = preview_window(cx);
     cx.update_window(main_window, |_, window, cx| {
@@ -1973,6 +2289,10 @@ fn switching_all_styles_preserves_visible_ids_draft_anchor_thread_and_actions(
                 "retry-sample-5",
                 "cancel-sample-5",
             ] {
+                if action == "add-reaction-sample-0" {
+                    window.within("messages").hover("message-line-sample-0", cx);
+                    window.render_frame(cx);
+                }
                 window.within("messages").hover(action, cx);
                 assert!(
                     window.within("messages").find(action).visible(),
@@ -2292,6 +2612,11 @@ fn editing_loads_your_message_and_always_restores_the_draft(cx: &mut TestAppCont
         assert!(window.find_all("edit-bar").is_empty());
         // Edit from the message actions keeps what you were typing.
         window.input("half-written reply", cx);
+        window.hover(
+            gpui_kit::SharedString::from(format!("message-line-{}", ids[0])),
+            cx,
+        );
+        window.render_frame(cx);
         window.click(gpui_kit::SharedString::from(format!("edit-{}", ids[0])), cx);
         window.render_frame(cx);
         assert_eq!(composer_value(window).as_deref(), Some("first"));
@@ -2328,6 +2653,11 @@ fn editing_loads_your_message_and_always_restores_the_draft(cx: &mut TestAppCont
         .expect("render")
     };
     cx.update_window(window, |_, window, cx| {
+        window.hover(
+            gpui_kit::SharedString::from(format!("message-line-{}", ids[1])),
+            cx,
+        );
+        window.render_frame(cx);
         window.click(gpui_kit::SharedString::from(format!("edit-{}", ids[1])), cx);
         window.render_frame(cx);
     })
@@ -2422,6 +2752,11 @@ fn reply_names_the_message_and_can_be_cancelled(cx: &mut TestAppContext) {
             .expect("someone else's message")
     });
     cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.hover(
+            gpui_kit::SharedString::from(format!("message-line-{id}")),
+            cx,
+        );
         window.render_frame(cx);
         window.click(gpui_kit::SharedString::from(format!("reply-to-{id}")), cx);
         window.render_frame(cx);
@@ -2896,6 +3231,52 @@ fn explore_lists_public_rooms_and_switches_servers(cx: &mut TestAppContext) {
             Some("!design:example.org")
         );
     });
+}
+
+#[gpui_kit::test]
+fn title_bar_arrows_follow_history_and_can_be_hidden(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.find("nav-back").disabled(), Some(true));
+        window.click("room-critique", cx);
+        window.render_frame(cx);
+        assert_eq!(window.find("nav-back").disabled(), None);
+        window.click("nav-back", cx);
+        window.render_frame(cx);
+    })
+    .expect("arrows navigate");
+    cx.update(|cx| {
+        assert_eq!(
+            app.read(cx).navigation.selected_room.as_deref(),
+            Some("general")
+        )
+    });
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.preferences.appearance.navigation_arrows = false;
+            cx.notify();
+        });
+        window.render_frame(cx);
+        assert!(window.try_find("nav-back").is_none());
+    })
+    .expect("arrows hidden");
+}
+
+#[gpui_kit::test]
+fn create_space_dialog_defaults_to_private_and_switches_access(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_management(crate::ui::spaces::ManageKind::CreateSpace, window, cx)
+        });
+        window.render_frame(cx);
+        assert!(window.find("create-space-submit").visible());
+        assert!(!app.read(cx).management.as_ref().unwrap().public);
+        window.click("space-public", cx);
+    })
+    .expect("create space dialog");
+    cx.update(|cx| assert!(app.read(cx).management.as_ref().unwrap().public));
 }
 
 #[gpui_kit::test]

@@ -1,6 +1,9 @@
 //! Message rows and groups in every chat style.
 use super::*;
 
+/// Sticker size in the timeline, in points.
+const STICKER: f32 = 160.;
+
 impl MatrixApp {
     pub(crate) fn message_body(
         &self,
@@ -226,6 +229,21 @@ impl MatrixApp {
                                     button.w(px(w * scale)).h(px(h * scale)).max_w_full().child(
                                         img(image).size_full().object_fit(ObjectFit::Contain),
                                     );
+                            } else if attachment.download_needed {
+                                // Automatic download is off here (#174).
+                                let load = message.id.clone();
+                                button = button
+                                    .small()
+                                    .icon(IconName::Download)
+                                    .label("Load Image")
+                                    .accessibility_label(format!(
+                                        "Load image {}",
+                                        attachment.filename
+                                    ))
+                                    .tooltip("Load Image")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.load_image(load.clone(), cx)
+                                    }));
                             } else {
                                 button = button.small().label("Open Image");
                             }
@@ -359,6 +377,66 @@ impl MatrixApp {
             MessageKind::Membership => {
                 return self.membership_line(message, in_thread, cx);
             }
+            // A sticker shows as itself, without a bubble.
+            MessageKind::Sticker => {
+                let picture = message
+                    .attachment
+                    .as_ref()
+                    .and_then(|a| a.preview_png.as_ref())
+                    .and_then(|bytes| crate::ui::attachments::render_png(bytes, cx));
+                match picture {
+                    Some(image) => div()
+                        .size(px(STICKER))
+                        .child(img(image).size_full().object_fit(ObjectFit::Contain))
+                        .into_any_element(),
+                    None => {
+                        // Held back by data saving (#174): load on request.
+                        let held = message
+                            .attachment
+                            .as_ref()
+                            .is_some_and(|a| a.download_needed);
+                        let load = message.id.clone();
+                        div()
+                            .size(px(STICKER))
+                            .rounded(px(12.))
+                            .bg(cx.theme().secondary)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when(held, |tile| {
+                                tile.child(
+                                    Button::new(SharedString::from(format!(
+                                        "sticker-load-{}",
+                                        message.id
+                                    )))
+                                    .small()
+                                    .icon(IconName::Download)
+                                    .label("Load Sticker")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.load_image(load.clone(), cx)
+                                    })),
+                                )
+                            })
+                            .into_any_element()
+                    }
+                }
+            }
+            MessageKind::Voice => match &message.voice {
+                Some(voice) => {
+                    let disabled =
+                        self.preview || self.backend.is_none() || !self.snapshot.timeline_ready;
+                    self.voice_bubble(message, voice, outgoing, disabled, cx)
+                }
+                None => div().into_any_element(),
+            },
+            MessageKind::Poll => match &message.poll {
+                Some(poll) => {
+                    let disabled =
+                        self.preview || self.backend.is_none() || !self.snapshot.timeline_ready;
+                    self.poll_card(message, poll, disabled, cx)
+                }
+                None => div().into_any_element(),
+            },
             MessageKind::Redacted => div()
                 .px(px(12.))
                 .py(px(7.))
@@ -425,7 +503,24 @@ impl MatrixApp {
             self.preview || pending || self.backend.is_none() || !self.snapshot.timeline_ready;
         // Message actions sit beside the bubble and appear on hover, so the
         // timeline is not doubled in height by a control under every message.
+        // The action buttons exist only for the message under the pointer or
+        // with keyboard focus, so screen readers do not step through four
+        // buttons per message (#156); elsewhere a same-size gap keeps layout.
+        let active = show_actions || self.hovered_message.as_deref() == Some(message.id.as_str());
+        let hover_id = message.id.clone();
         let mut line = h_flex()
+            .id(SharedString::from(format!("message-line-{}", message.id)))
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                if *hovered {
+                    if this.hovered_message.as_deref() != Some(hover_id.as_str()) {
+                        this.hovered_message = Some(hover_id.clone());
+                        cx.notify();
+                    }
+                } else if this.hovered_message.as_deref() == Some(hover_id.as_str()) {
+                    this.hovered_message = None;
+                    cx.notify();
+                }
+            }))
             .group("message")
             .max_w_full()
             .min_w_0()
@@ -461,7 +556,7 @@ impl MatrixApp {
             let focus = self
                 .image_focus(&format!("reaction-action-{}", message.id), cx)
                 .tab_stop(stops);
-            actions = actions.child(
+            actions = actions.child(if active {
                 div()
                     .flex_none()
                     .track_focus(&focus)
@@ -482,15 +577,18 @@ impl MatrixApp {
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.open_emoji(Some(message_id.clone()), window, cx)
                             })),
-                    ),
-            );
+                    )
+                    .into_any_element()
+            } else {
+                div().flex_none().size_5().into_any_element()
+            });
         }
         if !in_thread && message.event_id.is_some() {
             let id = message.id.clone();
             let focus = self
                 .image_focus(&format!("reply-action-{id}"), cx)
                 .tab_stop(stops);
-            actions = actions.child(
+            actions = actions.child(if active {
                 div()
                     .track_focus(&focus)
                     .focus(|style| style.opacity(1.))
@@ -509,8 +607,11 @@ impl MatrixApp {
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.start_reply(id.clone(), window, cx)
                             })),
-                    ),
-            );
+                    )
+                    .into_any_element()
+            } else {
+                div().flex_none().size_5().into_any_element()
+            });
         }
         if message.editable
             && let Some(event_id) = message.event_id.clone()
@@ -518,7 +619,7 @@ impl MatrixApp {
             let focus = self
                 .image_focus(&format!("edit-action-{}", message.id), cx)
                 .tab_stop(stops);
-            actions = actions.child(
+            actions = actions.child(if active {
                 div()
                     .track_focus(&focus)
                     .focus(|style| style.opacity(1.))
@@ -537,15 +638,18 @@ impl MatrixApp {
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.start_edit(event_id.clone(), in_thread, window, cx)
                             })),
-                    ),
-            );
+                    )
+                    .into_any_element()
+            } else {
+                div().flex_none().size_5().into_any_element()
+            });
         }
         if !in_thread && message.event_id.is_some() {
             let id = message.id.clone();
             let focus = self
                 .image_focus(&format!("thread-action-{id}"), cx)
                 .tab_stop(stops);
-            actions = actions.child(
+            actions = actions.child(if active {
                 div()
                     .track_focus(&focus)
                     .focus(|style| style.opacity(1.))
@@ -564,8 +668,11 @@ impl MatrixApp {
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.open_thread(id.clone(), window, cx)
                             })),
-                    ),
-            );
+                    )
+                    .into_any_element()
+            } else {
+                div().flex_none().size_5().into_any_element()
+            });
         }
         line = line.child(actions);
         if self.preferences.chat.style != ChatStyle::Irc {
@@ -584,7 +691,7 @@ impl MatrixApp {
                     .child(time_label(message.timestamp_ms)),
             );
         }
-        row = row.child(line);
+        row = row.child(line.test_support());
         if !message.reactions.is_empty() {
             let mut chips = h_flex().gap(px(4.)).flex_wrap();
             for reaction in &message.reactions {
@@ -1369,6 +1476,18 @@ pub(crate) fn accessible_message(message: &crate::backend::Message, own_user: &s
         MessageKind::Redacted => "Message deleted".to_owned(),
         MessageKind::Image => format!("Image, {}", model::message_text(message)),
         MessageKind::File => format!("File, {}", model::message_text(message)),
+        MessageKind::Sticker => format!("Sticker, {}", model::message_text(message)),
+        MessageKind::Voice => format!(
+            "Voice message, {}",
+            crate::ui::voice::clock(std::time::Duration::from_millis(
+                message.voice.as_ref().map_or(0, |v| v.duration_ms)
+            ))
+        ),
+        MessageKind::Poll => message
+            .poll
+            .as_ref()
+            .map(crate::ui::polls::accessible_poll)
+            .unwrap_or_else(|| model::message_text(message)),
         _ => model::message_text(message),
     };
     let mut label = if message.kind == MessageKind::Emote {

@@ -104,6 +104,7 @@ impl KeyChord {
 pub enum ShortcutAction {
     OpenSettings,
     Quit,
+    CloseWindow,
     FindConversation,
     CloseProfile,
     ToggleSidebar,
@@ -150,6 +151,7 @@ impl ShortcutAction {
         match self {
             Self::OpenSettings => KeyBinding::new(keys, OpenSettings, context),
             Self::Quit => KeyBinding::new(keys, Quit, context),
+            Self::CloseWindow => KeyBinding::new(keys, CloseWindow, context),
             Self::FindConversation => KeyBinding::new(keys, FindConversation, context),
             Self::CloseProfile => KeyBinding::new(keys, CloseProfile, context),
             Self::ToggleSidebar => KeyBinding::new(keys, ToggleSidebar, context),
@@ -340,6 +342,16 @@ pub const SHORTCUTS: &[Shortcut] = &[
         },
         action: Some(ShortcutAction::Quit),
         context: None,
+    },
+    Shortcut {
+        area: Area::Window,
+        label: "Close Settings",
+        keys: KeyChord {
+            mac: "cmd-w",
+            other: "ctrl-w",
+        },
+        action: Some(ShortcutAction::CloseWindow),
+        context: Some("Twayblade"),
     },
     Shortcut {
         area: Area::Navigation,
