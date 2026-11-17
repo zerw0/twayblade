@@ -1242,6 +1242,7 @@ async fn pagination_preserves_message_identity() {
     let conversation = initial.conversation.expect("timeline");
     let mut count = initial.messages.len();
     let mut reached_start = false;
+    let mut history = 0;
     for _ in 0..10 {
         reached_start = checked(conversation.older().await, "SDK load earlier");
         let page = wait_snapshot(
@@ -1257,13 +1258,33 @@ async fn pagination_preserves_message_identity() {
         let unique: std::collections::HashSet<_> = page.messages.iter().map(|m| &m.id).collect();
         assert_eq!(unique.len(), page.messages.len());
         count = page.messages.len();
+        history = page
+            .messages
+            .iter()
+            .filter(|m| m.body.starts_with("sample history"))
+            .count();
         if reached_start {
             break;
         }
     }
+    // Rows also include room state (creation, membership); count messages.
     assert!(
-        reached_start && count == 90,
-        "Incomplete history pagination"
+        reached_start && history == 90,
+        "Incomplete history pagination: start {reached_start}, {history} of 90"
+    );
+    // Reopening the room (#173) reuses its live timeline: the first ready
+    // snapshot already holds the whole loaded history, with the same IDs.
+    drop(updates);
+    let mut reopened = Box::pin(account.conversation_updates(id.to_string(), 2));
+    let again = wait_snapshot(
+        &mut reopened,
+        |s| s.status == crate::conversation::TimelineStatus::Ready,
+        "reopened room",
+    )
+    .await;
+    assert!(
+        again.messages.len() == count && again.messages.iter().any(|m| m.id == latest),
+        "reopened room lost its loaded history"
     );
     checked(
         account.client.matrix_auth().logout().await,
