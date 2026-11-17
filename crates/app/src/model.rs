@@ -15,6 +15,33 @@ pub(super) struct Navigation {
 }
 
 impl Navigation {
+    /// Direct joined subspaces, in the SDK's stable navigation order.
+    pub fn child_spaces<'a>(space: &Space, snapshot: &'a Snapshot) -> Vec<&'a Space> {
+        snapshot
+            .spaces
+            .iter()
+            .filter(|child| child.id != space.id && space.child_ids.contains(&child.id))
+            .collect()
+    }
+
+    pub fn rail_space(space: &Space, snapshot: &Snapshot) -> bool {
+        space.level == 0
+            || !snapshot
+                .spaces
+                .iter()
+                .any(|parent| parent.id != space.id && parent.child_ids.contains(&space.id))
+    }
+
+    /// Shared direct rooms stay visible in each parent. Other descendants
+    /// belong inside their immediate joined subspace's disclosure group.
+    pub fn room_in_space_group(space: &Space, id: &str, snapshot: &Snapshot) -> bool {
+        space.room_ids.contains(id)
+            && (space.child_ids.contains(id)
+                || !Self::child_spaces(space, snapshot)
+                    .iter()
+                    .any(|child| child.room_ids.contains(id)))
+    }
+
     pub fn room_visible(&self, id: &str, snapshot: &Snapshot) -> bool {
         Self::room_visible_in(self.selected_space.as_deref(), id, snapshot)
     }
@@ -170,6 +197,10 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
             level: 0,
             avatar: None,
             can_add_rooms: true,
+            child_ids: ["general", "research", "critique", "announcements"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
             room_ids: [
                 "general".into(),
                 "research".into(),
@@ -532,6 +563,43 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn subspaces_group_rooms_and_keep_shared_direct_links_and_orphans_visible() {
+        let mut snapshot = preview(false, 3);
+        snapshot.spaces[0].child_ids = ["child", "general"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        snapshot.spaces.push(Space {
+            id: "child".into(),
+            name: "Projects".into(),
+            level: 1,
+            child_ids: ["general", "research"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            room_ids: ["general", "research"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            ..Default::default()
+        });
+        let root = &snapshot.spaces[0];
+        let child = &snapshot.spaces[1];
+        assert!(Navigation::rail_space(root, &snapshot));
+        assert!(!Navigation::rail_space(child, &snapshot));
+        assert_eq!(Navigation::child_spaces(root, &snapshot)[0].id, "child");
+        assert!(Navigation::room_in_space_group(root, "general", &snapshot));
+        assert!(!Navigation::room_in_space_group(
+            root, "research", &snapshot
+        ));
+        assert!(Navigation::room_in_space_group(
+            child, "research", &snapshot
+        ));
+        snapshot.spaces.remove(0);
+        assert!(Navigation::rail_space(&snapshot.spaces[0], &snapshot));
+    }
 
     #[test]
     fn direct_messages_live_in_home_even_when_linked_to_a_space() {

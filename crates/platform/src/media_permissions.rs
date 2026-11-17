@@ -76,6 +76,10 @@ mod macos {
         }
     }
 }
+/// Ask for capture access. Windows and Linux have no per-app grant to ask an
+/// unpackaged desktop app for: their privacy switches are enforced when the
+/// device opens, and that failure is the capture layer's to report. So there
+/// is nothing to refuse here, and calls and voice messages go ahead (#196).
 pub async fn request(kind: CapturePermission) -> Result<(), PermissionError> {
     #[cfg(target_os = "macos")]
     {
@@ -84,7 +88,7 @@ pub async fn request(kind: CapturePermission) -> Result<(), PermissionError> {
     #[cfg(not(target_os = "macos"))]
     {
         let _ = kind;
-        Err(PermissionError::Unsupported)
+        Ok(())
     }
 }
 
@@ -97,6 +101,21 @@ pub fn check(kind: CapturePermission) -> Result<(), PermissionError> {
     #[cfg(not(target_os = "macos"))]
     {
         let _ = kind;
-        Err(PermissionError::Unsupported)
+        Ok(())
+    }
+}
+
+#[cfg(all(test, not(target_os = "macos")))]
+mod tests {
+    use super::*;
+
+    // Every Windows and Linux call failed with "can't use your microphone"
+    // before connecting when these refused (#196).
+    #[tokio::test]
+    async fn desktops_without_a_grant_api_do_not_refuse_capture() {
+        for kind in [CapturePermission::Microphone, CapturePermission::Camera] {
+            assert_eq!(check(kind), Ok(()));
+            assert_eq!(request(kind).await, Ok(()));
+        }
     }
 }

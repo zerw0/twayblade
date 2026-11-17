@@ -32,7 +32,9 @@ signs, uploads or publishes.
   in `build.yml` with WiX 5 into `Twayblade-<version>-x86_64.msi`. Per-machine
   install in Program Files with a Start menu shortcut carrying the
   AppUserModelID `com.twayblade.desktop`, which Windows needs before it shows
-  the app's toast notifications. Major upgrades replace older versions (and a
+  the app's toast notifications. A Shortcuts page asks whether to add a
+  desktop shortcut too (ticked by default; `DESKTOPSHORTCUT=""` skips it in a
+  silent install). The installer UI uses the WixToolset.UI extension. Major upgrades replace older versions (and a
   pre-release of the same version). Unsigned. No MSIX: it cannot be
   installed at all without a trusted signature. WiX 6 and later need a
   decision on the Open Source Maintenance Fee EULA, so the build stays on 5.

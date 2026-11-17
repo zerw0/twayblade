@@ -68,14 +68,23 @@ impl Render for VideoTile {
         }
         // Look for the next frame on every display refresh while shown.
         window.request_animation_frame();
+        // Pinned to the tile's edges: a size_full image under an auto-height
+        // parent takes its natural aspect, so a shared screen ran past the
+        // tile's bottom and was cut off instead of fitting inside it.
         div()
+            .relative()
             .size_full()
             .children(self.image.as_ref().map(|(_, image)| {
-                img(image.clone()).size_full().object_fit(if self.contain {
-                    ObjectFit::Contain
-                } else {
-                    ObjectFit::Cover
-                })
+                img(image.clone())
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .object_fit(if self.contain {
+                        ObjectFit::Contain
+                    } else {
+                        ObjectFit::Cover
+                    })
             }))
     }
 }
@@ -105,14 +114,26 @@ pub(crate) fn call_error_text(error: CallError) -> &'static str {
         CallError::KeyRejected => "Encryption keys couldn't be exchanged.",
         CallError::TransportFailed => "The connection was lost.",
         CallError::MembershipForbidden => "You don't have permission to call in this room.",
+        // Windows enforces its privacy switches when the device opens, so a
+        // blocked microphone or camera looks unavailable rather than denied.
+        CallError::DeviceUnavailable if cfg!(target_os = "windows") => {
+            "Your microphone or camera isn't available. Check that it's connected and that desktop apps may use it in Settings › Privacy & security."
+        }
         CallError::DeviceUnavailable => "Your microphone or camera isn't available.",
         CallError::InvalidVolume => "The playback volume is invalid.",
         CallError::ScreenUnavailable => "Screen sharing couldn't start.",
+        // Only macOS asks for a per-app grant; elsewhere this is a fallback.
+        CallError::PermissionDenied if cfg!(target_os = "macos") => {
+            "Twayblade can't use your microphone or camera. Allow it in System Settings › Privacy & Security."
+        }
+        CallError::PermissionDenied if cfg!(target_os = "windows") => {
+            "Twayblade can't use your microphone or camera. Allow desktop apps to use them in Settings › Privacy & security."
+        }
         CallError::PermissionDenied => {
-            "Twayblade can't use your microphone or camera. Allow it in System Settings → Privacy & Security."
+            "Twayblade can't use your microphone or camera. Check your system's privacy settings."
         }
         CallError::PermissionRestricted => {
-            "Microphone and camera access is restricted on this Mac."
+            "Microphone and camera access is restricted on this computer."
         }
         CallError::AlreadyActive => "You're already in a call.",
         CallError::InvalidRoom => "You can't call in this room.",
@@ -271,9 +292,17 @@ impl MatrixApp {
         self.call_tiles
             .retain(|id, _| tracks.iter().any(|(track, _)| track == id));
         for (id, source) in tracks {
-            if !self.call_tiles.contains_key(&id)
-                && let Some(frame) = self.call_video_handle(&id)
-            {
+            let Some(frame) = self.call_video_handle(&id) else {
+                continue;
+            };
+            // A track consumed again under the same id (a resubscription after
+            // a reconnect) has a new frame slot; the old one is retired and
+            // would leave the tile empty for the rest of the call.
+            let current = self
+                .call_tiles
+                .get(&id)
+                .is_some_and(|tile| tile.read(cx).frame.same(&frame));
+            if !current {
                 let contain = source == VideoSource::Screen;
                 let tile = cx.new(|cx| VideoTile::new(frame, contain, cx));
                 self.call_tiles.insert(id, tile);

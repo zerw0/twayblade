@@ -158,6 +158,7 @@ cargo run --locked -p twayblade -- --preview-notification
 cargo run --locked -p twayblade -- --preview-directory
 cargo run --locked -p twayblade -- --preview-invites
 cargo run --locked -p twayblade -- --preview-viewer
+cargo run --locked -p twayblade -- --preview-subspaces
 cargo run --locked -p twayblade -- --preview-large
 ```
 
@@ -431,3 +432,20 @@ a member's profile opens in Home.
 This is initial channel wiring. Voice channels require the same MatrixRTC/LiveKit
 server support and media encryption as native calls. Actual two-device voice
 channel operation and Element interoperability have not been accepted yet.
+
+## Subspace navigation
+
+The far-left rail lists top-level spaces. Inside a selected space, joined
+subspaces appear in the conversation list with their own avatars and disclosure
+arrows. Expand them to see their rooms and nested subspaces; collapsing a group
+keeps the open conversation selected. Right-click a subspace to browse or leave
+it. Search still finds conversations across spaces. An orphaned joined subspace
+remains available in the rail.
+
+`--preview-subspaces` shows this arrangement with explicitly offline sample data.
+
+To create a subspace, select its parent space, choose **+**, enter a name and
+turn on **Subspace**, then choose **Create Subspace**. Subspace and Voice channel
+are mutually exclusive. Subspaces have no message-encryption toggle: they are
+containers, while encryption is configured on their text or voice channels.
+The new subspace allows members of its parent to join and appears through sync.

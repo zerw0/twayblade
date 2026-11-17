@@ -80,6 +80,7 @@ pub(crate) struct Management {
     pub voice_channel: bool,
     /// Create Space: anyone can join (else invitation only).
     pub public: bool,
+    pub subspace: bool,
     pub parent: Option<String>,
     /// The dialog sheet: Tab stays inside it while it is open.
     pub focus: FocusHandle,
@@ -216,6 +217,7 @@ impl MatrixApp {
             encrypted: true,
             public: false,
             voice_channel: false,
+            subspace: false,
             parent_from_context: initial_parent.is_some(),
             parent: initial_parent,
             focus: cx.focus_handle(),
@@ -411,6 +413,10 @@ impl MatrixApp {
                                 .into();
                     }
                     Ok(SpaceOutcome::Done) => {
+                        if matches!(page.kind, ManageKind::Create) && page.subspace {
+                            this.navigation.selected_space = page.parent.clone();
+                            this.status = "Subspace created.".into();
+                        }
                         if matches!(page.kind, ManageKind::InviteMember(_)) {
                             this.status = "Invitation sent.".into();
                         }
@@ -680,11 +686,11 @@ impl MatrixApp {
             }
             ManageKind::Create => {
                 body = body
-                    .child("Room name")
+                    .child("Name")
                     .child(
                         div()
                             .w_full()
-                            .child(Input::new(&page.name).aria_label("Room name")),
+                            .child(Input::new(&page.name).aria_label("Name")),
                     )
                     .child("Topic (optional)")
                     .child(
@@ -708,6 +714,7 @@ impl MatrixApp {
                                     if let Some(page) = &mut this.management {
                                         page.voice_channel = *checked;
                                         if page.voice_channel {
+                                            page.subspace = false;
                                             page.encrypted = true;
                                         }
                                     }
@@ -715,7 +722,30 @@ impl MatrixApp {
                                 })),
                         ),
                 );
-                if !page.voice_channel {
+                body = body.child(
+                    h_flex()
+                        .justify_between()
+                        .gap(px(12.))
+                        .py(px(4.))
+                        .child("Subspace")
+                        .child(
+                            switch::Switch::new("create-subspace")
+                                .accessibility_label("Subspace")
+                                .checked(page.subspace)
+                                .color(cx.theme().primary)
+                                .disabled(page.busy)
+                                .on_change(cx.listener(|this, checked: &bool, _, cx| {
+                                    if let Some(page) = &mut this.management {
+                                        page.subspace = *checked;
+                                        if page.subspace {
+                                            page.voice_channel = false;
+                                        }
+                                    }
+                                    cx.notify();
+                                })),
+                        ),
+                );
+                if !page.voice_channel && !page.subspace {
                     body = body.child(
                         h_flex()
                             .justify_between()
@@ -772,10 +802,13 @@ impl MatrixApp {
                 let parent = page.parent.clone();
                 let encrypted = page.encrypted;
                 let voice_channel = page.voice_channel;
+                let subspace = page.subspace;
                 body = body.child(
                     Button::new("create-room-submit")
                         .primary()
-                        .label(if voice_channel {
+                        .label(if subspace {
+                            "Create Subspace"
+                        } else if voice_channel {
                             "Create Voice Channel"
                         } else {
                             "Create Text Channel"
@@ -794,7 +827,9 @@ impl MatrixApp {
                                 parent: parent.clone(),
                             };
                             this.run_space_action(
-                                if voice_channel {
+                                if subspace {
+                                    SpaceAction::CreateSubspace(draft)
+                                } else if voice_channel {
                                     SpaceAction::CreateVoice(draft)
                                 } else {
                                     SpaceAction::Create(draft)

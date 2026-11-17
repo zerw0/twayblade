@@ -389,6 +389,8 @@ pub(super) struct MatrixApp {
     /// The room to reopen once the switched-to account lists it.
     restore_room: Option<(Option<String>, String)>,
     pub(super) pending_history_thread: Option<(String, String)>,
+    /// Space IDs whose conversation-list disclosure is open for this account.
+    pub(super) expanded_subspaces: HashSet<String>,
     /// Sidebar sections the user collapsed, by section key.
     pub(super) collapsed_sections: std::collections::HashSet<&'static str>,
     /// Selected tab of the room Info panel.
@@ -842,6 +844,7 @@ impl MatrixApp {
             account_rooms: HashMap::new(),
             restore_room: None,
             pending_history_thread: None,
+            expanded_subspaces: HashSet::new(),
             // Archived conversations stay out of the way until asked for.
             collapsed_sections: ["archive"].into_iter().collect(),
             info_tab: InfoTab::About,
@@ -1190,6 +1193,7 @@ impl MatrixApp {
                 ready = self.restore_room.is_some()
             );
             self.navigation = Navigation::default();
+            self.expanded_subspaces.clear();
             self.composers.clear();
             self.thread = None;
             self.thread_drafts.clear();
@@ -1795,6 +1799,13 @@ impl MatrixApp {
         let before = self.current_nav_page();
         let had_management = self.management.take().is_some();
         self.navigation.route_room(&id, &self.snapshot);
+        // Search, notifications and history must reveal the selected room even
+        // when its containing disclosure was previously closed.
+        for space in &self.snapshot.spaces {
+            if space.room_ids.contains(&id) {
+                self.expanded_subspaces.insert(space.id.clone());
+            }
+        }
         // Choosing a room supersedes reopening the account's last one.
         self.restore_room = None;
         cx.notify();
