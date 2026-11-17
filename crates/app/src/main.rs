@@ -269,7 +269,7 @@ fn main() {
                         if let Some(message) = view.snapshot.messages.last_mut() {
                             message.kind = backend::MessageKind::File;
                             message.body.clear();
-                            message.attachment = Some(twayblade_core::conversation::Attachment { filename: "Travel notes.pdf".into(), size: Some(234567), preview_png: None });
+                            message.attachment = Some(twayblade_core::conversation::Attachment { filename: "Travel notes.pdf".into(), size: Some(234567), preview_png: None, download_needed: false });
                             message.delivery = backend::DeliveryState::Queued;
                             message.upload_percent = Some(42);
                         }

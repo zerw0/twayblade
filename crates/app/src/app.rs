@@ -334,6 +334,10 @@ pub(super) struct MatrixApp {
     pub notification_thread: Option<(String, String)>,
     pub account_name: Option<Entity<InputState>>,
     pub account_edit_busy: bool,
+    /// Settings › Chat › Media: bytes the media cache takes, and a clear in
+    /// progress (#174).
+    pub media_cache_size: Option<u64>,
+    pub media_cache_busy: bool,
     pub snapshot: Snapshot,
     pub navigation: Navigation,
     pub groups: Vec<Range<usize>>,
@@ -784,6 +788,8 @@ impl MatrixApp {
             notification_thread: None,
             notification_keyword: cx.new(|cx| InputState::new(window, cx).placeholder("Keyword")),
             account_edit_busy: false,
+            media_cache_size: None,
+            media_cache_busy: false,
             navigation: Navigation {
                 selected_space: (preview && !home).then(|| "design".into()),
                 selected_room: preview.then(|| snapshot.selected_room.clone()),
@@ -965,6 +971,7 @@ impl MatrixApp {
                     Ok((snapshot, backend)) => {
                         this.backend = Some(backend.clone());
                         this.notification_config();
+                        this.apply_media_preferences(window, cx);
                         this.status = if snapshot.user_id.is_empty() {
                             "Sign in to your homeserver.".into()
                         } else {
@@ -3508,6 +3515,13 @@ impl MatrixApp {
 impl MatrixApp {
     /// Settings: apply the size now; the caller saves preferences through the
     /// app's own writer, so this never races other settings changes on disk.
+    /// Loads one image while automatic download is off (#174).
+    pub(crate) fn load_image(&mut self, id: String, cx: &mut Context<Self>) {
+        if let Some(backend) = &self.backend {
+            let _ = backend.load_preview(id);
+        }
+        cx.notify();
+    }
     pub fn set_timeline_preview_size(&mut self, size: twayblade_core::conversation::PreviewSize) {
         self.preferences.chat.preview_size = size;
         if let Some(backend) = &self.backend {

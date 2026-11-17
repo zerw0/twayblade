@@ -583,6 +583,9 @@ impl MatrixApp {
     ) {
         if section == Section::Chat {
             self.preferences.chat = Default::default();
+            // Apply what the backend holds too, not just the saved choices.
+            self.set_timeline_preview_size(self.preferences.chat.preview_size);
+            self.apply_media_preferences(window, cx);
             self.chat_changed(window, cx);
             return;
         }
@@ -1651,6 +1654,171 @@ impl MatrixApp {
                     .text_color(cx.theme().muted_foreground)
                     .child("IRC never shows avatars. Changes apply to the open conversation immediately."),
             )
+            .child(self.media_settings(cx))
+            .into_any_element()
+    }
+    /// Hands the media choices (#174) to the backend: automatic download at
+    /// once, the cache limit on a worker since it writes to the store.
+    pub(crate) fn apply_media_preferences(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.preview {
+            return;
+        }
+        let Some(backend) = &self.backend else {
+            return;
+        };
+        let _ = backend.apply_auto_download(self.preferences.chat.auto_download);
+        let limit = self.preferences.chat.media_cache.bytes();
+        self.job(
+            window,
+            cx,
+            move |backend| {
+                let applied = backend.set_media_cache(limit);
+                (applied, backend.media_cache_size())
+            },
+            |this, (applied, size), _, cx| {
+                if let Err(error) = applied {
+                    this.settings_status = error.to_string();
+                }
+                this.media_cache_size = size;
+                cx.notify();
+            },
+        );
+    }
+    pub(crate) fn refresh_media_cache_size(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.preview {
+            return;
+        }
+        self.job(
+            window,
+            cx,
+            |backend| backend.media_cache_size(),
+            |this, size, _, cx| {
+                this.media_cache_size = size;
+                cx.notify();
+            },
+        );
+    }
+    fn clear_media_cache(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.preview || self.media_cache_busy {
+            return;
+        }
+        self.media_cache_busy = true;
+        self.job(
+            window,
+            cx,
+            |backend| (backend.clear_media_cache(), backend.media_cache_size()),
+            |this, (cleared, size), _, cx| {
+                this.media_cache_busy = false;
+                this.media_cache_size = size;
+                this.settings_status = match cleared {
+                    Ok(()) => "Cached media cleared.".into(),
+                    Err(error) => error.to_string(),
+                };
+                cx.notify();
+            },
+        );
+        cx.notify();
+    }
+    /// Settings › Chat › Media (#174).
+    fn media_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        use crate::preferences::{AutoDownload, MediaCache};
+        let chat = &self.preferences.chat;
+        let auto = segmented(
+            [
+                (
+                    "auto-download-always",
+                    "Always",
+                    chat.auto_download == AutoDownload::Always,
+                ),
+                (
+                    "auto-download-unmetered",
+                    "Unmetered Only",
+                    chat.auto_download == AutoDownload::Unmetered,
+                ),
+                (
+                    "auto-download-never",
+                    "Never",
+                    chat.auto_download == AutoDownload::Never,
+                ),
+            ],
+            cx,
+            |this, index, window, cx| {
+                this.preferences.chat.auto_download = AutoDownload::ALL[index];
+                this.apply_media_preferences(window, cx);
+                this.chat_changed(window, cx);
+            },
+        );
+        let labels = ["Off", "250 MB", "500 MB", "1 GB", "2 GB", "5 GB"];
+        let ids = [
+            "media-cache-off",
+            "media-cache-250",
+            "media-cache-500",
+            "media-cache-1g",
+            "media-cache-2g",
+            "media-cache-5g",
+        ];
+        let cache = segmented(
+            std::array::from_fn::<_, 6, _>(|index| {
+                (
+                    ids[index],
+                    labels[index],
+                    chat.media_cache == MediaCache::ALL[index],
+                )
+            }),
+            cx,
+            |this, index, window, cx| {
+                this.preferences.chat.media_cache = MediaCache::ALL[index];
+                this.apply_media_preferences(window, cx);
+                this.chat_changed(window, cx);
+            },
+        );
+        let size = match self.media_cache_size {
+            _ if self.preview => "Sample data".to_owned(),
+            Some(bytes) => human_size(bytes),
+            None => "Unknown".to_owned(),
+        };
+        let stored = h_flex()
+            .gap(px(10.))
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(cx.theme().muted_foreground)
+                    .child(size),
+            )
+            .child(
+                Button::new("clear-media-cache")
+                    .small()
+                    .label(if self.media_cache_busy {
+                        "Clearing…"
+                    } else {
+                        "Clear Cache"
+                    })
+                    .disabled(self.preview || self.media_cache_busy || self.backend.is_none())
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.clear_media_cache(window, cx)),
+                    ),
+            );
+        v_flex()
+            .gap(px(6.))
+            .child(group(
+                [
+                    form_row("Download images", auto, cx),
+                    form_row(KEEP_MEDIA_LABEL, cache, cx),
+                    form_row("Cached media", stored, cx),
+                ],
+                cx,
+            ))
+            .child(
+                div()
+                    .px(px(4.))
+                    .text_size(px(11.))
+                    .text_color(cx.theme().muted_foreground)
+                    .child(
+                        "Metered connections include cellular data, personal hotspots and Low Data Mode. \
+                         Images you open always download. Cached media is encrypted with this account's \
+                         keys and removed after 30 days unused.",
+                    ),
+            )
             .into_any_element()
     }
     fn edit_account(&mut self, update: ProfileUpdate, window: &Window, cx: &mut Context<Self>) {
@@ -1814,6 +1982,10 @@ impl SettingsWindow {
                 main.security_reset_confirmation = false;
                 cx.notify();
             });
+        }
+        if section == Section::Chat {
+            self.main
+                .update(cx, |main, cx| main.refresh_media_cache_size(window, cx));
         }
         self.section = section;
         cx.notify();
@@ -2152,6 +2324,30 @@ fn group(rows: impl IntoIterator<Item = Div>, cx: &App) -> Div {
     group
 }
 
+#[cfg(target_os = "macos")]
+const KEEP_MEDIA_LABEL: &str = "Keep on this Mac";
+#[cfg(not(target_os = "macos"))]
+const KEEP_MEDIA_LABEL: &str = "Keep on this computer";
+
+/// Bytes as the Finder shows them (decimal units).
+fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
+    if bytes < 1000 {
+        return format!("{bytes} bytes");
+    }
+    let mut value = bytes as f64 / 1000.;
+    let mut unit = 0;
+    while value >= 1000. && unit + 1 < UNITS.len() {
+        value /= 1000.;
+        unit += 1;
+    }
+    if value < 10. {
+        format!("{value:.1} {}", UNITS[unit])
+    } else {
+        format!("{value:.0} {}", UNITS[unit])
+    }
+}
+
 /// Label on the left, control on the right.
 fn form_row(label: &'static str, control: impl IntoElement, cx: &App) -> Div {
     h_flex()
@@ -2456,5 +2652,16 @@ fn checked_ago(checked: Option<u64>) -> String {
         0..=89 => " Checked just now.".into(),
         90..=5399 => format!(" Checked {} minutes ago.", (secs + 30) / 60),
         _ => format!(" Checked {} hours ago.", (secs + 1800) / 3600),
+    }
+}
+
+#[cfg(test)]
+mod media_tests {
+    #[test]
+    fn sizes_read_like_the_finder() {
+        assert_eq!(super::human_size(512), "512 bytes");
+        assert_eq!(super::human_size(1_500), "1.5 KB");
+        assert_eq!(super::human_size(123_000_000), "123 MB");
+        assert_eq!(super::human_size(2_000_000_000), "2.0 GB");
     }
 }

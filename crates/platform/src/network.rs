@@ -142,6 +142,142 @@ pub async fn run(mut changed: impl FnMut(bool)) {
     }
 }
 
+/// Whether the current connection is metered or in a low-data mode, so
+/// media should not download on its own (#174). `None` when the system does
+/// not say; callers treat that as unmetered.
+#[cfg(target_os = "macos")]
+pub async fn metered() -> Option<bool> {
+    tokio::task::spawn_blocking(mac::metered)
+        .await
+        .ok()
+        .flatten()
+}
+
+/// Linux: NetworkManager's overall `Metered` property (yes or guessed yes).
+#[cfg(target_os = "linux")]
+pub async fn metered() -> Option<bool> {
+    let connection = zbus::Connection::system().await.ok()?;
+    let proxy = zbus::Proxy::new(
+        &connection,
+        "org.freedesktop.NetworkManager",
+        "/org/freedesktop/NetworkManager",
+        "org.freedesktop.NetworkManager",
+    )
+    .await
+    .ok()?;
+    let value: u32 = proxy.get_property("Metered").await.ok()?;
+    nm_metered(value)
+}
+
+/// Windows: the internet profile's connection cost (fixed or variable plans,
+/// roaming, or near or over the data limit).
+#[cfg(target_os = "windows")]
+pub async fn metered() -> Option<bool> {
+    tokio::task::spawn_blocking(|| {
+        use windows::Networking::Connectivity::{NetworkCostType, NetworkInformation};
+        let cost = NetworkInformation::GetInternetConnectionProfile()
+            .ok()?
+            .GetConnectionCost()
+            .ok()?;
+        let kind = cost.NetworkCostType().ok()?;
+        Some(
+            matches!(kind, NetworkCostType::Fixed | NetworkCostType::Variable)
+                || cost.Roaming().unwrap_or(false)
+                || cost.OverDataLimit().unwrap_or(false)
+                || cost.ApproachingDataLimit().unwrap_or(false),
+        )
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+pub async fn metered() -> Option<bool> {
+    None
+}
+
+/// NetworkManager's NMMetered: 1 yes, 2 no, 3 guessed yes, 4 guessed no.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn nm_metered(value: u32) -> Option<bool> {
+    match value {
+        1 | 3 => Some(true),
+        2 | 4 => Some(false),
+        _ => None,
+    }
+}
+
+/// Calls `changed` with the metered state, then whenever it changes.
+pub async fn run_metered(mut changed: impl FnMut(Option<bool>)) {
+    let mut last = None;
+    let mut tick = tokio::time::interval(Duration::from_secs(15));
+    loop {
+        tick.tick().await;
+        let now = metered().await;
+        if last != Some(now) {
+            last = Some(now);
+            changed(now);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[allow(
+    unsafe_code,
+    reason = "Network.framework path monitor C API: the monitor is created, \
+              started, cancelled and released here; the path is only read \
+              inside its update handler"
+)]
+mod mac {
+    use std::ffi::c_void;
+    use std::time::Duration;
+
+    #[link(name = "Network", kind = "framework")]
+    unsafe extern "C" {
+        fn nw_path_monitor_create() -> *mut c_void;
+        fn nw_path_monitor_set_queue(monitor: *mut c_void, queue: *mut c_void);
+        fn nw_path_monitor_set_update_handler(
+            monitor: *mut c_void,
+            handler: &block2::Block<dyn Fn(*mut c_void)>,
+        );
+        fn nw_path_monitor_start(monitor: *mut c_void);
+        fn nw_path_monitor_cancel(monitor: *mut c_void);
+        fn nw_path_is_expensive(path: *mut c_void) -> bool;
+        fn nw_path_is_constrained(path: *mut c_void) -> bool;
+        fn nw_release(object: *mut c_void);
+    }
+    unsafe extern "C" {
+        fn dispatch_get_global_queue(identifier: isize, flags: usize) -> *mut c_void;
+    }
+
+    /// One reading of the current path: expensive (cellular, personal
+    /// hotspot) or constrained (Low Data Mode).
+    pub(super) fn metered() -> Option<bool> {
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        let handler = block2::RcBlock::new(move |path: *mut c_void| {
+            // SAFETY: the path is valid for the duration of the handler.
+            let metered = unsafe { nw_path_is_expensive(path) || nw_path_is_constrained(path) };
+            let _ = send.try_send(metered);
+        });
+        // SAFETY: the monitor is a fresh object owned here; the handler block
+        // is copied by Network.framework; cancel stops further callbacks and
+        // the release balances create.
+        unsafe {
+            let monitor = nw_path_monitor_create();
+            if monitor.is_null() {
+                return None;
+            }
+            nw_path_monitor_set_queue(monitor, dispatch_get_global_queue(0, 0));
+            nw_path_monitor_set_update_handler(monitor, &handler);
+            nw_path_monitor_start(monitor);
+            let reading = receive.recv_timeout(Duration::from_secs(2)).ok();
+            nw_path_monitor_cancel(monitor);
+            nw_release(monitor);
+            reading
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{has_default_v4, has_default_v6};
@@ -180,5 +316,19 @@ mod tests {
     #[test]
     fn this_machine_answers_without_panicking() {
         let _ = super::available();
+    }
+
+    #[test]
+    fn network_manager_metered_values() {
+        assert_eq!(super::nm_metered(1), Some(true));
+        assert_eq!(super::nm_metered(3), Some(true));
+        assert_eq!(super::nm_metered(2), Some(false));
+        assert_eq!(super::nm_metered(4), Some(false));
+        assert_eq!(super::nm_metered(0), None);
+    }
+
+    #[tokio::test]
+    async fn this_machine_reports_metering_without_panicking() {
+        eprintln!("metered: {:?}", super::metered().await);
     }
 }

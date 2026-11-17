@@ -146,6 +146,8 @@ pub struct Reaction {
 #[derive(Clone, Default)]
 pub struct Attachment {
     pub preview_png: Option<Arc<Vec<u8>>>,
+    /// Not downloaded because automatic download is off here (#174).
+    pub download_needed: bool,
     pub filename: String,
     pub size: Option<u64>,
 }
@@ -199,6 +201,8 @@ pub struct Conversation {
     timeline: Arc<Timeline>,
     read_updates: Option<tokio::sync::broadcast::Sender<(String, Option<String>)>>,
     root: Option<String>,
+    /// The account's media cache switch (#174).
+    media_cache: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -413,6 +417,7 @@ fn plain_excerpt(body: &str) -> String {
 fn attachment(filename: &str, size: Option<matrix_sdk::ruma::UInt>) -> Option<Attachment> {
     Some(Attachment {
         preview_png: None,
+        download_needed: false,
         filename: filename.to_owned(),
         size: size.map(u64::from),
     })
@@ -781,6 +786,7 @@ impl Account {
                 account.recent_timelines.insert(room_id.clone(), timeline.clone());
             }
             let conversation = Conversation {
+                media_cache: account.media_cache.clone(),
                 timeline: timeline.clone(),
                 read_updates: Some(account.thread_read_updates.clone()), root: root.clone(),
             };

@@ -295,10 +295,67 @@ pub(super) enum Timestamps {
     OnHover,
     Always,
 }
+/// When images in conversations download on their own (#174).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AutoDownload {
+    Always,
+    /// Not on metered connections or in Low Data Mode.
+    #[default]
+    Unmetered,
+    Never,
+}
+impl AutoDownload {
+    pub const ALL: [Self; 3] = [Self::Always, Self::Unmetered, Self::Never];
+    /// Whether images may download now, given the connection's metering.
+    pub fn allows(self, metered: Option<bool>) -> bool {
+        match self {
+            Self::Always => true,
+            Self::Unmetered => metered != Some(true),
+            Self::Never => false,
+        }
+    }
+}
+/// How much media may be kept on this device (#174).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MediaCache {
+    Off,
+    Mb250,
+    #[default]
+    Mb500,
+    Gb1,
+    Gb2,
+    Gb5,
+}
+impl MediaCache {
+    pub const ALL: [Self; 6] = [
+        Self::Off,
+        Self::Mb250,
+        Self::Mb500,
+        Self::Gb1,
+        Self::Gb2,
+        Self::Gb5,
+    ];
+    /// The limit in bytes; `None` keeps media in memory only.
+    pub fn bytes(self) -> Option<u64> {
+        const MB: u64 = 1024 * 1024;
+        match self {
+            Self::Off => None,
+            Self::Mb250 => Some(250 * MB),
+            Self::Mb500 => Some(500 * MB),
+            Self::Gb1 => Some(1024 * MB),
+            Self::Gb2 => Some(2048 * MB),
+            Self::Gb5 => Some(5120 * MB),
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct Chat {
     pub preview_size: twayblade_core::conversation::PreviewSize,
+    pub auto_download: AutoDownload,
+    pub media_cache: MediaCache,
     pub style: ChatStyle,
     pub density: Density,
     pub avatars: bool,
@@ -308,6 +365,8 @@ impl Default for Chat {
     fn default() -> Self {
         Self {
             preview_size: Default::default(),
+            auto_download: Default::default(),
+            media_cache: Default::default(),
             style: Default::default(),
             density: Default::default(),
             avatars: true,
@@ -371,6 +430,19 @@ impl Preferences {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn auto_download_follows_metering_and_cache_limits_are_ordered() {
+        assert!(AutoDownload::Always.allows(Some(true)));
+        assert!(AutoDownload::Unmetered.allows(Some(false)));
+        // Unknown metering counts as unmetered.
+        assert!(AutoDownload::Unmetered.allows(None));
+        assert!(!AutoDownload::Unmetered.allows(Some(true)));
+        assert!(!AutoDownload::Never.allows(Some(false)));
+        assert_eq!(MediaCache::Off.bytes(), None);
+        let limits: Vec<u64> = MediaCache::ALL.iter().filter_map(|c| c.bytes()).collect();
+        assert!(limits.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(MediaCache::default().bytes(), Some(500 * 1024 * 1024));
+    }
     #[test]
     fn defaults_atomic_round_trip_and_invalid_backup() {
         let dir = std::env::temp_dir().join(format!("matrix-preferences-{}", std::process::id()));

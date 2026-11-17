@@ -739,6 +739,35 @@ fn recovery_input_is_cleared_when_leaving_the_screen(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn an_image_held_back_by_data_saving_offers_load_image(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    let id = cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            let message = app.snapshot.messages.last_mut().expect("sample message");
+            message.kind = crate::backend::MessageKind::Image;
+            message.event_id = Some("$held".into());
+            message.attachment = Some(twayblade_core::conversation::Attachment {
+                filename: "held.png".into(),
+                size: Some(2048),
+                preview_png: None,
+                download_needed: true,
+            });
+            let id = message.id.clone();
+            cx.notify();
+            id
+        })
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let button = window.find(gpui_kit::SharedString::from(format!("image-{id}")));
+        assert!(button.visible());
+        use gpui_kit::test::TestQueryExt;
+        assert!(window.find_by_label("Load image held.png").visible());
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
 fn attachment_controls_require_an_explicit_action_and_samples_cannot_upload(
     cx: &mut TestAppContext,
 ) {
@@ -752,6 +781,7 @@ fn attachment_controls_require_an_explicit_action_and_samples_cannot_upload(
                 filename: "report.pdf".into(),
                 size: Some(2048),
                 preview_png: None,
+                download_needed: false,
             });
             let id = message.id.clone();
             cx.notify();

@@ -9,6 +9,7 @@ pub mod channels;
 pub mod conversation;
 pub mod directory;
 pub mod media;
+pub mod media_cache;
 pub mod notifications;
 pub mod presence;
 pub mod profile;
