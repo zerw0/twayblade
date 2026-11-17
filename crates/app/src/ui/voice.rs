@@ -91,11 +91,15 @@ impl MatrixApp {
         self.voice_playback = None;
         let task = cx.background_spawn(async move {
             use twayblade_platform::media_permissions::{CapturePermission, request};
+            // Only macOS has a per-app grant; Windows blocks at device open.
             request(CapturePermission::Microphone)
                 .await
                 .map_err(|_| "Allow Twayblade to use the microphone in System Settings › Privacy & Security.")?;
             Recorder::start().map_err(|error| match error {
                 audio::VoiceError::NoDevice => "No microphone is connected.",
+                _ if cfg!(target_os = "windows") => {
+                    "The microphone could not be started. Check that desktop apps may use it in Settings › Privacy & security."
+                }
                 _ => "The microphone could not be started.",
             })
         });
