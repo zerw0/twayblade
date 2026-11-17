@@ -101,6 +101,10 @@ pub struct Account {
         Arc<Mutex<std::collections::HashMap<matrix_sdk::ruma::OwnedRoomId, usize>>>,
     pub(crate) sync_request_updates: tokio::sync::watch::Sender<Vec<matrix_sdk::ruma::OwnedRoomId>>,
     pub(crate) call_slot: Arc<tokio::sync::Semaphore>,
+    /// Live timelines of recently opened rooms, reused on return (#173).
+    pub(crate) recent_timelines: crate::conversation::RecentTimelines,
+    /// Media may be kept in the encrypted store (#174); off until set.
+    pub(crate) media_cache: Arc<std::sync::atomic::AtomicBool>,
     instance_id: Uuid,
     remotely_revoked: Arc<AtomicBool>,
     store_id: Uuid,
@@ -181,6 +185,8 @@ impl Account {
             sync_requests: Arc::new(Mutex::new(std::collections::HashMap::new())),
             sync_request_updates: tokio::sync::watch::channel(Vec::new()).0,
             call_slot: Arc::new(tokio::sync::Semaphore::new(1)),
+            recent_timelines: Default::default(),
+            media_cache: Default::default(),
             instance_id: Uuid::new_v4(),
             remotely_revoked: Arc::new(AtomicBool::new(false)),
             store_id,

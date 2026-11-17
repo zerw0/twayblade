@@ -242,7 +242,7 @@ impl Conversation {
     }
     pub async fn attachment_thumbnail(&self, id: &str) -> Result<Arc<Vec<u8>>, AttachmentError> {
         let (_cancel, cancel) = tokio::sync::watch::channel(false);
-        self.attachment_preview(id, super::PreviewSize::Default, cancel)
+        self.attachment_preview(id, super::PreviewSize::Default, true, cancel)
             .await
             .map(|p| p.png)
             .map_err(|_| AttachmentError::Download)
@@ -492,6 +492,7 @@ mod integration {
                 assert!(room.encryption_state().is_encrypted());
             }
             let conversation = Conversation {
+                media_cache: Default::default(),
                 read_updates: None,
                 root: None,
                 timeline: Arc::new(checked(room.timeline().await, "timeline")),
@@ -641,6 +642,7 @@ mod integration {
             restored.send_queue().set_enabled(true).await;
             let room = restored.get_room(&room_id).expect("restored room");
             let conversation = Conversation {
+                media_cache: Default::default(),
                 read_updates: None,
                 root: None,
                 timeline: Arc::new(checked(room.timeline().await, "restored timeline")),
@@ -736,6 +738,7 @@ mod integration {
                 Arc::new(std::sync::Mutex::new(())),
             );
             let conversation = Conversation {
+                media_cache: account.media_cache.clone(),
                 read_updates: None,
                 root: None,
                 timeline: Arc::new(checked(room.timeline().await, "timeline")),
@@ -819,7 +822,9 @@ mod integration {
                     ] {
                         let (_cancel, cancel) = tokio::sync::watch::channel(false);
                         let preview = checked(
-                            conversation.attachment_preview(&id, size, cancel).await,
+                            conversation
+                                .attachment_preview(&id, size, true, cancel)
+                                .await,
                             "timeline preview size",
                         );
                         assert!(preview.width <= size.pixels() && preview.height <= size.pixels());
@@ -845,6 +850,50 @@ mod integration {
                     client.media().remove_media_content(&request).await,
                     "clear upload cache before viewer",
                 );
+                if name == "preview-size.png" {
+                    // #174: with the cache off, a preview that may not use
+                    // the network is not downloaded.
+                    let preview = |network: bool| {
+                        let conversation = conversation.clone();
+                        let id = id.clone();
+                        async move {
+                            let (_cancel, cancel) = tokio::sync::watch::channel(false);
+                            conversation
+                                .attachment_preview(
+                                    &id,
+                                    super::super::PreviewSize::Default,
+                                    network,
+                                    cancel,
+                                )
+                                .await
+                        }
+                    };
+                    assert!(matches!(
+                        preview(false).await,
+                        Err(super::super::ImageError::NotDownloaded)
+                    ));
+                    // With the cache on, a download is kept (encrypted in the
+                    // store) and later served without the network.
+                    checked(
+                        account.set_media_cache_limit(Some(64 * 1024 * 1024)).await,
+                        "enable media cache",
+                    );
+                    checked(preview(true).await, "cached preview download");
+                    checked(preview(false).await, "preview from the cache only");
+                    assert!(
+                        checked(account.media_cache_size().await, "media cache size")
+                            .is_some_and(|size| size > 0)
+                    );
+                    checked(account.clear_media_cache().await, "clear media cache");
+                    assert!(matches!(
+                        preview(false).await,
+                        Err(super::super::ImageError::NotDownloaded)
+                    ));
+                    checked(
+                        account.set_media_cache_limit(None).await,
+                        "media cache off again",
+                    );
+                }
                 let gallery = checked(
                     account
                         .room_media(

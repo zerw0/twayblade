@@ -70,6 +70,7 @@ fn failure(error: ImageError) -> &'static str {
         ImageError::Unavailable => "This image is no longer available in the conversation.",
         ImageError::Cancelled => "Image loading cancelled.",
         ImageError::Save => "The image could not be saved. Choose another location and try again.",
+        ImageError::NotDownloaded => "This image hasn't been downloaded yet.",
     }
 }
 impl Viewer {

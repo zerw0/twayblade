@@ -138,6 +138,7 @@ impl MatrixApp {
     }
 
     pub(crate) fn rail_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        use gpui_kit::component::menu::DropdownMenu as _;
         let palette = theme::palette(cx);
         let selected = self.navigation.selected_space.clone();
         let in_any_space = |id: &str| {
@@ -232,8 +233,8 @@ impl MatrixApp {
                         let view = weak.clone();
                         let leave_view = weak.clone();
                         menu.item(
-                            PopupMenuItem::new("Browse rooms")
-                                .icon(IconName::Compass)
+                            PopupMenuItem::new("Space Home")
+                                .icon(IconName::House)
                                 .on_click(move |_, window, cx| {
                                     let _ = view.update(cx, |this, cx| {
                                         this.open_management(
@@ -271,11 +272,41 @@ impl MatrixApp {
                 .border_dashed()
                 .border_color(cx.theme().border)
                 .icon(IconName::Plus)
-                .accessibility_label("Join a space")
-                .tooltip("Join a Space…")
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.open_management(crate::ui::spaces::ManageKind::JoinSpace, window, cx)
-                })),
+                .accessibility_label("Add a space")
+                .tooltip("Create or Join a Space…")
+                .dropdown_menu_with_anchor(Anchor::TopLeft, {
+                    let weak = cx.entity().downgrade();
+                    move |menu, _, _| {
+                        let create = weak.clone();
+                        let join = weak.clone();
+                        menu.item(
+                            PopupMenuItem::new("Create Space…")
+                                .icon(IconName::SquarePlus)
+                                .on_click(move |_, window, cx| {
+                                    let _ = create.update(cx, |this, cx| {
+                                        this.open_management(
+                                            crate::ui::spaces::ManageKind::CreateSpace,
+                                            window,
+                                            cx,
+                                        )
+                                    });
+                                }),
+                        )
+                        .item(
+                            PopupMenuItem::new("Join a Space…")
+                                .icon(IconName::LogIn)
+                                .on_click(move |_, window, cx| {
+                                    let _ = join.update(cx, |this, cx| {
+                                        this.open_management(
+                                            crate::ui::spaces::ManageKind::JoinSpace,
+                                            window,
+                                            cx,
+                                        )
+                                    });
+                                }),
+                        )
+                    }
+                }),
         );
         rail.into_any_element()
     }
@@ -353,10 +384,27 @@ impl MatrixApp {
             .then(|| self.snapshot.activity_previews.get(&room.id))
             .flatten()
             .map(|preview| crate::ui::activity::preview_line(preview, room.direct));
+        let hover_fill = {
+            let accent = cx.theme().accent;
+            if cx.theme().is_dark() {
+                accent.opacity(0.5)
+            } else {
+                accent
+            }
+        };
+        let hovered = self.hovered_room.as_ref() == Some(&room.id);
+        let leaving = self.unhovered_room.as_ref() == Some(&room.id);
+        let reduce = self.snapshot.reduce_motion;
         let row = Button::new(SharedString::from(format!("room-{}", room.id)))
             // A known handle, so F6 and the Archive menu item can focus the row.
             .track_focus(&self.room_focus(&room.id, cx))
-            .ghost()
+            // The row paints its own hover fill so it can fade (#179); the
+            // button keeps the ghost press colour.
+            .custom(
+                gpui_kit::component::button::ButtonCustomVariant::new(cx)
+                    .hover(gpui_kit::transparent_black())
+                    .active(hover_fill),
+            )
             .w_full()
             .h(px(if two_lines {
                 density.preview_row()
@@ -373,7 +421,7 @@ impl MatrixApp {
                 Some(line) => format!("{}, {line}", room_label(room, selected)),
                 None => room_label(room, selected),
             })
-            .child(
+            .child(crate::ui::motion::hover_fill(
                 h_flex()
                     .size_full()
                     .px(px(8.))
@@ -415,7 +463,12 @@ impl MatrixApp {
                             }),
                     )
                     .children(badge),
-            )
+                SharedString::from(format!("room-hover-{}", room.id)),
+                hovered && !selected,
+                leaving && !selected,
+                hover_fill,
+                reduce,
+            ))
             .on_click(cx.listener(move |this, _, window, cx| {
                 // Choosing a search result ends the conversation search.
                 if !this.search.read(cx).value().is_empty() && !this.search_open {
@@ -433,6 +486,20 @@ impl MatrixApp {
         let selected_mode = self.snapshot.notifications.room_mode(&room.id);
         div()
             .id(SharedString::from(format!("room-context-{}", room.id)))
+            .on_hover({
+                let room_id = room.id.clone();
+                cx.listener(move |this, hovered: &bool, _, cx| {
+                    if *hovered {
+                        if this.hovered_room.as_ref() != Some(&room_id) {
+                            this.unhovered_room = this.hovered_room.replace(room_id.clone());
+                            cx.notify();
+                        }
+                    } else if this.hovered_room.as_ref() == Some(&room_id) {
+                        this.unhovered_room = this.hovered_room.take();
+                        cx.notify();
+                    }
+                })
+            })
             .child(row)
             .context_menu(move |mut menu, _, _| {
                 use twayblade_core::notifications::{RoomMode, RuleChange};
@@ -766,23 +833,6 @@ impl MatrixApp {
                             }),
                         );
                     }
-                    if status_msg.is_some() {
-                        let weak = weak.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new("Clear Status Message")
-                                .icon(IconName::MessageSquareX)
-                                .on_click(move |_, window, cx| {
-                                    let _ = weak.update(cx, |this, cx| {
-                                        let state = this
-                                            .snapshot
-                                            .own_presence
-                                            .as_ref()
-                                            .map_or(State::Online, |presence| presence.state);
-                                        this.set_presence(state, None, window, cx)
-                                    });
-                                }),
-                        );
-                    }
                 }
                 let create = weak.clone();
                 let dm = weak.clone();
@@ -1048,18 +1098,42 @@ impl MatrixApp {
                     .pl(px(12.))
                     .pr(px(8.))
                     .gap(px(4.))
-                    .child(
-                        div()
+                    .child({
+                        let heading = div()
                             .id("sidebar-title")
                             .role(Role::Heading)
                             .aria_label(title.clone())
                             .flex_1()
                             .min_w_0()
                             .truncate()
+                            .text_left()
                             .text_size(px(14.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(title),
-                    )
+                            .child(title.clone());
+                        // A space's name opens its home (#177).
+                        match self.navigation.selected_space.clone() {
+                            Some(space) => Button::new("open-space-home")
+                                .ghost()
+                                .flex_1()
+                                .min_w_0()
+                                .h(px(28.))
+                                .px(px(4.))
+                                .ml(px(-4.))
+                                .justify_start()
+                                .accessibility_label(format!("{title}, Space Home"))
+                                .tooltip("Space Home")
+                                .child(heading)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.open_management(
+                                        crate::ui::spaces::ManageKind::Directory(space.clone()),
+                                        window,
+                                        cx,
+                                    )
+                                }))
+                                .into_any_element(),
+                            None => heading.into_any_element(),
+                        }
+                    })
                     .when(self.navigation.selected_space.is_some(), |header| {
                         header.child(
                             Button::new("new-room")
@@ -1119,7 +1193,46 @@ impl MatrixApp {
             .bg(palette.chrome)
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(div().flex_1().min_w_0())
+            .child({
+                // Back and Forward, as in Safari and Finder; Settings ›
+                // Appearance can hide them (⌘[ and ⌘] still work).
+                let arrows = self.preferences.appearance.navigation_arrows;
+                let arrow =
+                    |id: &'static str, icon: IconName, label: &'static str, enabled: bool| {
+                        Button::new(id)
+                            .toolbar_control()
+                            .ghost()
+                            .small()
+                            .icon(Icon::new(icon).size(px(16.)))
+                            .accessibility_label(label)
+                            .tooltip(label)
+                            .disabled(!enabled)
+                    };
+                h_flex().flex_1().min_w_0().gap(px(2.)).when(arrows, |bar| {
+                    bar.child(
+                        arrow(
+                            "nav-back",
+                            IconName::ChevronLeft,
+                            "Back  ⌘[",
+                            self.can_navigate(true),
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.navigate_history(true, window, cx)
+                        })),
+                    )
+                    .child(
+                        arrow(
+                            "nav-forward",
+                            IconName::ChevronRight,
+                            "Forward  ⌘]",
+                            self.can_navigate(false),
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.navigate_history(false, window, cx)
+                        })),
+                    )
+                })
+            })
             .child(
                 div()
                     .id("title-search")

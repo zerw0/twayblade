@@ -219,6 +219,8 @@ struct State {
     /// Rooms whose ring was declined or dismissed here, until it ends.
     handled_rings: std::collections::HashSet<String>,
     activity_task: Option<JoinHandle<()>>,
+    /// Media kept on this device, in bytes (#174); `None` keeps it in memory.
+    media_cache_limit: Option<u64>,
 }
 
 impl State {
@@ -301,6 +303,7 @@ pub(super) struct Backend {
     motion_task: JoinHandle<()>,
     update_task: JoinHandle<()>,
     network_task: JoinHandle<()>,
+    metered_task: JoinHandle<()>,
     update_config: watch::Sender<twayblade_platform::updates::Preferences>,
     runtime: Runtime,
     state: Arc<Mutex<State>>,
@@ -372,6 +375,7 @@ pub(super) enum SpaceAction {
     Leave(String, std::collections::HashSet<String>),
     Create(twayblade_core::space_actions::CreateRoom),
     CreateVoice(twayblade_core::space_actions::CreateRoom),
+    CreateSpace(twayblade_core::space_actions::CreateSpace),
     Dm(String),
     InviteMember(String, String),
     LeaveRoom(String),
@@ -628,21 +632,81 @@ impl Backend {
                 publish(&network_snapshots, |view| view.no_network = !available);
             }
         }));
+        // Metered connections pause automatic image downloads (#174).
+        let state = Arc::new(Mutex::new(State::default()));
+        let metered_state = state.clone();
+        let metered_updates = updates.clone();
+        let metered_task =
+            runtime.spawn(twayblade_platform::network::run_metered(move |metered| {
+                let Ok(mut state) = metered_state.lock() else {
+                    return;
+                };
+                state.previews.metered = metered;
+                state.previews.invalidate_plan();
+                previews::schedule(
+                    &tokio::runtime::Handle::current(),
+                    &metered_state,
+                    &metered_updates,
+                    &mut state,
+                );
+            }));
         Ok(Arc::new(Self {
             _instance: instance,
             network_task,
+            metered_task,
             motion_task,
             update_task,
             update_config,
             runtime,
             updates,
             notification_config: watch::channel(NotificationConfig::default()).0,
-            state: Arc::new(Mutex::new(State::default())),
+            state,
             lifecycle: Mutex::new(()),
             oauth: Mutex::new(None),
             update_download: Mutex::new(None),
             inactive: Default::default(),
         }))
+    }
+
+    /// Keeps up to `limit` bytes of media on this device (#174), or none.
+    pub(super) fn set_media_cache(&self, limit: Option<u64>) -> Result<(), ServiceError> {
+        let account = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| failure("Session is unavailable."))?;
+            state.media_cache_limit = limit;
+            state.account.clone()
+        };
+        if let Some(account) = account {
+            self.runtime
+                .block_on(account.set_media_cache_limit(limit))
+                .map_err(|_| failure("The media cache could not be changed."))?;
+        }
+        Ok(())
+    }
+
+    /// Bytes the media cache takes on disk, when known.
+    pub(super) fn media_cache_size(&self) -> Option<u64> {
+        let account = self.state.lock().ok()?.account.clone()?;
+        self.runtime
+            .block_on(account.media_cache_size())
+            .ok()
+            .flatten()
+    }
+
+    /// Removes all cached media of the open account.
+    pub(super) fn clear_media_cache(&self) -> Result<(), ServiceError> {
+        let account = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session is unavailable."))?
+            .account
+            .clone()
+            .ok_or_else(|| failure("No account is open."))?;
+        self.runtime
+            .block_on(account.clear_media_cache())
+            .map_err(|_| failure("The media cache could not be cleared."))
     }
 
     /// Downloads the available release's installer for this machine and checks
@@ -1408,6 +1472,27 @@ impl Backend {
             .map_err(conversation_failure)
     }
 
+    /// The first page of a subspace's rooms, for expanding it on the space
+    /// home. Independent of the open directory and its pagination.
+    pub(super) fn space_children(
+        &self,
+        expected: u128,
+        id: String,
+    ) -> Result<twayblade_core::space_actions::DirectorySnapshot, ServiceError> {
+        let account = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session unavailable."))?
+            .account
+            .clone()
+            .filter(|a| a.instance_id() == expected)
+            .ok_or_else(|| failure("Account changed."))?;
+        self.runtime.block_on(async {
+            let directory = account.directory(&id).await.map_err(space_failure)?;
+            directory.next_page().await.map_err(space_failure)
+        })
+    }
+
     pub(super) fn space_action(
         &self,
         expected: u128,
@@ -1534,6 +1619,11 @@ impl Backend {
                     }
                     Err(e) => Err(space_failure(e)),
                 },
+                CreateSpace(draft) => account
+                    .create_space(draft)
+                    .await
+                    .map(SpaceOutcome::Room)
+                    .map_err(space_failure),
                 Dm(id) => account
                     .start_dm(&id)
                     .await
@@ -2165,6 +2255,13 @@ impl Backend {
         state.stop();
         state.account = Some(account.clone());
         state.security = Some(security);
+        let limit = state.media_cache_limit;
+        let cached = account.clone();
+        state.tasks.push(self.runtime.spawn(async move {
+            if cached.set_media_cache_limit(limit).await.is_err() {
+                tracing::warn!(name: "media_cache_limit", applied = false);
+            }
+        }));
         let epoch = state.epoch;
         publish(&self.updates, |snapshot| {
             snapshot.clear_account(state.previews.size);
@@ -2342,6 +2439,7 @@ impl Drop for Backend {
         self.motion_task.abort();
         self.update_task.abort();
         self.network_task.abort();
+        self.metered_task.abort();
         let state = match self.state.lock() {
             Ok(mut state) => {
                 state.stop();

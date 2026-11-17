@@ -33,6 +33,7 @@ pub(crate) mod polls;
 pub(crate) mod replying;
 pub(crate) mod security;
 pub(crate) mod settings;
+pub(crate) mod space_home;
 pub(crate) mod spaces;
 pub(crate) mod stickers;
 pub(crate) mod threads;

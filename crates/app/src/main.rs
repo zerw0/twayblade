@@ -292,7 +292,7 @@ fn main() {
                         if let Some(message) = view.snapshot.messages.last_mut() {
                             message.kind = backend::MessageKind::File;
                             message.body.clear();
-                            message.attachment = Some(twayblade_core::conversation::Attachment { filename: "Travel notes.pdf".into(), size: Some(234567), preview_png: None });
+                            message.attachment = Some(twayblade_core::conversation::Attachment { filename: "Travel notes.pdf".into(), size: Some(234567), preview_png: None, download_needed: false });
                             message.delivery = backend::DeliveryState::Queued;
                             message.upload_percent = Some(42);
                         }
@@ -306,6 +306,7 @@ fn main() {
                         view.update_mention_completion(false, text.into(), text.len());
                     }
                     if args.iter().any(|arg| arg == "--preview-explore") { view.open_explore(window,cx); }
+                    if args.iter().any(|arg| arg == "--preview-create-space") { view.open_management(ui::spaces::ManageKind::CreateSpace,window,cx); }
                     if args.iter().any(|arg| arg == "--preview-dm") { view.open_management(ui::spaces::ManageKind::Dm,window,cx); }
                     if args.iter().any(|arg| arg == "--preview-invite-contact") { view.open_management(ui::spaces::ManageKind::InviteContact,window,cx); }
                     if args.iter().any(|arg| arg == "--preview-archive") { for room in view.snapshot.rooms.iter_mut().filter(|room| room.id == "announcements") { room.archived = true; } view.show_archive(window, cx); }

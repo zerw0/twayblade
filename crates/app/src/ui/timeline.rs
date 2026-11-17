@@ -229,6 +229,21 @@ impl MatrixApp {
                                     button.w(px(w * scale)).h(px(h * scale)).max_w_full().child(
                                         img(image).size_full().object_fit(ObjectFit::Contain),
                                     );
+                            } else if attachment.download_needed {
+                                // Automatic download is off here (#174).
+                                let load = message.id.clone();
+                                button = button
+                                    .small()
+                                    .icon(IconName::Download)
+                                    .label("Load Image")
+                                    .accessibility_label(format!(
+                                        "Load image {}",
+                                        attachment.filename
+                                    ))
+                                    .tooltip("Load Image")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.load_image(load.clone(), cx)
+                                    }));
                             } else {
                                 button = button.small().label("Open Image");
                             }
@@ -374,11 +389,36 @@ impl MatrixApp {
                         .size(px(STICKER))
                         .child(img(image).size_full().object_fit(ObjectFit::Contain))
                         .into_any_element(),
-                    None => div()
-                        .size(px(STICKER))
-                        .rounded(px(12.))
-                        .bg(cx.theme().secondary)
-                        .into_any_element(),
+                    None => {
+                        // Held back by data saving (#174): load on request.
+                        let held = message
+                            .attachment
+                            .as_ref()
+                            .is_some_and(|a| a.download_needed);
+                        let load = message.id.clone();
+                        div()
+                            .size(px(STICKER))
+                            .rounded(px(12.))
+                            .bg(cx.theme().secondary)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when(held, |tile| {
+                                tile.child(
+                                    Button::new(SharedString::from(format!(
+                                        "sticker-load-{}",
+                                        message.id
+                                    )))
+                                    .small()
+                                    .icon(IconName::Download)
+                                    .label("Load Sticker")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.load_image(load.clone(), cx)
+                                    })),
+                                )
+                            })
+                            .into_any_element()
+                    }
                 }
             }
             MessageKind::Voice => match &message.voice {
