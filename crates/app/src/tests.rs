@@ -4937,3 +4937,97 @@ fn settings_window_mouse_back_and_forward_switch_sections_and_respect_security_g
     })
     .expect("settings mouse back/forward");
 }
+
+#[gpui_kit::test]
+fn subspace_disclosures_live_in_chat_list_and_keep_room_selection(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            app.snapshot.spaces[0].child_ids.remove("research");
+            app.snapshot.spaces[0].child_ids.insert("projects".into());
+            app.snapshot.spaces.push(crate::backend::Space {
+                id: "projects".into(),
+                name: "Projects".into(),
+                level: 1,
+                child_ids: ["research".into(), "planning".into()].into_iter().collect(),
+                room_ids: ["research".into(), "critique".into(), "planning".into()]
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            });
+            app.snapshot.spaces[0].child_ids.remove("critique");
+            app.snapshot.spaces.push(crate::backend::Space {
+                id: "planning".into(),
+                name: "Planning".into(),
+                level: 1,
+                child_ids: ["critique".into(), "design".into()].into_iter().collect(),
+                room_ids: ["critique".into()].into_iter().collect(),
+                ..Default::default()
+            });
+            cx.notify();
+        })
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find_all("space-projects").is_empty());
+        assert!(!window.find_all("subspace-toggle-projects").is_empty());
+        assert!(window.find_all("room-research").is_empty());
+        window.click("subspace-toggle-projects", cx);
+        window.render_frame(cx);
+        assert!(!window.find_all("room-research").is_empty());
+        assert!(window.find_all("room-critique").is_empty());
+        window.click("subspace-toggle-planning", cx);
+        window.render_frame(cx);
+        assert!(!window.find_all("room-critique").is_empty());
+        assert!(
+            window.find_all("subspace-toggle-design").is_empty(),
+            "cycle must not render an ancestor"
+        );
+        window.click("room-research", cx);
+        window.click("subspace-toggle-projects", cx);
+        window.render_frame(cx);
+        assert!(window.find_all("room-research").is_empty());
+    })
+    .expect("operate subspace disclosure");
+    cx.update(|cx| {
+        assert_eq!(
+            app.read(cx).navigation.selected_room.as_deref(),
+            Some("research")
+        );
+        assert_eq!(
+            app.read(cx).navigation.selected_space.as_deref(),
+            Some("design")
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn subspace_creation_keeps_parent_and_excludes_voice_and_message_encryption(
+    cx: &mut TestAppContext,
+) {
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_management(crate::ui::spaces::ManageKind::Create, window, cx)
+        });
+        window.render_frame(cx);
+        window.click("create-subspace", cx);
+        window.render_frame(cx);
+        let page = app.read(cx).management.as_ref().unwrap();
+        assert!(page.subspace && !page.voice_channel);
+        assert_eq!(page.parent.as_deref(), Some("design"));
+        assert!(window.find_all("room-encryption").is_empty());
+        window.click("voice-channel-kind", cx);
+        window.render_frame(cx);
+        let page = app.read(cx).management.as_ref().unwrap();
+        assert!(page.voice_channel && !page.subspace && page.encrypted);
+        window.click("create-subspace", cx);
+        window.render_frame(cx);
+        let page = app.read(cx).management.as_ref().unwrap();
+        assert!(page.subspace && !page.voice_channel);
+        window.click("create-subspace", cx);
+        window.render_frame(cx);
+        assert!(!window.find_all("room-encryption").is_empty());
+    })
+    .expect("switch between text, voice and subspace creation");
+}

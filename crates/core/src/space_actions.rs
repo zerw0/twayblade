@@ -189,6 +189,13 @@ impl LeavePlan {
             .map_err(|_| SpaceError::Leave)
     }
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CreateKind {
+    Text,
+    Voice,
+    Space,
+}
+
 #[derive(Clone)]
 pub struct CreateRoom {
     pub name: String,
@@ -380,19 +387,22 @@ impl Account {
         })
     }
     pub async fn create_room(&self, draft: CreateRoom) -> Result<String, SpaceError> {
-        self.create_channel(draft, crate::channels::ChannelKind::Text)
-            .await
+        self.create_channel(draft, CreateKind::Text).await
     }
 
     pub async fn create_voice_channel(&self, draft: CreateRoom) -> Result<String, SpaceError> {
-        self.create_channel(draft, crate::channels::ChannelKind::Voice)
-            .await
+        self.create_channel(draft, CreateKind::Voice).await
+    }
+
+    /// Creates a joined subspace with the same parent permission and linking checks as channels.
+    pub async fn create_subspace(&self, draft: CreateRoom) -> Result<String, SpaceError> {
+        self.create_channel(draft, CreateKind::Space).await
     }
 
     async fn create_channel(
         &self,
         draft: CreateRoom,
-        kind: crate::channels::ChannelKind,
+        kind: CreateKind,
     ) -> Result<String, SpaceError> {
         draft.validate()?;
         let _parent_sync = if let Some(id) = &draft.parent {
@@ -427,7 +437,13 @@ impl Account {
         request.name = Some(draft.name.trim().into());
         request.topic = (!draft.topic.trim().is_empty()).then(|| draft.topic.trim().into());
         request.preset = Some(create_room::v3::RoomPreset::PrivateChat);
-        if kind == crate::channels::ChannelKind::Voice {
+        if kind == CreateKind::Space {
+            let mut creation = create_room::v3::CreationContent::new();
+            creation.room_type = Some(matrix_sdk::ruma::room::RoomType::Space);
+            request.creation_content =
+                Some(matrix_sdk::ruma::serde::Raw::new(&creation).map_err(|_| SpaceError::Create)?);
+        }
+        if kind == CreateKind::Voice {
             let mut creation = create_room::v3::CreationContent::new();
             creation.room_type = Some(crate::channels::VOICE_ROOM_TYPE.into());
             request.creation_content =
@@ -458,7 +474,7 @@ impl Account {
                 .to_raw_any(),
             );
         }
-        if draft.encrypted || kind == crate::channels::ChannelKind::Voice {
+        if kind != CreateKind::Space && (draft.encrypted || kind == CreateKind::Voice) {
             request.initial_state.push(
                 InitialStateEvent::with_empty_state_key(
                     RoomEncryptionEventContent::with_recommended_defaults(),

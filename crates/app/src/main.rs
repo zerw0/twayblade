@@ -205,6 +205,21 @@ fn main() {
                         view.options = Some(backend::LoginOptions { homeserver: "matrix.example.org".into(), password: true, browser: true, sso: false, providers: Vec::new() });
                     }
                     if args.iter().any(|arg| arg == "--preview-sign-out") { view.open_management(ui::spaces::ManageKind::SignOut, window, cx); }
+                    if args.iter().any(|arg| arg == "--preview-subspaces") {
+                        let root = &mut view.snapshot.spaces[0];
+                        root.child_ids.remove("research");
+                        root.child_ids.remove("critique");
+                        root.child_ids.insert("projects".into());
+                        root.room_ids.extend(["projects".into(), "planning".into()]);
+                        view.snapshot.spaces.extend([
+                            backend::Space { id: "projects".into(), name: "Projects".into(), level: 1,
+                                child_ids: ["research", "planning"].into_iter().map(str::to_owned).collect(),
+                                room_ids: ["research", "planning", "critique"].into_iter().map(str::to_owned).collect(), ..Default::default() },
+                            backend::Space { id: "planning".into(), name: "Planning".into(), level: 1,
+                                child_ids: ["critique".into()].into_iter().collect(), room_ids: ["critique".into()].into_iter().collect(), ..Default::default() },
+                        ]);
+                        view.expanded_subspaces.insert("projects".into());
+                    }
                     // Sample latest messages for the sidebar's preview lines.
                     {
                         let now = chrono::Utc::now().timestamp_millis() as u64;

@@ -376,6 +376,7 @@ pub(super) enum SpaceAction {
     Create(twayblade_core::space_actions::CreateRoom),
     CreateVoice(twayblade_core::space_actions::CreateRoom),
     CreateSpace(twayblade_core::space_actions::CreateSpace),
+    CreateSubspace(twayblade_core::space_actions::CreateRoom),
     Dm(String),
     InviteMember(String, String),
     LeaveRoom(String),
@@ -1608,6 +1609,11 @@ impl Backend {
                         .map(|_| SpaceOutcome::Done)
                         .map_err(space_failure)
                 }
+                CreateSubspace(draft) => match account.create_subspace(draft).await {
+                    Ok(_) => Ok(SpaceOutcome::Done),
+                    Err(twayblade_core::space_actions::SpaceError::ParentLink { .. }) => Err(failure("The subspace was created, but linking it to its parent failed. Do not create it again; it remains available as a separate space.")),
+                    Err(error) => Err(space_failure(error)),
+                },
                 action @ (Create(_) | CreateVoice(_)) => match match action {
                     Create(draft) => account.create_room(draft).await,
                     CreateVoice(draft) => account.create_voice_channel(draft).await,
