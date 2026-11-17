@@ -2601,6 +2601,7 @@ impl MatrixApp {
                 | ManageKind::InviteContact
                 | ManageKind::SignOut
                 | ManageKind::StatusMessage
+                | ManageKind::CreatePoll(_)
                 | ManageKind::Explore => {}
             }
         }

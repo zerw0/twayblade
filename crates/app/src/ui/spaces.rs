@@ -38,6 +38,8 @@ pub(crate) enum ManageKind {
     StatusMessage,
     /// Public rooms of your server or a large public homeserver.
     Explore,
+    /// Create a poll in this room (room ID) (#181).
+    CreatePoll(String),
 }
 impl ManageKind {
     /// Short forms open as a small centred dialog; browsing and leaving keep
@@ -53,6 +55,7 @@ impl ManageKind {
                 | Self::InviteContact
                 | Self::SignOut
                 | Self::StatusMessage
+                | Self::CreatePoll(_)
         )
     }
 }
@@ -75,6 +78,10 @@ pub(crate) struct Management {
     /// The contact link was copied; the button says so until the dialog closes.
     pub copied: bool,
     pub parent_from_context: bool,
+    /// Create Poll (#181): one field per answer, and whether results show
+    /// before the poll ends.
+    pub poll_answers: Vec<Entity<InputState>>,
+    pub poll_disclosed: bool,
 }
 impl MatrixApp {
     pub fn open_management(
@@ -128,6 +135,7 @@ impl MatrixApp {
                     .placeholder("What are you up to?")
                     .default_value(current_status),
                 ManageKind::Explore => input.placeholder("Search rooms by name or topic"),
+                ManageKind::CreatePoll(_) => input.placeholder("Ask a question"),
                 _ => input,
             }
         });
@@ -183,6 +191,8 @@ impl MatrixApp {
             parent: initial_parent,
             focus: cx.focus_handle(),
             copied: false,
+            poll_answers: Vec::new(),
+            poll_disclosed: true,
         });
         // Dialogs with a text field start in it, so typing works at once. The
         // leave confirmation starts on the sheet itself, not on its
@@ -194,6 +204,7 @@ impl MatrixApp {
                 | ManageKind::JoinSpace
                 | ManageKind::InviteMember(_)
                 | ManageKind::StatusMessage
+                | ManageKind::CreatePoll(_)
                 | ManageKind::Explore => page.name.update(cx, |state, cx| state.focus(window, cx)),
                 ManageKind::LeaveRoom(_) | ManageKind::InviteContact | ManageKind::SignOut => {
                     page.focus.focus(window, cx)
@@ -469,6 +480,7 @@ impl MatrixApp {
             ManageKind::InviteContact => "Invite a Contact",
             ManageKind::SignOut => "Sign Out",
             ManageKind::StatusMessage => "Status Message",
+            ManageKind::CreatePoll(_) => "Create Poll",
             ManageKind::Explore => "Explore Rooms",
         }
     }
@@ -1006,6 +1018,9 @@ impl MatrixApp {
             }
             ManageKind::Explore => {
                 body = body.child(self.explore_body(cx));
+            }
+            ManageKind::CreatePoll(_) => {
+                body = body.child(self.poll_dialog(page, cx));
             }
             ManageKind::StatusMessage => {
                 use twayblade_core::presence::State;

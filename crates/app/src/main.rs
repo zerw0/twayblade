@@ -262,6 +262,14 @@ fn main() {
                         view.status = "Sample data · Emoji picker".into();
                         view.open_emoji(None, window, cx);
                     }
+                    if args.iter().any(|arg| arg == "--preview-create-poll") {
+                        view.open_create_poll(window, cx);
+                    }
+                    if args.iter().any(|arg| arg == "--preview-poll") {
+                        view.status = "Sample data · Polls".into();
+                        let own = view.snapshot.user_id.clone();
+                        ui::polls::sample_polls(&mut view.snapshot.messages, &own);
+                    }
                     if args.iter().any(|arg| arg == "--preview-attachments") {
                         view.status = "Sample data · Attachment preview".into();
                         view.attachment_sample = true;

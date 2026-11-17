@@ -359,6 +359,14 @@ impl MatrixApp {
             MessageKind::Membership => {
                 return self.membership_line(message, in_thread, cx);
             }
+            MessageKind::Poll => match &message.poll {
+                Some(poll) => {
+                    let disabled =
+                        self.preview || self.backend.is_none() || !self.snapshot.timeline_ready;
+                    self.poll_card(message, poll, disabled, cx)
+                }
+                None => div().into_any_element(),
+            },
             MessageKind::Redacted => div()
                 .px(px(12.))
                 .py(px(7.))
@@ -1369,6 +1377,11 @@ pub(crate) fn accessible_message(message: &crate::backend::Message, own_user: &s
         MessageKind::Redacted => "Message deleted".to_owned(),
         MessageKind::Image => format!("Image, {}", model::message_text(message)),
         MessageKind::File => format!("File, {}", model::message_text(message)),
+        MessageKind::Poll => message
+            .poll
+            .as_ref()
+            .map(crate::ui::polls::accessible_poll)
+            .unwrap_or_else(|| model::message_text(message)),
         _ => model::message_text(message),
     };
     let mut label = if message.kind == MessageKind::Emote {

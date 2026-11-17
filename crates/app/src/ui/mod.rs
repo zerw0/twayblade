@@ -29,6 +29,7 @@ pub(crate) mod focus;
 pub(crate) mod keyboard;
 pub(crate) mod message_scroller;
 pub(crate) mod motion;
+pub(crate) mod polls;
 pub(crate) mod replying;
 pub(crate) mod security;
 pub(crate) mod settings;

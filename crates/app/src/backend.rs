@@ -431,10 +431,28 @@ pub(super) enum SecurityOutcome {
 }
 
 pub(super) enum TimelineAction {
-    React { message: String, key: String },
-    Retry { message: String },
-    Cancel { message: String },
-    Read { event_id: String },
+    React {
+        message: String,
+        key: String,
+    },
+    /// Polls (#181): create one, vote, or end one this account started.
+    SendPoll(twayblade_core::conversation::PollDraft),
+    Vote {
+        message: String,
+        answer: String,
+    },
+    EndPoll {
+        message: String,
+    },
+    Retry {
+        message: String,
+    },
+    Cancel {
+        message: String,
+    },
+    Read {
+        event_id: String,
+    },
 }
 
 pub(super) const LOADING_STATUS: &str = "Loading messages…";
@@ -549,6 +567,9 @@ fn conversation_failure(error: ConversationError) -> ServiceError {
         ConversationError::Retry => "The message could not be retried. Try again.",
         ConversationError::Cancel => "The failed message could not be cancelled. Try again.",
         ConversationError::Receipt => "The read marker could not be updated.",
+        ConversationError::InvalidPoll => {
+            "Add a question and at least two answers. Ended polls take no more votes."
+        }
     })
 }
 
@@ -1353,6 +1374,13 @@ impl Backend {
                         }
                         TimelineAction::Retry { message } => conversation.retry(&message).await,
                         TimelineAction::Cancel { message } => conversation.cancel(&message).await,
+                        TimelineAction::SendPoll(draft) => conversation.send_poll(draft).await,
+                        TimelineAction::Vote { message, answer } => {
+                            conversation.vote_poll(&message, vec![answer]).await
+                        }
+                        TimelineAction::EndPoll { message } => {
+                            conversation.end_poll(&message).await
+                        }
                     }
                     .map(|_| false),
                 }
@@ -1946,6 +1974,11 @@ impl Backend {
                     TimelineAction::Retry { message } => conversation.retry(&message).await,
                     TimelineAction::Cancel { message } => conversation.cancel(&message).await,
                     TimelineAction::Read { event_id } => conversation.mark_read(&event_id).await,
+                    TimelineAction::SendPoll(draft) => conversation.send_poll(draft).await,
+                    TimelineAction::Vote { message, answer } => {
+                        conversation.vote_poll(&message, vec![answer]).await
+                    }
+                    TimelineAction::EndPoll { message } => conversation.end_poll(&message).await,
                 }
             })
             .map_err(conversation_failure)

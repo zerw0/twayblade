@@ -18,9 +18,11 @@ pub use previews::{PreviewSize, TimelinePreview};
 mod editing;
 pub use editing::EditError;
 mod attachments;
+mod polls;
 mod unread;
 mod viewer;
 pub use attachments::{AttachmentDraft, AttachmentError, sanitize_filename};
+pub use polls::{MAX_ANSWERS, MIN_ANSWERS, Poll, PollAnswer, PollDraft};
 pub use viewer::{ImageError, ViewerImage, decode_viewer_image};
 pub(crate) use viewer::{decode_gallery_thumbnail, decode_viewer_bytes};
 
@@ -37,6 +39,8 @@ pub enum MessageKind {
     Redacted,
     /// Someone joined, left, was invited, … (`MessageRow::membership`).
     Membership,
+    /// A poll (`MessageRow::poll`).
+    Poll,
 }
 
 /// A membership change in the timeline; the frontend words it (#104).
@@ -118,6 +122,8 @@ pub struct MessageRow {
     pub new_messages: bool,
     /// Set for `MessageKind::Membership`.
     pub membership: Option<Membership>,
+    /// Set for `MessageKind::Poll`.
+    pub poll: Option<Poll>,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -192,6 +198,8 @@ pub enum ConversationError {
     Cancel,
     #[error("receipt_failed")]
     Receipt,
+    #[error("invalid_poll")]
+    InvalidPoll,
 }
 
 #[derive(Clone)]
@@ -521,6 +529,7 @@ fn rows<'a>(
             let event = item.as_event()?;
             let content = event.content();
             let mut membership = None;
+            let mut poll = None;
             let (kind, body, attachment) = if let Some(message) = content.as_message() {
                 message_content(message.msgtype())
             } else if content.is_unable_to_decrypt() {
@@ -537,6 +546,15 @@ fn rows<'a>(
                         .unwrap_or_else(|| change.user_id().to_string()),
                 });
                 (MessageKind::Membership, String::new(), None)
+            } else if let TimelineItemContent::MsgLike(MsgLikeContent {
+                kind: matrix_sdk_ui::timeline::MsgLikeKind::Poll(state),
+                ..
+            }) = content
+            {
+                let projected = polls::project(state, event.sender(), own_user);
+                let question = projected.question.clone();
+                poll = Some(projected);
+                (MessageKind::Poll, question, None)
             } else {
                 return None;
             };
@@ -595,6 +613,7 @@ fn rows<'a>(
                     Some(EventSendState::SendingFailed { .. })
                 ) && event.local_echo_send_handle().is_some(),
                 membership,
+                poll,
             })
         })
         .collect()

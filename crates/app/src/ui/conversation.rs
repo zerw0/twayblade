@@ -466,6 +466,7 @@ impl MatrixApp {
                                     .h(px(42.))
                                     .pr(px(6.))
                                     .gap(px(2.))
+                                    .child(self.composer_more_menu(editable, cx))
                                     .child(
                                         Button::new("attach-file")
                                             .ghost()

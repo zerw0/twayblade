@@ -739,6 +739,79 @@ fn recovery_input_is_cleared_when_leaving_the_screen(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn polls_show_results_after_voting_and_create_poll_needs_two_answers(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestQueryExt;
+    let (window, app) = preview_window(cx);
+    let (open, ended) = cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            let own = app.snapshot.user_id.clone();
+            crate::ui::polls::sample_polls(&mut app.snapshot.messages, &own);
+            let len = app.snapshot.messages.len();
+            cx.notify();
+            (
+                app.snapshot.messages[len - 2].id.clone(),
+                app.snapshot.messages[len - 1].id.clone(),
+            )
+        })
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        // Your own open poll offers End Poll; the ended one takes no votes.
+        assert!(
+            window
+                .find(gpui_kit::SharedString::from(format!("poll-end-{open}")))
+                .visible()
+        );
+        assert!(
+            window
+                .try_find(gpui_kit::SharedString::from(format!("poll-end-{ended}")))
+                .is_none()
+        );
+        // Ended: plain rows with the final counts, no vote buttons.
+        assert!(window.find_by_label("Twayblade 1.0, 6 votes").visible());
+        assert!(window.find_by_label("Lisbon, 5 votes, your vote").visible());
+        // Create Poll from the composer's ＋ menu.
+        app.update(cx, |app, cx| app.open_create_poll(window, cx));
+        window.render_frame(cx);
+        assert_eq!(window.find("poll-create").disabled(), Some(true));
+        window.click("poll-add-answer", cx);
+        window.render_frame(cx);
+    })
+    .unwrap();
+    cx.update(|cx| {
+        let page = app.read(cx).management.as_ref().expect("Create Poll");
+        assert!(matches!(
+            page.kind,
+            crate::ui::spaces::ManageKind::CreatePoll(_)
+        ));
+        assert_eq!(page.poll_answers.len(), 3);
+        assert!(page.poll_disclosed);
+    });
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            let page = app.management.as_ref().unwrap();
+            let question = page.name.clone();
+            let answers = page.poll_answers.clone();
+            question.update(cx, |s, cx| s.set_value("Lunch?", window, cx));
+            answers[0].update(cx, |s, cx| s.set_value("Pizza", window, cx));
+            answers[1].update(cx, |s, cx| s.set_value("Soup", window, cx));
+        });
+        window.render_frame(cx);
+        // The empty third answer can go; two must stay.
+        window.click(("poll-remove-answer", 2usize), cx);
+        window.render_frame(cx);
+        assert!(window.try_find(("poll-remove-answer", 0usize)).is_none());
+    })
+    .unwrap();
+    cx.update(|cx| {
+        let app = app.read(cx);
+        let page = app.management.as_ref().unwrap();
+        assert_eq!(page.poll_answers.len(), 2);
+        assert_eq!(page.poll_answers[1].read(cx).value().as_str(), "Soup");
+    });
+}
+
+#[gpui_kit::test]
 fn attachment_controls_require_an_explicit_action_and_samples_cannot_upload(
     cx: &mut TestAppContext,
 ) {

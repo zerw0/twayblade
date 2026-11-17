@@ -302,6 +302,94 @@ async fn encrypted_delivery_profile_and_same_device_store_restore() {
         "PASS: application send queue, encrypted server event and decrypted recipient timeline"
     );
 
+    // Polls (#181) in the encrypted room: Alice asks, Bob votes, Alice sees
+    // the vote, ends the poll, and a late vote is refused.
+    checked(
+        conversation
+            .send_poll(crate::conversation::PollDraft {
+                question: "Isolated poll?".into(),
+                answers: vec!["Yes".into(), "No".into()],
+                disclosed: true,
+            })
+            .await,
+        "send poll",
+    );
+    let mut bob_polls = Box::pin(bob.conversation_updates(room_id.to_string(), 4));
+    let seen = wait_snapshot(
+        &mut bob_polls,
+        |s| {
+            s.messages.iter().any(|m| {
+                m.poll
+                    .as_ref()
+                    .is_some_and(|p| p.question == "Isolated poll?")
+            })
+        },
+        "poll reaches Bob",
+    )
+    .await;
+    let row = seen
+        .messages
+        .iter()
+        .find(|m| m.poll.is_some())
+        .expect("poll row");
+    let poll = row.poll.clone().expect("poll");
+    assert!(!poll.mine && !poll.ended && poll.answers.len() == 2 && poll.disclosed);
+    let bob_conversation = seen.conversation.clone().expect("Bob timeline");
+    checked(
+        bob_conversation
+            .vote_poll(&row.id, vec![poll.answers[0].id.clone()])
+            .await,
+        "Bob votes",
+    );
+    let mut alice_polls = Box::pin(alice.conversation_updates(room_id.to_string(), 5));
+    let voted = wait_snapshot(
+        &mut alice_polls,
+        |s| {
+            s.messages.iter().any(|m| {
+                m.poll
+                    .as_ref()
+                    .is_some_and(|p| p.mine && p.voters == 1 && p.answers[0].votes == 1)
+            })
+        },
+        "Alice sees Bob's vote",
+    )
+    .await;
+    let alice_row = voted
+        .messages
+        .iter()
+        .find(|m| m.poll.is_some())
+        .expect("Alice poll row")
+        .id
+        .clone();
+    let alice_conversation = voted.conversation.clone().expect("Alice timeline");
+    checked(alice_conversation.end_poll(&alice_row).await, "end poll");
+    let ended = wait_snapshot(
+        &mut bob_polls,
+        |s| {
+            s.messages.iter().any(|m| {
+                m.poll
+                    .as_ref()
+                    .is_some_and(|p| p.ended && p.answers[0].winner)
+            })
+        },
+        "Bob sees the ended poll",
+    )
+    .await;
+    let row = ended
+        .messages
+        .iter()
+        .find(|m| m.poll.is_some())
+        .expect("ended poll");
+    assert!(matches!(
+        bob_conversation
+            .vote_poll(&row.id, vec!["answer-1".into()])
+            .await,
+        Err(crate::conversation::ConversationError::InvalidPoll)
+    ));
+    drop(alice_polls);
+    drop(bob_polls);
+    eprintln!("PASS: encrypted poll create, vote, results and end");
+
     let notification_identity = bob.notification_identity();
     let previous_instance = bob.instance_id();
     bob_sync.abort();
