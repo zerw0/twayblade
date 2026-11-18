@@ -15,6 +15,8 @@ let
         top = builtins.head (lib.splitString "/" relative);
       in (toString path) == (toString src) || builtins.elem top [
         "Cargo.toml" "Cargo.lock" ".cargo" "crates" "scripts" "macos" "vendor" "LICENSE"
+        # Desktop entry, icons and metainfo for the installed app.
+        "packaging" "assets"
       ];
   };
   triples = {
@@ -88,20 +90,22 @@ in buildRustPackage {
       --replace-fail com.twayblade.desktop.development com.twayblade.desktop \
       --replace-fail '<string>0.1.0</string>' '<string>${version}</string>'
     cp "$out/share/licenses/twayblade/"* "$app/Contents/Resources/licenses/"
+    cp assets/Twayblade.icns "$app/Contents/Resources/"
     ln -s "$app/Contents/MacOS/twayblade" "$out/bin/twayblade"
   '' + lib.optionalString stdenv.hostPlatform.isLinux ''
     install -m755 "$CARGO_TARGET_DIR/${target}/release/twayblade" "$out/bin/twayblade"
     wrapProgram "$out/bin/twayblade" --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath linuxLibraries}
-    mkdir -p "$out/share/applications"
-    cat > "$out/share/applications/twayblade.desktop" <<EOF
-    [Desktop Entry]
-    Name=Twayblade
-    Comment=Native Matrix messaging and calls
-    Exec=$out/bin/twayblade
-    Type=Application
-    Terminal=false
-    Categories=Network;InstantMessaging;
-    EOF
+    # The packaged desktop entry, icon and metainfo, under the app ID the
+    # window reports (Wayland app_id, X11 WM_CLASS), so menus, docks and
+    # Alt-Tab find the entry and its icon.
+    install -Dm644 packaging/linux/com.twayblade.desktop.desktop \
+      "$out/share/applications/com.twayblade.desktop.desktop"
+    substituteInPlace "$out/share/applications/com.twayblade.desktop.desktop" \
+      --replace-fail 'Exec=twayblade' "Exec=$out/bin/twayblade"
+    install -Dm644 packaging/icons/com.twayblade.desktop.png \
+      "$out/share/icons/hicolor/512x512/apps/com.twayblade.desktop.png"
+    install -Dm644 packaging/linux/com.twayblade.desktop.metainfo.xml \
+      "$out/share/metainfo/com.twayblade.desktop.metainfo.xml"
   '' + ''
     runHook postInstall
   '';
