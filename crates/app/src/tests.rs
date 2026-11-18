@@ -413,6 +413,27 @@ fn short_timeline_rests_against_the_composer(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn clicking_a_reply_quote_reveals_the_original(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    cx.update_window(window, |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.scroller
+                .update(cx, |state, cx| state.scroll_to_item(0, cx));
+        });
+        window.render_frame(cx);
+        window.click("reply-sample-1", cx);
+        window.render_frame(cx);
+        let app = app.read(cx);
+        assert_eq!(
+            app.revealed_event.as_deref(),
+            Some("$sample-0:preview.invalid")
+        );
+        assert_eq!(app.message_cursor(false), Some("sample-0"));
+    })
+    .expect("reply jump");
+}
+
+#[gpui_kit::test]
 fn pagination_keeps_existing_group_and_reading_anchor(cx: &mut TestAppContext) {
     // Short enough that the sample timeline scrolls: a timeline that fits
     // rests against the composer and has no reading anchor to keep.

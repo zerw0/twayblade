@@ -342,6 +342,7 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
                 sender: "Alex".into(),
                 excerpt: "A single Rust interface for every desktop.".into(),
             });
+            message.reply_to = Some("$sample-0:preview.invalid".into());
             message.kind = MessageKind::Notice;
             message.edited = true;
         }
@@ -769,6 +770,7 @@ pub(super) fn group_signature(messages: &[Message], range: std::ops::Range<usize
         for reaction in &message.reactions {
             (&reaction.key, reaction.count, reaction.mine).hash(&mut hasher);
         }
+        message.reply_to.hash(&mut hasher);
         match &message.reply {
             Some(ReplyTarget::Ready { sender, excerpt }) => {
                 (1u8, sender, excerpt).hash(&mut hasher)
