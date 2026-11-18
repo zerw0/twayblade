@@ -115,6 +115,8 @@ pub struct MessageRow {
     pub editable: bool,
     pub delivery: DeliveryState,
     pub reply: Option<ReplyTarget>,
+    /// Event ID of the message this one replies to, for jumping to it.
+    pub reply_to: Option<String>,
     pub reactions: Vec<Reaction>,
     pub thread_replies: u32,
     pub thread_unread: u64,
@@ -660,6 +662,9 @@ fn rows<'a>(
                 attachment,
                 delivery: delivery(event.send_state()),
                 reply: msglike.and_then(reply_target),
+                reply_to: msglike
+                    .and_then(|content| content.in_reply_to.as_ref())
+                    .map(|reply| reply.event_id.to_string()),
                 reactions: msglike
                     .map(|content| reactions(content, own_user))
                     .unwrap_or_default(),

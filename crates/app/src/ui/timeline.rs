@@ -54,9 +54,35 @@ impl MatrixApp {
                         };
                         // Line styles quote on one line: "↩ Sender  excerpt…".
                         let one_line = self.preferences.chat.style != ChatStyle::Bubbles;
+                        // Clicking the quote jumps to the original message.
+                        let jump = message
+                            .reply_to
+                            .clone()
+                            .filter(|_| !matches!(reply, ReplyTarget::Unavailable));
                         content = content.child(
                             div()
                                 .id(SharedString::from(format!("reply-{}", message.id)))
+                                .when_some(jump, |quote, event| {
+                                    quote
+                                        .cursor_pointer()
+                                        .rounded(px(4.))
+                                        .hover(|quote| quote.opacity(1.))
+                                        .tooltip(|window, cx| {
+                                            gpui_kit::component::tooltip::Tooltip::new(
+                                                "Go to Original Message",
+                                            )
+                                            .build(window, cx)
+                                        })
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            cx.stop_propagation();
+                                            this.jump_to_reply(
+                                                in_thread,
+                                                event.clone(),
+                                                window,
+                                                cx,
+                                            );
+                                        }))
+                                })
                                 .flex()
                                 .when(one_line, |quote| {
                                     quote.flex_row().items_center().gap(px(6.))
