@@ -332,7 +332,9 @@ impl MatrixApp {
                         .text_size(px(11.))
                         .text_color(muted)
                         // Nobody typing: who has read up to the latest message.
-                        .when(typing.is_empty(), |line| line.children(self.seen_by_row()))
+                        .when(typing.is_empty(), |line| {
+                            line.children(self.seen_by_row(cx))
+                        })
                         .when(!typing.is_empty(), |line| {
                             // Who is typing (avatars), a pulse, then the accessible text.
                             let reduce = self.snapshot.reduce_motion;
@@ -565,7 +567,7 @@ impl MatrixApp {
 
     /// The people whose read receipt is on the latest message, in groups and
     /// direct messages alike. None until someone besides you has read it.
-    fn seen_by_row(&self) -> Option<AnyElement> {
+    fn seen_by_row(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.snapshot.timeline_ready {
             return None;
         }
@@ -578,32 +580,28 @@ impl MatrixApp {
         let names: Vec<String> = latest
             .read_by
             .iter()
-            .map(|user| {
-                self.snapshot
-                    .members
-                    .iter()
-                    .find(|member| &member.user_id == user)
-                    .map(|member| member.display_name.clone())
-                    .filter(|name| !name.is_empty())
-                    // Before the member list loads: the user's local part.
-                    .unwrap_or_else(|| {
-                        user.trim_start_matches('@')
-                            .split(':')
-                            .next()
-                            .unwrap_or(user)
-                            .to_owned()
-                    })
-            })
+            .map(|user| self.reader_name(user))
             .collect();
         let text = model::seen_by_line(&names)?;
+        // Clicking the line lists everyone who has read it.
         Some(
-            h_flex()
+            div()
                 .id("seen-by")
-                .gap(px(6.))
-                .items_center()
                 .min_w_0()
-                .child(Icon::new(IconName::CheckCheck).size(px(12.)))
-                .child(div().min_w_0().truncate().child(text))
+                .child(
+                    self.read_by_popover(
+                        "latest",
+                        &latest.read_by,
+                        h_flex()
+                            .gap(px(6.))
+                            .items_center()
+                            .min_w_0()
+                            .child(Icon::new(IconName::CheckCheck).size(px(12.)))
+                            .child(div().min_w_0().truncate().child(text.clone())),
+                        format!("{text}. Show everyone who has read it"),
+                        cx,
+                    ),
+                )
                 .test_support()
                 .into_any_element(),
         )

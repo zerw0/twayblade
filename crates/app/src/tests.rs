@@ -2823,6 +2823,19 @@ fn the_composer_shows_who_has_seen_the_latest_message(cx: &mut TestAppContext) {
         })
     });
     assert!(seen(cx), "a reader of the latest message is shown");
+    // Clicking the line lists the readers.
+    let reader = cx.update(|cx| app.read(cx).snapshot.members[0].user_id.clone());
+    cx.update_window(window, |_, window, cx| {
+        window.click("read-by-latest", cx);
+        window.render_frame(cx);
+        assert!(
+            window
+                .find(gpui_kit::SharedString::from(format!("reader-{reader}")))
+                .visible(),
+            "the reader list opens"
+        );
+    })
+    .expect("open the reader list");
     // Someone typing takes the line instead.
     cx.update(|cx| {
         app.update(cx, |app, cx| {

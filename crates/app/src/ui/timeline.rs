@@ -1311,8 +1311,7 @@ impl MatrixApp {
                         body.into_any_element()
                     });
                     if let Some(label) = delivered(message) {
-                        column =
-                            column.child(div().text_size(px(10.5)).text_color(muted).child(label));
+                        column = column.child(self.delivery_label(message, label, false, cx));
                     }
                 }
                 let mut row = h_flex()
@@ -1397,9 +1396,7 @@ impl MatrixApp {
                     group = group.child(
                         div()
                             .pl(px(178.))
-                            .text_size(px(10.5))
-                            .text_color(muted)
-                            .child(label),
+                            .child(self.delivery_label(message, label, false, cx)),
                     );
                 }
             }
@@ -1437,15 +1434,9 @@ impl MatrixApp {
                 };
                 if !label.is_empty() {
                     column = column.child(
-                        h_flex()
+                        div()
                             .pr(px(6.))
-                            .gap(px(3.))
-                            .text_size(px(10.5))
-                            .text_color(muted)
-                            .when(label == "Read", |line| {
-                                line.child(Icon::new(IconName::CheckCheck).size(px(12.)))
-                            })
-                            .child(label),
+                            .child(self.delivery_label(message, label, true, cx)),
                     );
                 }
             }
