@@ -1773,6 +1773,7 @@ impl MatrixApp {
             },
         );
         let size = match self.media_cache_size {
+            _ if self.preview && crate::model::showcase() => human_size(412 * 1024 * 1024),
             _ if self.preview => "Sample data".to_owned(),
             Some(bytes) => human_size(bytes),
             None => "Unknown".to_owned(),
@@ -2107,7 +2108,7 @@ impl Render for SettingsWindow {
                 .px(px(20.))
                 .py(px(16.))
                 .gap(px(14.))
-                .when(main.preview, |v| {
+                .when(main.preview && !crate::model::showcase(), |v| {
                     v.child(
                         div()
                             .text_size(px(11.))

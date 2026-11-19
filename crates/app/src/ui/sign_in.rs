@@ -112,7 +112,7 @@ impl MatrixApp {
                     })),
             );
         }
-        if self.preview {
+        if self.preview && !model::showcase() {
             form = form.child(
                 div()
                     .text_color(cx.theme().muted_foreground)
@@ -249,19 +249,12 @@ impl MatrixApp {
                 // The sheet sits over the app, so it skips the brand mark and
                 // uses a sheet-sized title.
                 .when(!adding, |header| {
+                    // The app icon, as in the Dock; its rounded square is in the artwork.
                     header.child(
-                        div()
-                            .size(px(56.))
-                            .rounded_full()
-                            .bg(cx.theme().primary)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(
-                                Icon::new(IconName::MessagesSquare)
-                                    .size(px(28.))
-                                    .text_color(cx.theme().primary_foreground),
-                            ),
+                        div().id("sign-in-logo").size(px(64.)).children(
+                            crate::ui::attachments::render_png(app_icon(), cx)
+                                .map(|icon| img(icon).size_full()),
+                        ),
                     )
                 })
                 .child(heading("sign-in-title", title).text_size(px(if adding {
@@ -557,4 +550,10 @@ impl MatrixApp {
                 .child(storage),
         )
     }
+}
+
+/// The app icon at 192 px (64 pt at 3x), decoded once and kept for the cache.
+fn app_icon() -> &'static std::sync::Arc<Vec<u8>> {
+    static ICON: std::sync::OnceLock<std::sync::Arc<Vec<u8>>> = std::sync::OnceLock::new();
+    ICON.get_or_init(|| std::sync::Arc::new(include_bytes!("../../assets/app-icon.png").to_vec()))
 }

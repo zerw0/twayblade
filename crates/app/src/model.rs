@@ -182,6 +182,26 @@ pub(super) fn plain_text(text: &str) -> String {
     result
 }
 
+/// `--preview-showcase`: the offline preview with a believable team
+/// conversation and without the "Sample data" labels, for the README and
+/// website screenshots. Set once at start-up, before the window opens.
+static SHOWCASE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn set_showcase(on: bool) {
+    SHOWCASE.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn showcase() -> bool {
+    SHOWCASE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The PNG shown in the showcase's image message (`--preview-showcase-image`).
+static SHOWCASE_IMAGE: std::sync::OnceLock<std::sync::Arc<Vec<u8>>> = std::sync::OnceLock::new();
+
+pub(crate) fn set_showcase_image(png: Vec<u8>) {
+    let _ = SHOWCASE_IMAGE.set(std::sync::Arc::new(png));
+}
+
 pub(super) fn preview(home: bool, count: usize) -> Snapshot {
     let mut snapshot = Snapshot {
         revision: 1,
@@ -421,7 +441,178 @@ pub(super) fn preview(home: bool, count: usize) -> Snapshot {
     ];
     snapshot.members_state = MembersState::Ready;
     snapshot.typing = vec!["@alex:preview.invalid".into()];
+    if showcase() && count < 100 {
+        showcase_conversation(&mut snapshot);
+    }
     snapshot
+}
+
+/// The showcase's own display name.
+pub(crate) const OWN_NAME: &str = "Jordan";
+
+/// The showcase's team conversation in #General (see [`showcase`]).
+fn showcase_conversation(snapshot: &mut Snapshot) {
+    use twayblade_core::rich_text::{RichNode, RichText, SpanKind};
+    // An ordinary-looking own account rather than the preview's "You".
+    snapshot.user_id = "@jordan:example.org".into();
+    let own = snapshot.user_id.clone();
+    let person = |name: &str| format!("@{}:preview.invalid", name.to_lowercase());
+    let start = 1_794_300_000_000_i64;
+    let message = |ix: usize, sender: &str, minute: i64, body: &str| Message {
+        id: format!("sample-{ix}"),
+        event_id: Some(format!("$sample-{ix}:preview.invalid")),
+        sender: if sender == OWN_NAME {
+            own.clone()
+        } else {
+            person(sender)
+        },
+        display_name: sender.into(),
+        body: body.into(),
+        kind: MessageKind::Text,
+        timestamp_ms: start + minute * 60_000 + ix as i64 * 1_000,
+        delivery: DeliveryState::Remote,
+        ..Default::default()
+    };
+    let mut messages = vec![
+        message(
+            0,
+            "Mira",
+            0,
+            "Morning! Onboarding v3 is ready for review. Feedback in the thread, please.",
+        ),
+        message(
+            1,
+            "Kai",
+            8,
+            "Looks great. The second step feels a bit crowded on smaller windows though.",
+        ),
+        message(
+            2,
+            "Sam",
+            12,
+            "Agreed. We could move the sync options into Settings.",
+        ),
+        message(
+            3,
+            OWN_NAME,
+            19,
+            "I’ll try that this afternoon. Anything else before Thursday’s review?",
+        ),
+        message(
+            4,
+            "Alex",
+            28,
+            "Release notes for 2.4 are in Announcements. Please skim them before Friday.",
+        ),
+        message(5, "Robin", 32, ""),
+        message(6, "Kai", 40, ""),
+        message(
+            7,
+            "Kai",
+            40,
+            "Pushed the icon fixes, they’ll be in tonight’s build.",
+        ),
+        message(8, "Mira", 46, "Sign-in with the tighter spacing:"),
+        message(9, "Mira", 46, ""),
+        message(
+            10,
+            OWN_NAME,
+            51,
+            "Much better. I’ll check the icons first thing tomorrow.",
+        ),
+    ];
+    messages[0].thread_replies = 4;
+    messages[0].reactions = vec![
+        Reaction {
+            key: "👍".into(),
+            count: 3,
+            mine: true,
+        },
+        Reaction {
+            key: "🎉".into(),
+            count: 2,
+            mine: false,
+        },
+    ];
+    messages[2].reply = Some(ReplyTarget::Ready {
+        sender: "Kai".into(),
+        excerpt: "Looks great. The second step feels a bit crowded on smaller windows though."
+            .into(),
+    });
+    messages[2].reply_to = messages[1].event_id.clone();
+    messages[3].delivery = DeliveryState::Sent;
+    messages[4].rich = Some(std::sync::Arc::new(RichText {
+        nodes: vec![
+            RichNode::Text("Release notes for ".into()),
+            RichNode::Span {
+                kind: SpanKind::Strong,
+                children: vec![RichNode::Text("2.4".into())],
+            },
+            RichNode::Text(" are in Announcements. Please skim them before Friday.".into()),
+        ],
+    }));
+    messages[4].reactions = vec![Reaction {
+        key: "👀".into(),
+        count: 2,
+        mine: false,
+    }];
+    messages[5].kind = MessageKind::Membership;
+    messages[5].membership = Some(twayblade_core::conversation::Membership {
+        kind: twayblade_core::conversation::MembershipKind::Joined,
+        target: person("Robin"),
+        target_name: "Robin".into(),
+    });
+    messages[6].kind = MessageKind::File;
+    messages[6].attachment = Some(Attachment {
+        preview_png: None,
+        download_needed: false,
+        filename: "icon-set-v2.zip".into(),
+        size: Some(4_404_019),
+    });
+    // The picture comes from `--preview-showcase-image`.
+    messages[9].kind = MessageKind::Image;
+    messages[9].attachment = Some(Attachment {
+        preview_png: SHOWCASE_IMAGE.get().cloned(),
+        download_needed: false,
+        filename: "sign-in-v3.png".into(),
+        size: Some(486_400),
+    });
+    messages[10].delivery = DeliveryState::Sent;
+    messages[10].read_by = vec![person("Mira"), person("Kai"), person("Alex")];
+    snapshot.messages = messages;
+    let member = |name: &str, role| Member {
+        user_id: if name == OWN_NAME {
+            own.clone()
+        } else {
+            person(name)
+        },
+        display_name: name.into(),
+        role,
+        avatar: None,
+        ..Default::default()
+    };
+    snapshot.members = vec![
+        member("Alex", MemberRole::Admin),
+        member("Mira", MemberRole::Moderator),
+        member(OWN_NAME, MemberRole::Moderator),
+        member("Kai", MemberRole::Member),
+        member("Sam", MemberRole::Member),
+        member("Robin", MemberRole::Member),
+    ];
+    snapshot.typing.clear();
+    snapshot.sync_status = "Connected".into();
+    snapshot.timeline_status.clear();
+    for (id, name, unread) in [("mira", "Mira", 1), ("kai", "Kai", 0)] {
+        snapshot.rooms.push(Room {
+            id: id.into(),
+            name: name.into(),
+            unread,
+            encrypted: true,
+            direct: true,
+            partner: Some(person(name)),
+            ..Default::default()
+        });
+    }
 }
 
 pub(super) fn typing_text(snapshot: &Snapshot) -> String {
