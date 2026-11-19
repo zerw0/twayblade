@@ -873,13 +873,29 @@ impl MatrixApp {
         if let Some(canvas) = self.latest_visibility(message, in_thread, cx) {
             row = row.relative().child(canvas);
         }
+        // Two-finger swipe right replies (swipe_reply.rs), where Reply is offered.
+        let swipeable = !in_thread && message.event_id.is_some();
+        let swipe_id = message.id.clone();
         div()
             .id(SharedString::from(format!(
                 "message-context-{}",
                 message.id
             )))
             .w_full()
-            .child(row.test_support())
+            .when(swipeable, |view| {
+                view.on_hover(cx.listener(move |this, hovered: &bool, _, _| {
+                    if *hovered {
+                        this.swipe.hovered = Some(swipe_id.clone());
+                    } else if this.swipe.hovered.as_ref() == Some(&swipe_id) {
+                        this.swipe.hovered = None;
+                    }
+                }))
+            })
+            .child(if swipeable {
+                self.swipe_row(&message.id, row, cx)
+            } else {
+                row.test_support().into_any_element()
+            })
             .context_menu(self.message_menu(message, in_thread, cx))
             .into_any_element()
     }

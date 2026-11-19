@@ -37,6 +37,7 @@ pub(crate) mod settings;
 pub(crate) mod space_home;
 pub(crate) mod spaces;
 pub(crate) mod stickers;
+pub(crate) mod swipe_reply;
 pub(crate) mod threads;
 pub(crate) mod viewer;
 pub(crate) mod voice;

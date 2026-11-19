@@ -336,6 +336,8 @@ pub(super) struct MatrixApp {
     pub account_edit_busy: bool,
     /// The message under the pointer; only it renders its action buttons.
     pub hovered_message: Option<String>,
+    /// Two-finger swipe-to-reply state (ui/swipe_reply.rs).
+    pub(crate) swipe: crate::ui::swipe_reply::SwipeReply,
     /// Voice messages (#184): a recording in progress, the message playing,
     /// one loading, and whether the redraw ticker runs.
     pub voice_recorder: Option<twayblade_media::voice::Recorder>,
@@ -800,6 +802,7 @@ impl MatrixApp {
             notification_keyword: cx.new(|cx| InputState::new(window, cx).placeholder("Keyword")),
             account_edit_busy: false,
             hovered_message: None,
+            swipe: Default::default(),
             voice_recorder: None,
             voice_starting: false,
             voice_playback: None,

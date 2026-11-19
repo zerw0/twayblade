@@ -2761,6 +2761,67 @@ fn the_message_menu_offers_actions_and_asks_before_deleting(cx: &mut TestAppCont
 }
 
 #[gpui_kit::test]
+fn two_finger_swipe_right_replies_and_scrolls_do_not(cx: &mut TestAppContext) {
+    use gpui_kit::{ScrollDelta, ScrollEvent, TouchPhase, point};
+    let (window, app) = preview_window(cx);
+    let id = cx.update(|cx| {
+        let app = app.read(cx);
+        app.snapshot
+            .messages
+            .iter()
+            .rev()
+            .find(|m| {
+                m.event_id.is_some()
+                    && m.sender != app.snapshot.user_id
+                    && m.kind == crate::backend::MessageKind::Text
+            })
+            .map(|m| m.id.clone())
+            .expect("someone else's text message")
+    });
+    // One trackpad gesture over the message: (dx, dy) per event.
+    let gesture = |steps: &[(f32, f32)], cx: &mut TestAppContext| {
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            let target = gpui_kit::SharedString::from(format!("message-row-{id}"));
+            let centre = window.find(target.clone()).bounds().center();
+            window.hover(target, cx);
+            let last = steps.len() - 1;
+            for (ix, (dx, dy)) in steps.iter().enumerate() {
+                let touch_phase = match ix {
+                    0 => TouchPhase::Started,
+                    ix if ix == last => TouchPhase::Ended,
+                    _ => TouchPhase::Moved,
+                };
+                window.dispatch_event(
+                    gpui_kit::PlatformInput::Scroll(ScrollEvent {
+                        position: centre,
+                        delta: ScrollDelta::Pixels(point(px(*dx), px(*dy))),
+                        touch_phase,
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+                window.render_frame(cx);
+            }
+        })
+        .expect("gesture");
+    };
+    let replying = |cx: &mut TestAppContext| cx.update(|cx| app.read(cx).reply_to.is_some());
+    // A short swipe springs back without replying.
+    gesture(&[(0., 0.), (10., 0.), (20., 0.), (0., 0.)], cx);
+    assert!(!replying(cx), "a short swipe does not reply");
+    // A mostly vertical scroll is a scroll, however far it drifts sideways.
+    gesture(
+        &[(0., 0.), (2., -20.), (30., -40.), (40., 0.), (0., 0.)],
+        cx,
+    );
+    assert!(!replying(cx), "scrolling does not reply");
+    // A swipe right past the threshold replies on release.
+    gesture(&[(0., 0.), (12., 1.), (30., 0.), (40., 0.), (0., 0.)], cx);
+    assert!(replying(cx), "swiping right replies");
+}
+
+#[gpui_kit::test]
 fn reply_names_the_message_and_can_be_cancelled(cx: &mut TestAppContext) {
     let (window, app) = preview_window(cx);
     let id = cx.update(|cx| {
