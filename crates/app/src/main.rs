@@ -31,6 +31,15 @@ fn main() {
     }
     let args: Vec<_> = std::env::args().collect();
     let preview = args.iter().any(|arg| arg.starts_with("--preview"));
+    model::set_showcase(preview && args.iter().any(|arg| arg == "--preview-showcase"));
+    if let Some(png) = args
+        .iter()
+        .position(|arg| arg == "--preview-showcase-image")
+        .and_then(|ix| args.get(ix + 1))
+        .and_then(|path| std::fs::read(path).ok())
+    {
+        model::set_showcase_image(png);
+    }
     let capture = args
         .iter()
         .position(|arg| arg == "--capture")
@@ -335,7 +344,12 @@ fn main() {
                     if args.iter().any(|arg| arg == "--preview-thread") { view.open_thread("sample-0".into(), window, cx); }
                     if args.iter().any(|arg| arg == "--preview-details") {
                         view.details_open = true;
-                        if let Some(room) = view.snapshot.rooms.iter_mut().find(|room| room.id == view.snapshot.selected_room) { room.encrypted = false; }
+                        if !model::showcase() && let Some(room) = view.snapshot.rooms.iter_mut().find(|room| room.id == view.snapshot.selected_room) { room.encrypted = false; }
+                    }
+                    if model::showcase() {
+                        // Screenshots carry no preview notes; the README says the data is sample data.
+                        view.status.clear();
+                        view.own_name = Some(format!("{} Lee", model::OWN_NAME));
                     }
                     if profile {
                         view.open_profile(
