@@ -10,6 +10,12 @@
 
 </div>
 
+## Screenshots
+
+[![Twayblade in dark mode showing a conversation in bubble style](https://zerw.xyz/twayblade/chat-dark.png)](https://zerw.xyz/twayblade/chat-dark.png)
+
+[![Twayblade in dark mode showing the same conversation in IRC style](https://zerw.xyz/twayblade/chat-irc-dark.png)](https://zerw.xyz/twayblade/chat-irc-dark.png)
+
 ## Features
 
 - **End-to-end encryption** with device verification by emoji, secure backup
