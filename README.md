@@ -10,6 +10,38 @@
 
 </div>
 
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/chat.png" alt="A space room with replies, reactions, a file, an image and read receipts">
+</p>
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/thread.png" alt="A thread open beside the room"><br>Threads</td>
+    <td width="50%"><img src="docs/screenshots/call.png" alt="A group call above the conversation"><br>Group calls</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/search.png" alt="Search with recent conversations"><br>Search</td>
+    <td><img src="docs/screenshots/notifications.png" alt="Notifications with an invitation, a missed call and mentions"><br>Notifications</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/room-info.png" alt="Room details beside the conversation"><br>Room details</td>
+    <td><img src="docs/screenshots/minimal-style.png" alt="The Minimal chat style with times in a column"><br>Minimal chat style</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/polls.png" alt="Polls in a room"><br>Polls</td>
+    <td><img src="docs/screenshots/settings.png" alt="Appearance settings with themes and accent colours"><br>Themes</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/sign-in.png" alt="The welcome screen"><br>Welcome</td>
+    <td><img src="docs/screenshots/choose-server.png" alt="Choosing a server when signing in"><br>Choosing a server</td>
+  </tr>
+</table>
+
+Taken on macOS from the app's offline preview (`--preview-showcase`), which
+shows sample people and messages rather than a real account.
+
 ## Features
 
 - **End-to-end encryption** with device verification by emoji, secure backup

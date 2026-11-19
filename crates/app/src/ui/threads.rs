@@ -153,13 +153,36 @@ impl MatrixApp {
                 .cloned()
                 .enumerate()
                 .map(|(ix, mut m)| {
-                    m.body = [
-                        "The native layout is ready to review.",
-                        "The compact spacing works well here.",
-                        "I’ll check keyboard navigation next.",
-                        "Thanks, I’ll review the screenshots.",
-                    ][ix]
-                        .into();
+                    if model::showcase() {
+                        let (name, body) = [
+                            ("Kai", "The new welcome step is much clearer."),
+                            ("Sam", "Could the account picker remember the last server?"),
+                            ("Mira", "Good idea, I’ll add it to v4."),
+                            (model::OWN_NAME, "Left two notes on the permissions screen."),
+                        ][ix];
+                        m.sender = if name == model::OWN_NAME {
+                            self.snapshot.user_id.clone()
+                        } else {
+                            format!("@{}:preview.invalid", name.to_lowercase())
+                        };
+                        m.display_name = name.into();
+                        m.body = body.into();
+                        m.rich = None;
+                        m.reactions.clear();
+                        m.read_by.clear();
+                        m.reply_to = None;
+                        m.membership = None;
+                        m.event_id = Some(format!("$thread-{ix}:preview.invalid"));
+                        m.id = format!("thread-{ix}");
+                    } else {
+                        m.body = [
+                            "The native layout is ready to review.",
+                            "The compact spacing works well here.",
+                            "I’ll check keyboard navigation next.",
+                            "Thanks, I’ll review the screenshots.",
+                        ][ix]
+                            .into();
+                    }
                     m.reply = None;
                     m.thread_replies = 0;
                     m.new_messages = false;
@@ -188,7 +211,9 @@ impl MatrixApp {
             scroller,
             composer,
             ready: self.preview,
-            status: if self.preview {
+            status: if self.preview && model::showcase() {
+                String::new()
+            } else if self.preview {
                 "Sample data · Thread preview".into()
             } else {
                 "Loading thread…".into()
