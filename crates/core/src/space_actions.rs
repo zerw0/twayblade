@@ -448,14 +448,10 @@ impl Account {
             creation.room_type = Some(crate::channels::VOICE_ROOM_TYPE.into());
             request.creation_content =
                 Some(matrix_sdk::ruma::serde::Raw::new(&creation).map_err(|_| SpaceError::Create)?);
+            // No `users` entry for ourselves: room version 12 gives creators
+            // unlimited power and rejects them in `users` (#176), and older
+            // versions already give the creator 100 through the preset.
             let mut powers = create_room::RoomPowerLevelsContentOverride::new();
-            powers.users.insert(
-                self.client
-                    .user_id()
-                    .ok_or(SpaceError::Unavailable)?
-                    .to_owned(),
-                100.into(),
-            );
             powers
                 .events
                 .insert(crate::calls::native::MEMBER_EVENT.into(), 0.into());

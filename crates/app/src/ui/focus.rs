@@ -180,6 +180,34 @@ impl MatrixApp {
         true
     }
 
+    /// A reply's quote was clicked: scrolls to the original and tints it. An
+    /// original outside the loaded history opens the room around it, as a
+    /// search result does.
+    pub(crate) fn jump_to_reply(
+        &mut self,
+        in_thread: bool,
+        event: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // A thread reply can quote a message from the main timeline.
+        for in_thread in [in_thread, false] {
+            if let Some(id) = self
+                .timeline_messages(in_thread)
+                .iter()
+                .find(|m| m.event_id.as_ref() == Some(&event))
+                .map(|m| m.id.clone())
+            {
+                self.revealed_event = Some(event);
+                self.focus_message(in_thread, id, window, cx);
+                return;
+            }
+        }
+        if let Some(room) = self.navigation.selected_room.clone() {
+            self.open_event(room, event, window, cx);
+        }
+    }
+
     /// Scrolls a message into view and focuses its row.
     fn focus_message(
         &mut self,
