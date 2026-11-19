@@ -276,8 +276,11 @@ impl MatrixApp {
         let body = v_flex()
             .id("timeline-area")
             .track_focus(&self.timeline_area)
+            .relative()
             .flex_1()
             .min_h_0()
+            // First, so it sees scroll events before the timeline does.
+            .child(crate::ui::swipe_reply::swipe_capture(cx.weak_entity()))
             .child(body)
             .into_any_element();
 
