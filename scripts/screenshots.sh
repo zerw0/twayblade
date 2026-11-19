@@ -11,7 +11,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 app="$root/target/debug/bundle/Twayblade.app/Contents/MacOS/twayblade"
-out="$root/docs/screenshots"
+out="${OUT:-$root/docs/screenshots}"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 [[ -x $app ]] || { echo "Build the app first: bash macos/build.sh" >&2; exit 1; }
