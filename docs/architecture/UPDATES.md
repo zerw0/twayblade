@@ -17,10 +17,10 @@ A repository with no published release produces no notice. No GitHub account or
 API token is required. See the [GitHub release API](https://docs.github.com/en/rest/releases/releases).
 
 The backend starts checks at application launch, independently of sign-in, then
-24 hours after each completed attempt. Enabling checks or changing channel
+four hours after each completed attempt. Enabling checks or changing channel
 checks immediately. Disabling cancels in-flight work and clears the notice;
 late results for the previous configuration are rejected. Identical preference
-updates do not trigger another check. Network failures retry at the next daily
+updates do not trigger another check. Network failures retry at the next
 interval, without a busy retry loop. Dropping the service ends its work.
 
 `Preferences.updates` contains `enabled` and `channel`; old preferences default

@@ -91,6 +91,11 @@ impl MatrixApp {
                 line.child(Icon::new(IconName::CheckCheck).size(px(12.)))
             })
             .child(label);
+        // The "Seen by" line above the composer already covers the room's
+        // latest message; saying "Read" under it too would be twice.
+        if label == "Read" && self.seen_by_covers(&message.id) {
+            return div().into_any_element();
+        }
         if label != "Read" || message.read_by.is_empty() {
             return content
                 .text_color(cx.theme().muted_foreground)
@@ -107,6 +112,20 @@ impl MatrixApp {
             ),
             cx,
         )
+    }
+
+    /// Whether the composer's "Seen by" line shows message `id`'s readers: it
+    /// describes the latest sent message, while nobody is typing.
+    fn seen_by_covers(&self, id: &str) -> bool {
+        self.snapshot.timeline_ready
+            && model::typing_text(&self.snapshot).is_empty()
+            && self
+                .snapshot
+                .messages
+                .iter()
+                .rev()
+                .find(|message| message.event_id.is_some())
+                .is_some_and(|latest| latest.id == id && !latest.read_by.is_empty())
     }
 
     /// One row per reader: avatar and name; clicking opens their profile.

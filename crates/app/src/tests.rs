@@ -2822,6 +2822,39 @@ fn two_finger_swipe_right_replies_and_scrolls_do_not(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_click_outside_closes_the_emoji_picker(cx: &mut TestAppContext) {
+    let (window, app) = preview_window(cx);
+    let open = |cx: &mut TestAppContext| cx.update(|cx| app.read(cx).emoji_picker.is_some());
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("emoji-open", cx);
+        window.render_frame(cx);
+    })
+    .expect("open");
+    assert!(open(cx), "the Emoji button opens the picker");
+    cx.update_window(window, |_, window, cx| {
+        window.click("header-members", cx);
+        window.render_frame(cx);
+    })
+    .expect("click outside");
+    assert!(!open(cx), "a click outside closes it");
+    // The Emoji button still toggles: open, then its own click closes it
+    // without reopening.
+    cx.update_window(window, |_, window, cx| {
+        window.click("emoji-open", cx);
+        window.render_frame(cx);
+    })
+    .expect("reopen");
+    assert!(open(cx), "the Emoji button opens it again");
+    cx.update_window(window, |_, window, cx| {
+        window.click("emoji-open", cx);
+        window.render_frame(cx);
+    })
+    .expect("toggle closed");
+    assert!(!open(cx), "the Emoji button closes it");
+}
+
+#[gpui_kit::test]
 fn reply_names_the_message_and_can_be_cancelled(cx: &mut TestAppContext) {
     let (window, app) = preview_window(cx);
     let id = cx.update(|cx| {

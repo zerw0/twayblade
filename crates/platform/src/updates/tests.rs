@@ -282,7 +282,7 @@ async fn disabled_checks_make_no_request_and_cancel_pending_results() {
             send.send_replace(snapshot);
         },
         Checker::new(&base, "1.0.0"),
-        DAILY,
+        CHECK_INTERVAL,
     ));
     status.changed().await.unwrap();
     assert_eq!(status.borrow_and_update().phase, Phase::Disabled);
@@ -322,7 +322,7 @@ async fn disabled_checks_make_no_request_and_cancel_pending_results() {
     task.await.unwrap();
 }
 #[tokio::test]
-async fn checks_at_launch_then_daily_and_same_config_does_not_repeat() {
+async fn checks_at_launch_then_periodically_and_same_config_does_not_repeat() {
     let (listener, base) = listener().await;
     let server = tokio::spawn(reply(listener.clone(), "200 OK", "", BODY));
     let (config, receive) = watch::channel(Preferences::default());
@@ -333,7 +333,7 @@ async fn checks_at_launch_then_daily_and_same_config_does_not_repeat() {
             send.send_replace(snapshot);
         },
         Checker::new(&base, "1.0.0"),
-        DAILY,
+        CHECK_INTERVAL,
     ));
     loop {
         status.changed().await.unwrap();
@@ -345,7 +345,7 @@ async fn checks_at_launch_then_daily_and_same_config_does_not_repeat() {
     tokio::time::pause();
     config.send_replace(Preferences::default());
     tokio::task::yield_now().await;
-    tokio::time::advance(DAILY - Duration::from_secs(1)).await;
+    tokio::time::advance(CHECK_INTERVAL - Duration::from_secs(1)).await;
     assert_eq!(status.borrow().phase, Phase::Available);
     tokio::time::advance(Duration::from_secs(1)).await;
     status.changed().await.unwrap();

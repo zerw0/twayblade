@@ -11,7 +11,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::{sync::watch, time::Instant};
 
 const API: &str = "https://api.github.com/repos/zerw0/twayblade/releases";
-const DAILY: Duration = Duration::from_secs(24 * 60 * 60);
+/// How often a running app checks again. Frequent enough that a release
+/// shows up the same day, rare enough to stay far below GitHub's
+/// unauthenticated rate limit (60 requests an hour per address).
+const CHECK_INTERVAL: Duration = Duration::from_secs(4 * 60 * 60);
 const MAX_RESPONSE: usize = 4 * 1024 * 1024;
 const MAX_CHANGELOG: usize = 64 * 1024;
 
@@ -220,7 +223,7 @@ fn select(
 /// and clears notices. Dropping the config sender ends the service.
 pub async fn run(config: watch::Receiver<Preferences>, publish: impl FnMut(Snapshot)) {
     let checker = Checker::new(API, env!("CARGO_PKG_VERSION"));
-    run_with(config, publish, checker, DAILY).await;
+    run_with(config, publish, checker, CHECK_INTERVAL).await;
 }
 async fn run_with(
     mut config: watch::Receiver<Preferences>,

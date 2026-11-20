@@ -1412,15 +1412,45 @@ impl MatrixApp {
                                 .child("Update with your package manager:"),
                         )
                         .child(
-                            div()
+                            // Selectable, with a Copy button: it is meant to be pasted.
+                            h_flex()
                                 .id("update-command")
                                 .test_support()
+                                .gap(px(8.))
+                                .items_center()
                                 .rounded(px(8.))
                                 .bg(cx.theme().secondary)
-                                .p(px(10.))
-                                .font_family("monospace")
-                                .text_size(px(12.))
-                                .child(command),
+                                .pl(px(10.))
+                                .pr(px(4.))
+                                .py(px(4.))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .font_family("monospace")
+                                        .text_size(px(12.))
+                                        .child(
+                                            gpui_kit::component::text::TextView::markdown(
+                                                "update-command-text",
+                                                crate::model::plain_text(&command),
+                                            )
+                                            .selectable(true),
+                                        ),
+                                )
+                                .child({
+                                    let copy = command.clone();
+                                    Button::new("update-command-copy")
+                                        .ghost()
+                                        .small()
+                                        .icon(IconName::Copy)
+                                        .label("Copy")
+                                        .accessibility_label("Copy the update command")
+                                        .on_click(move |_, _, cx| {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                copy.clone(),
+                                            ))
+                                        })
+                                }),
                         )
                         .into_any_element(),
                     None => match available.download.as_ref() {
