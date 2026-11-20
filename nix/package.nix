@@ -2,7 +2,7 @@
 , pkg-config, cmake, python3, makeWrapper, openssl, dbus, fontconfig, freetype
 , glib, libxkbcommon, wayland, libGL, vulkan-loader, libdrm, mesa
 , alsa-lib, libpulseaudio, pipewire, libx11, libxcursor, libxi, libxrandr, libxcb
-, libxkbfile, libxfixes, libxdamage, libxcomposite, libxext, src
+, libxkbfile, libxfixes, libxdamage, libxcomposite, libxext, cctools, darwin, src
 }:
 let
   # Keep documentation, captures, local tooling and flake bookkeeping out of
@@ -58,7 +58,9 @@ in buildRustPackage {
   src = source;
   strictDeps = true;
   cargoLock.lockFile = "${source}/Cargo.lock";
-  nativeBuildInputs = [ pkg-config cmake python3 makeWrapper ];
+  nativeBuildInputs = [ pkg-config cmake python3 makeWrapper ]
+    # vtool and an ad hoc signer for the macOS executable (see installPhase).
+    ++ lib.optionals stdenv.hostPlatform.isDarwin [ cctools darwin.sigtool ];
   buildInputs = lib.optionals stdenv.hostPlatform.isLinux linuxLibraries;
   LK_CUSTOM_WEBRTC = "${webrtc}/${triple}";
   TWAYBLADE_PACKAGE_MANAGER = "nix";
@@ -108,6 +110,15 @@ in buildRustPackage {
       "$out/share/metainfo/com.twayblade.desktop.metainfo.xml"
   '' + ''
     runHook postInstall
+  '';
+  # macOS 26 draws its current window controls only for apps built against its
+  # SDK; record SDK 26.0 (the Nix SDK is older) and keep the deployment target.
+  # After fixup's strip, then sign again: the edit invalidates the signature,
+  # and Apple silicon refuses to run an executable with a broken one.
+  postFixup = lib.optionalString stdenv.hostPlatform.isDarwin ''
+    exe="$out/Applications/Twayblade.app/Contents/MacOS/twayblade"
+    vtool -set-build-version macos "$MACOSX_DEPLOYMENT_TARGET" 26.0 -replace -output "$exe" "$exe"
+    codesign -f -s - "$exe"
   '';
   passthru = { inherit webrtc; };
   meta = {

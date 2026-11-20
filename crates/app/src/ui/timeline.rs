@@ -627,7 +627,7 @@ impl MatrixApp {
                             .track_focus(&focus)
                             .tab_stop(stops)
                             .ghost()
-                            .xsmall()
+                            .small()
                             .icon(IconName::FaceSlightlySmiling)
                             .accessibility_label("Add reaction")
                             .tooltip("Add reaction")
@@ -638,7 +638,7 @@ impl MatrixApp {
                     )
                     .into_any_element()
             } else {
-                div().flex_none().size_5().into_any_element()
+                div().flex_none().size_6().into_any_element()
             });
         }
         if !in_thread && message.event_id.is_some() {
@@ -658,7 +658,7 @@ impl MatrixApp {
                             .track_focus(&focus)
                             .tab_stop(stops)
                             .ghost()
-                            .xsmall()
+                            .small()
                             .icon(IconName::CornerUpLeft)
                             .accessibility_label("Reply")
                             .tooltip("Reply")
@@ -668,7 +668,7 @@ impl MatrixApp {
                     )
                     .into_any_element()
             } else {
-                div().flex_none().size_5().into_any_element()
+                div().flex_none().size_6().into_any_element()
             });
         }
         if message.editable
@@ -689,7 +689,7 @@ impl MatrixApp {
                             .track_focus(&focus)
                             .tab_stop(stops)
                             .ghost()
-                            .xsmall()
+                            .small()
                             .icon(IconName::Pencil)
                             .accessibility_label("Edit message")
                             .tooltip("Edit")
@@ -699,7 +699,7 @@ impl MatrixApp {
                     )
                     .into_any_element()
             } else {
-                div().flex_none().size_5().into_any_element()
+                div().flex_none().size_6().into_any_element()
             });
         }
         if !in_thread && message.event_id.is_some() {
@@ -719,7 +719,7 @@ impl MatrixApp {
                             .track_focus(&focus)
                             .tab_stop(stops)
                             .ghost()
-                            .xsmall()
+                            .small()
                             .icon(IconName::MessagesSquare)
                             .accessibility_label("Reply in Thread")
                             .tooltip("Reply in Thread")
@@ -729,7 +729,7 @@ impl MatrixApp {
                     )
                     .into_any_element()
             } else {
-                div().flex_none().size_5().into_any_element()
+                div().flex_none().size_6().into_any_element()
             });
         }
         line = line.child(actions);
@@ -761,8 +761,8 @@ impl MatrixApp {
                     Button::new(SharedString::from(format!("reaction-{}-{}", id, key)))
                         .outline()
                         .xsmall()
-                        .h(px(20.))
-                        .px(px(6.))
+                        .h(px(24.))
+                        .px(px(7.))
                         .rounded(px(10.))
                         .label(format!("{} {}", key, reaction.count))
                         .selected(reaction.mine)

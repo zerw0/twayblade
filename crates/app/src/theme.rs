@@ -20,6 +20,10 @@ pub(super) fn set_appearance(value: Appearance, cx: &mut App) {
 }
 use gpui_kit::{App, Global, Hsla, Pixels, Rgba, rgb};
 thread_local! { static UI_SCALE: std::cell::Cell<f32> = const { std::cell::Cell::new(1.) }; }
+/// What 100% in Settings › Appearance means: the layout is drawn in points
+/// sized for a compact panel, which read as too small in a full window.
+/// UI tests measure layouts at the nominal size.
+const BASE_SCALE: f32 = if cfg!(test) { 1. } else { 1.2 };
 /// All frontend pixel dimensions share this scale. OS window bounds remain OS pixels.
 pub(super) fn scaled_px(value: f32) -> Pixels {
     gpui_kit::px(value * UI_SCALE.with(|scale| scale.get()))
@@ -368,7 +372,8 @@ pub(super) fn apply(cx: &mut App) {
             Variant::Dark => Some(ThemeMode::Dark),
         },
     };
-    UI_SCALE.with(|scale| scale.set(f32::from(preferences.scale.clamp(85, 150)) / 100.));
+    UI_SCALE
+        .with(|scale| scale.set(f32::from(preferences.scale.clamp(85, 150)) / 100. * BASE_SCALE));
     let installed = cx.text_system().all_font_names();
     let defaults = Theme::default();
     let interface_font = font_or_default(
