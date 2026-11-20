@@ -136,7 +136,7 @@ fn main() {
             let options = WindowOptions {
                 // Linux desktops match the window to its desktop entry and icon by this ID.
                 app_id: Some(APP_ID.into()),
-                window_bounds: Some(WindowBounds::centered(size(px(1120.), px(760.)), cx)),
+                window_bounds: Some(WindowBounds::centered(size(px(1240.), px(820.)), cx)),
                 window_min_size: Some(size(px(820.), px(540.))),
                 // macOS: unified toolbar. The sidebar runs under the traffic lights and
                 // our toolbar rows move the window. Linux/Windows keep standard
@@ -145,7 +145,7 @@ fn main() {
                     title: Some("Twayblade".into()),
                     appears_transparent: cfg!(target_os = "macos"),
                     traffic_light_position: cfg!(target_os = "macos")
-                        .then(|| point(px(16.), px(9.))),
+                        .then(|| point(px(16.), px(12.))),
                 }),
                 app_owns_titlebar_drag: cfg!(target_os = "macos"),
                 ..Default::default()

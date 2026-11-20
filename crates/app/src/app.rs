@@ -429,6 +429,9 @@ pub(super) struct MatrixApp {
     pub security_notice_dismissed: bool,
     pub confirm_session_reset: bool,
     pub emoji_picker: Option<crate::ui::emoji::Picker>,
+    /// Where the press that last closed the picker from outside was (see
+    /// `dismiss_emoji`).
+    pub(crate) emoji_dismissed: Option<Point<Pixels>>,
     pub emoji_search: Entity<InputState>,
     pub emoji_preferences: crate::ui::emoji::Preferences,
     /// The main composer's stacked attachments, sent with its next message.
@@ -870,6 +873,7 @@ impl MatrixApp {
             oauth_cancel: None,
             confirm_session_reset: false,
             emoji_picker: None,
+            emoji_dismissed: None,
             emoji_search,
             emoji_preferences: if preview {
                 Default::default()

@@ -316,7 +316,14 @@ impl MatrixApp {
                 .children(notices.into_iter().enumerate().map(note))
                 .when(self.emoji_picker.is_some(), |view| {
                     view.child(motion::rise(
-                        div().child(self.emoji_panel(cx)),
+                        // A click anywhere else closes the picker, as menus do.
+                        div()
+                            .on_mouse_down_out(cx.listener(
+                                |this, event: &MouseDownEvent, _, cx| {
+                                    this.dismiss_emoji(event.position, cx)
+                                },
+                            ))
+                            .child(self.emoji_panel(cx)),
                         "emoji-picker-motion",
                         self.snapshot.reduce_motion,
                     ))
@@ -503,9 +510,11 @@ impl MatrixApp {
                                             .accessibility_label("Choose emoji")
                                             .tooltip("Emoji")
                                             .disabled(!editable && !self.preview)
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.toggle_emoji(window, cx)
-                                            })),
+                                            .on_click(cx.listener(
+                                                |this, event: &ClickEvent, window, cx| {
+                                                    this.toggle_emoji(event.position(), window, cx)
+                                                },
+                                            )),
                                     )
                                     .child(
                                         Button::new("send")
@@ -588,8 +597,11 @@ impl MatrixApp {
         let text = model::seen_by_line(&names)?;
         // Clicking the line lists everyone who has read it.
         Some(
-            div()
+            // Left-aligned under the composer's edge, like the typing line.
+            h_flex()
                 .id("seen-by")
+                .w_full()
+                .justify_start()
                 .min_w_0()
                 .child(
                     self.read_by_popover(

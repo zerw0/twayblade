@@ -314,8 +314,31 @@ impl MatrixApp {
             .update(cx, |state, cx| state.focus(window, cx));
         cx.notify();
     }
+    /// A click outside the open picker closes it, leaving focus where the
+    /// click put it. Inline `:shortcode` suggestions follow the typing instead.
+    pub(crate) fn dismiss_emoji(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        if self
+            .emoji_picker
+            .as_ref()
+            .is_some_and(|picker| picker.completion.is_none())
+        {
+            self.emoji_picker = None;
+            self.emoji_dismissed = Some(at);
+            cx.notify();
+        }
+    }
     /// The composer's Emoji button opens the picker, or closes it when open.
-    pub(crate) fn toggle_emoji(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_emoji(
+        &mut self,
+        at: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // When the press of this same click closed the picker (`dismiss_emoji`,
+        // which fires first), the click must not open it again.
+        if self.emoji_dismissed.take() == Some(at) {
+            return;
+        }
         if self.emoji_picker.is_some() {
             self.close_emoji(window, cx);
         } else {

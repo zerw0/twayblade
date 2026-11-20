@@ -29,6 +29,12 @@ if [[ "$profile" == release ]]; then build+=(--release); fi
 app="$repo_root/target/$profile/bundle/Twayblade.app"
 mkdir -p "$app/Contents/MacOS"
 cp "target/$profile/twayblade" "$app/Contents/MacOS/"
+# macOS 26 draws its current window controls (and other system chrome) only for
+# apps built against its SDK; the pinned Nix SDK is older and would get the
+# small legacy traffic lights. Record SDK 26.0 in the executable, keeping the
+# deployment target; the bundle is signed afterwards.
+"${apple_env[@]}" /usr/bin/vtool -set-build-version macos 14.0 26.0 -replace \
+    -output "$app/Contents/MacOS/twayblade" "$app/Contents/MacOS/twayblade"
 cp macos/Info.plist "$app/Contents/Info.plist"
 # The bundle shows the Cargo version; CFBundleShortVersionString takes only
 # the numeric part ("0.1.1-rc.1" -> "0.1.1").

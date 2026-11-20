@@ -735,8 +735,14 @@ impl MacWindowState {
                 let button_padding = Pixels::from(
                     minimize_frame.origin.x - close_frame.origin.x - close_frame.size.width,
                 );
-                let container_height =
-                    button_height + traffic_light_position.y + traffic_light_position.y;
+                // Twayblade: the position assumes the classic 14 pt buttons; keep
+                // that container height and centre whatever size AppKit draws
+                // (larger with a toolbar on macOS 26).
+                let container_height = px(14.) + traffic_light_position.y + traffic_light_position.y;
+                let traffic_light_position = point(
+                    traffic_light_position.x,
+                    ((container_height - button_height) / 2.).max(px(0.)),
+                );
 
                 let mut titlebar_frame = titlebar_container.frame();
                 titlebar_frame.size.height = container_height.to_f64();
