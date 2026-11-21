@@ -27,6 +27,7 @@ pub(crate) mod editing;
 pub(crate) mod emoji;
 pub(crate) mod focus;
 pub(crate) mod keyboard;
+pub(crate) mod link_previews;
 pub(crate) mod message_scroller;
 pub(crate) mod motion;
 pub(crate) mod polls;
@@ -426,9 +427,9 @@ impl Render for MatrixApp {
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if this.viewer.is_none()
                     && !this.spotlight_key(event, window, cx)
-                    && !this.mention_key(event, window, cx)
+                    && !this.mention_key(&event.keystroke.key, window, cx)
                 {
-                    this.emoji_key(event, window, cx);
+                    this.emoji_key(&event.keystroke.key, window, cx);
                 }
             }))
             .on_action(

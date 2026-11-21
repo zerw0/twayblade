@@ -44,8 +44,27 @@ impl MatrixApp {
         in_thread: bool,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
+        use gpui_kit::component::input::{Enter, Escape, MoveDown, MoveUp};
         panel
             .key_context("Composer")
+            // The text field turns Return, ↑, ↓ and Escape into its own actions
+            // before any key listener runs, so Return would send the message
+            // instead of picking the highlighted suggestion. While a mention or
+            // `:shortcode` list is open, those keys belong to the list.
+            .capture_action(cx.listener(|this, action: &Enter, window, cx| {
+                if !action.secondary && !action.shift {
+                    this.completion_key("enter", window, cx);
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &MoveUp, window, cx| {
+                this.completion_key("up", window, cx);
+            }))
+            .capture_action(cx.listener(|this, _: &MoveDown, window, cx| {
+                this.completion_key("down", window, cx);
+            }))
+            .capture_action(cx.listener(|this, _: &Escape, window, cx| {
+                this.completion_key("escape", window, cx);
+            }))
             .on_action(cx.listener(move |this, _: &FormatBold, window, cx| {
                 this.format_composer(Format::Bold, in_thread, window, cx)
             }))
@@ -75,6 +94,15 @@ impl MatrixApp {
             .on_action(cx.listener(move |this, _: &HistoryNext, window, cx| {
                 this.composer_history(false, in_thread, window, cx)
             }))
+    }
+
+    /// Hands a composer key to the open completion list; true when it was used
+    /// (the handlers stop propagation themselves).
+    fn completion_key(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.mention_key(key, window, cx) {
+            return true;
+        }
+        self.emoji_completion_open() && self.emoji_key(key, window, cx)
     }
 
     fn format_composer(

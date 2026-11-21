@@ -194,7 +194,7 @@ impl MatrixApp {
     /// Arrow keys, Return/Tab and Escape while the list is open.
     pub(crate) fn mention_key(
         &mut self,
-        event: &KeyDownEvent,
+        key: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -206,11 +206,11 @@ impl MatrixApp {
             return false;
         }
         let selected = completion.selected.min(count - 1);
-        match event.keystroke.key.as_str() {
+        match key {
             "escape" => self.mention_completion = None,
             "enter" | "tab" => self.pick_mention(selected, window, cx),
             "up" | "down" => {
-                let step: isize = if event.keystroke.key == "up" { -1 } else { 1 };
+                let step: isize = if key == "up" { -1 } else { 1 };
                 let next = (selected as isize + step).rem_euclid(count as isize) as usize;
                 if let Some(completion) = &mut self.mention_completion {
                     completion.selected = next;

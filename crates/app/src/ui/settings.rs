@@ -1665,6 +1665,23 @@ impl MatrixApp {
                 this.preferences.chat.avatars = *checked;
                 this.chat_changed(window, cx);
             }));
+        let link_previews = switch::Switch::new("link-previews")
+            .checked(chat.link_previews)
+            .accessibility_label("Show link previews")
+            .on_click(cx.listener(|this, checked: &bool, window, cx| {
+                this.preferences.chat.link_previews = *checked;
+                this.chat_changed(window, cx);
+                this.request_link_previews(window, cx);
+            }));
+        let encrypted_previews = switch::Switch::new("link-previews-encrypted")
+            .checked(chat.link_previews && chat.link_previews_encrypted)
+            .disabled(!chat.link_previews)
+            .accessibility_label("Show link previews in encrypted rooms")
+            .on_click(cx.listener(|this, checked: &bool, window, cx| {
+                this.preferences.chat.link_previews_encrypted = *checked;
+                this.chat_changed(window, cx);
+                this.request_link_previews(window, cx);
+            }));
         v_flex()
             .gap(px(18.))
             .child(group(
@@ -1683,6 +1700,20 @@ impl MatrixApp {
                     .text_size(px(11.))
                     .text_color(cx.theme().muted_foreground)
                     .child("IRC never shows avatars. Changes apply to the open conversation immediately."),
+            )
+            .child(group(
+                [
+                    form_row("Show link previews", link_previews, cx),
+                    form_row("In encrypted rooms", encrypted_previews, cx),
+                ],
+                cx,
+            ))
+            .child(
+                div()
+                    .px(px(4.))
+                    .text_size(px(11.))
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Your homeserver fetches the page for a preview, so it sees the link. In encrypted rooms it would otherwise never see it."),
             )
             .child(self.media_settings(cx))
             .into_any_element()

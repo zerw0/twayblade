@@ -1817,6 +1817,16 @@ impl Backend {
             .block_on(account.sticker_packs(room.as_deref())))
     }
 
+    /// A homeserver link preview. `None` when there is nothing to show or no
+    /// account; failures are not worth a message.
+    pub(super) fn link_preview(
+        &self,
+        url: String,
+    ) -> Option<twayblade_core::link_preview::LinkPreview> {
+        let account = self.state.lock().ok()?.account.clone()?;
+        self.runtime.block_on(account.link_preview(url)).ok()
+    }
+
     pub(super) fn own_avatar_url(&self) -> Option<String> {
         let account = self.state.lock().ok()?.account.clone()?;
         self.runtime.block_on(account.own_avatar_url())
