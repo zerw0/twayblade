@@ -360,6 +360,10 @@ pub(super) struct Chat {
     pub density: Density,
     pub avatars: bool,
     pub timestamps: Timestamps,
+    /// Preview links under messages; the homeserver fetches the page.
+    pub link_previews: bool,
+    /// Also in encrypted rooms, which reveals their links to the homeserver.
+    pub link_previews_encrypted: bool,
 }
 impl Default for Chat {
     fn default() -> Self {
@@ -371,6 +375,8 @@ impl Default for Chat {
             density: Default::default(),
             avatars: true,
             timestamps: Default::default(),
+            link_previews: true,
+            link_previews_encrypted: false,
         }
     }
 }

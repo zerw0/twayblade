@@ -943,12 +943,17 @@ fn message_actions_exist_only_for_the_hovered_or_focused_message(cx: &mut TestAp
         window.render_frame(cx);
         assert!(window.try_find("add-reaction-sample-0").is_some());
         assert!(window.try_find("add-reaction-sample-1").is_none());
-        // Keyboard: the focused message shows its actions too.
+        // Focus from a click alone does not keep the bar once the pointer left.
         app.update(cx, |app, cx| {
             app.hovered_message = None;
             app.set_message_cursor(false, "sample-1".into(), cx);
             app.message_focus(false, "sample-1", cx).focus(window, cx);
         });
+        window.render_frame(cx);
+        window.render_frame(cx);
+        assert!(window.try_find("add-reaction-sample-1").is_none());
+        // Keyboard: the focused message shows its actions too.
+        gpui_kit::test::TestEventExt::key_down(window, "shift", false, cx);
         window.render_frame(cx);
         window.render_frame(cx);
         assert!(window.try_find("add-reaction-sample-1").is_some());
@@ -1093,6 +1098,23 @@ fn typing_at_lists_members_and_return_mentions_one(cx: &mut TestAppContext) {
         window.input("thanks @sa", cx);
     })
     .expect("type a mention");
+    // Return picks the name; it must not also submit (which sends the message).
+    let submitted = std::rc::Rc::new(std::cell::Cell::new(0));
+    let _watch = cx.update(|cx| {
+        let composer = app.read(cx).composer.clone();
+        let submitted = submitted.clone();
+        cx.subscribe(
+            &composer,
+            move |_, event: &gpui_kit::component::input::InputEvent, _| {
+                if matches!(
+                    event,
+                    gpui_kit::component::input::InputEvent::PressEnter { .. }
+                ) {
+                    submitted.set(submitted.get() + 1);
+                }
+            },
+        )
+    });
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
         assert!(window.find("mention-list").visible());
@@ -1106,6 +1128,8 @@ fn typing_at_lists_members_and_return_mentions_one(cx: &mut TestAppContext) {
         );
     })
     .expect("pick with Return");
+    cx.run_until_parked();
+    assert_eq!(submitted.get(), 0, "Return also submitted the message");
     cx.update(|cx| {
         let app = app.read(cx);
         assert!(app.mention_completion.is_none());
@@ -5158,4 +5182,55 @@ fn subspace_creation_keeps_parent_and_excludes_voice_and_message_encryption(
         assert!(!window.find_all("room-encryption").is_empty());
     })
     .expect("switch between text, voice and subspace creation");
+}
+
+#[gpui_kit::test]
+fn clicking_a_mention_opens_the_profile(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestEventExt;
+    use twayblade_core::rich_text::{RichNode, RichText, SpanKind};
+    let (window, app) = preview_window(cx);
+    let id = cx
+        .update_window(window, |_, window, cx| {
+            app.update(cx, |app, cx| {
+                let mut snapshot = app.snapshot.clone();
+                let message = snapshot
+                    .messages
+                    .iter_mut()
+                    .find(|message| message.id == "sample-2")
+                    .unwrap();
+                message.body = "hristo".into();
+                message.attachment = None;
+                message.kind = crate::backend::MessageKind::Text;
+                message.rich = Some(std::sync::Arc::new(RichText {
+                    nodes: vec![RichNode::Span {
+                        kind: SpanKind::Link {
+                            target: "https://matrix.to/#/@hd:voltized.de".into(),
+                        },
+                        children: vec![RichNode::Text("hristo".into())],
+                    }],
+                }));
+                let id = message.id.clone();
+                snapshot.revision += 1;
+                app.apply(snapshot, window, cx);
+                id
+            })
+        })
+        .expect("add a mention");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let bounds = window
+            .find(gpui_kit::SharedString::from(format!("message-line-{id}")))
+            .bounds();
+        // The bubble's padding, then inside the one-word link.
+        let point = gpui_kit::point(bounds.left() + px(20.), bounds.center().y);
+        window.pointer_move(point, None, cx);
+        window.pointer_down(point, gpui_kit::MouseButton::Left, cx);
+        window.pointer_up(point, gpui_kit::MouseButton::Left, cx);
+    })
+    .expect("click the mention");
+    cx.run_until_parked();
+    cx.update(|cx| {
+        let profile = app.read(cx).profile.as_ref().map(|page| page.id.clone());
+        assert_eq!(profile.as_deref(), Some("@hd:voltized.de"));
+    });
 }

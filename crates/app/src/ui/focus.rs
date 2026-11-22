@@ -68,7 +68,7 @@ pub(crate) fn next_area(available: &[Area], current: Option<Area>, forward: bool
 }
 
 impl MatrixApp {
-    fn timeline_messages(&self, in_thread: bool) -> &[Message] {
+    pub(crate) fn timeline_messages(&self, in_thread: bool) -> &[Message] {
         if in_thread {
             self.thread.as_ref().map_or(&[], |t| t.messages.as_slice())
         } else {
@@ -129,13 +129,15 @@ impl MatrixApp {
             {
                 self.message_cursor[slot] = None;
             }
+            // Only keyboard focus keeps the action bar up: a click also focuses
+            // the row, and the bar would otherwise stay after the pointer left.
             self.message_cursor_focused[slot] = match self.message_cursor(in_thread) {
-                Some(id) => {
+                Some(id) if window.last_input_was_keyboard() => {
                     let id = id.to_owned();
                     self.message_focus(in_thread, &id, cx)
                         .contains_focused(window, cx)
                 }
-                None => false,
+                _ => false,
             };
         }
     }
