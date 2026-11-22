@@ -1004,6 +1004,68 @@ mod rich_tests {
     }
 }
 
+/// The web link a message previews: the first http(s) link, from its
+/// formatting or its text, outside code. Notices (usually bots) and media
+/// never preview, nor do Matrix links.
+pub(crate) fn preview_link(message: &crate::backend::Message) -> Option<String> {
+    use crate::backend::MessageKind;
+    use twayblade_core::rich_text::{BlockKind, RichNode, SpanKind};
+    if !matches!(message.kind, MessageKind::Text | MessageKind::Emote)
+        || message.attachment.is_some()
+    {
+        return None;
+    }
+    fn web(link: &str) -> Option<String> {
+        let url = url::Url::parse(link).ok()?;
+        (matches!(url.scheme(), "http" | "https")
+            && url.host_str().is_some_and(|host| host != "matrix.to"))
+        .then(|| url.to_string())
+    }
+    fn in_rich(nodes: &[RichNode]) -> Option<String> {
+        nodes.iter().find_map(|node| match node {
+            RichNode::Text(_) => None,
+            RichNode::Span {
+                kind: SpanKind::Code,
+                ..
+            } => None,
+            RichNode::Block {
+                kind: BlockKind::Code { .. } | BlockKind::Quote,
+                ..
+            } => None,
+            RichNode::Span {
+                kind: SpanKind::Link { target },
+                ..
+            } => web(target),
+            RichNode::Span { children, .. } | RichNode::Block { children, .. } => in_rich(children),
+        })
+    }
+    if let Some(rich) = &message.rich
+        && let Some(link) = in_rich(&rich.nodes)
+    {
+        return Some(link);
+    }
+    // Plain text: the first bare link, without the punctuation around it.
+    let mut in_code = false;
+    for word in message.body.split_whitespace() {
+        if word.contains('`') {
+            in_code ^= word.matches('`').count() % 2 == 1;
+            continue;
+        }
+        if in_code {
+            continue;
+        }
+        let candidate = word
+            .trim_start_matches(['(', '<', '[', '"', '\''])
+            .trim_end_matches(['.', ',', ';', ':', '!', '?', ')', '>', ']', '"', '\'']);
+        if (candidate.starts_with("https://") || candidate.starts_with("http://"))
+            && let Some(link) = web(candidate)
+        {
+            return Some(link);
+        }
+    }
+    None
+}
+
 /// The user a mention (pill) links to: `https://matrix.to/#/@user:server`,
 /// percent-encoded or not and with optional `?via=`, or `matrix:u/user:server`.
 /// None for every other link, which opens in the browser.
@@ -1039,6 +1101,39 @@ fn percent_decode(text: &str) -> Option<String> {
         }
     }
     String::from_utf8(out).ok()
+}
+
+#[cfg(test)]
+mod preview_link_tests {
+    use super::preview_link;
+    use crate::backend::{Message, MessageKind};
+
+    fn text(body: &str) -> Message {
+        Message {
+            id: "$m".into(),
+            body: body.into(),
+            kind: MessageKind::Text,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_first_web_link_outside_code_previews() {
+        assert_eq!(
+            preview_link(&text("see (https://example.org/a?b=1).")).as_deref(),
+            Some("https://example.org/a?b=1")
+        );
+        assert_eq!(
+            preview_link(&text("`https://code.example` then http://example.org")).as_deref(),
+            Some("http://example.org/")
+        );
+        assert_eq!(preview_link(&text("``` https://code.example ```")), None);
+        assert_eq!(preview_link(&text("https://matrix.to/#/@a:b.c")), None);
+        assert_eq!(preview_link(&text("mailto:a@example.org ftp://x")), None);
+        let mut notice = text("https://example.org");
+        notice.kind = MessageKind::Notice;
+        assert_eq!(preview_link(&notice), None);
+    }
 }
 
 #[cfg(test)]
@@ -1156,6 +1251,11 @@ fn rich_inline(nodes: &[twayblade_core::rich_text::RichNode]) -> String {
                         }
                     }
                     SpanKind::Link { target } => match url::Url::parse(target) {
+                        // A mention reads as one, "@Name" in bold, not as a web link.
+                        Ok(url) if mentioned_user(target).is_some() && !inner.trim().is_empty() => {
+                            let at = if inner.starts_with("\\@") { "" } else { "\\@" };
+                            out.push_str(&format!("**[{at}{inner}](<{url}>)**"))
+                        }
                         // Re-serialised so spaces and angle brackets are percent-encoded.
                         Ok(url) if !inner.trim().is_empty() => {
                             out.push_str(&format!("[{inner}](<{url}>)"))
@@ -1333,6 +1433,15 @@ mod rich_markdown_tests {
         assert_eq!(
             render("<a href='https://example.org/a b'>site</a>"),
             "[site](<https://example.org/a%20b>)"
+        );
+        // Mentions read as "@Name", with or without the sender's own "@".
+        assert_eq!(
+            render("<a href='https://matrix.to/#/@hd:voltized.de'>hristo</a>"),
+            "**[\\@hristo](<https://matrix.to/#/@hd:voltized.de>)**"
+        );
+        assert_eq!(
+            render("<a href='https://matrix.to/#/@hd:voltized.de'>@hristo</a>"),
+            "**[\\@hristo](<https://matrix.to/#/@hd:voltized.de>)**"
         );
         assert_eq!(render("<ul><li>one</li><li>two</li></ul>"), "- one\n- two");
         assert_eq!(render("<ol start='3'><li>x</li></ol>"), "3. x");

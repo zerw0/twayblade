@@ -159,7 +159,13 @@ impl MatrixApp {
                                     .selectable(true)
                                     // Show the real destination; a label can disguise it.
                                     .link_tooltip(|url, window, cx| {
-                                        gpui_kit::component::tooltip::Tooltip::new(url.clone())
+                                        let text = match model::mentioned_user(url) {
+                                            Some(user) => {
+                                                SharedString::from(format!("Show Profile · {user}"))
+                                            }
+                                            None => url.clone(),
+                                        };
+                                        gpui_kit::component::tooltip::Tooltip::new(text)
                                             .build(window, cx)
                                     })
                                     .on_link_click({
@@ -197,6 +203,9 @@ impl MatrixApp {
                                 ),
                         )
                     });
+                    if let Some(card) = self.link_preview_card(message, outgoing, cx) {
+                        content = content.child(card);
+                    }
                     if message.edited {
                         content = content.child(
                             div()

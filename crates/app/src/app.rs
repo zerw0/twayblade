@@ -472,6 +472,8 @@ pub(super) struct MatrixApp {
     /// Per room, like the drafts they belong to.
     pub(crate) mentions: HashMap<String, Vec<twayblade_core::rich_text::Mention>>,
     pub(crate) thread_mentions: Vec<twayblade_core::rich_text::Mention>,
+    /// Link previews by URL for this account (Settings › Chat).
+    pub(crate) link_previews: HashMap<String, crate::ui::link_previews::LinkPreviewState>,
     /// The search panel under the title-bar field, and its selected row.
     pub(crate) spotlight_open: bool,
     pub(crate) spotlight_selected: usize,
@@ -910,6 +912,7 @@ impl MatrixApp {
             avatar_viewer: None,
             explore_server: None,
             mention_completion: None,
+            link_previews: HashMap::new(),
             mentions: HashMap::new(),
             thread_mentions: Vec::new(),
             spotlight_open: false,
@@ -1138,6 +1141,7 @@ impl MatrixApp {
             self.search_open = false;
             self.own_avatar = None;
             self.own_name = None;
+            self.link_previews.clear();
             if !snapshot.user_id.is_empty()
                 && let Some(backend) = self.backend.clone()
             {
@@ -1366,6 +1370,7 @@ impl MatrixApp {
         self.open_pending_notification_thread(window, cx);
         self.open_pending_history_thread(window, cx);
         self.refresh_viewer(window, cx);
+        self.request_link_previews(window, cx);
         cx.notify();
     }
 

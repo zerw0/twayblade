@@ -8,6 +8,7 @@ pub mod calls;
 pub mod channels;
 pub mod conversation;
 pub mod directory;
+pub mod link_preview;
 pub mod media;
 pub mod media_cache;
 pub mod notifications;

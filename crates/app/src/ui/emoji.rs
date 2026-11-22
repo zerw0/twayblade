@@ -471,47 +471,51 @@ impl MatrixApp {
         }
         cx.notify();
     }
+    /// The inline `:shortcode` list (not the full picker) is open.
+    pub(crate) fn emoji_completion_open(&self) -> bool {
+        self.emoji_picker
+            .as_ref()
+            .is_some_and(|picker| picker.completion.is_some())
+    }
+
+    /// A key for the open picker or `:shortcode` list; true when it used it.
     pub(crate) fn emoji_key(
         &mut self,
-        event: &KeyDownEvent,
+        key: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         let Some(picker) = &self.emoji_picker else {
-            return;
+            return false;
         };
         if picker.tones.is_some() {
             let tone = picker.tone_selected;
-            match event.keystroke.key.as_str() {
+            match key {
                 "escape" => self.emoji_picker.as_mut().unwrap().tones = None,
                 "enter" => self.choose_tone(tone, window, cx),
                 "left" | "right" => {
-                    let step = if event.keystroke.key == "left" { 5 } else { 1 };
+                    let step = if key == "left" { 5 } else { 1 };
                     self.emoji_picker.as_mut().unwrap().tone_selected = (tone + step) % 6;
                 }
-                _ => return,
+                _ => return false,
             }
             cx.stop_propagation();
             window.prevent_default();
             cx.notify();
-            return;
+            return true;
         }
         let values = self.emoji_results(cx);
         let selected = picker.selected;
-        let step = if picker.completion.is_some() {
-            1
-        } else {
-            COLUMNS
-        };
-        match event.keystroke.key.as_str() {
+        let inline = picker.completion.is_some();
+        let step = if inline { 1 } else { COLUMNS };
+        match key {
             "escape" => self.close_emoji(window, cx),
-            "enter" => {
-                if selected < values.len() {
-                    self.pick_emoji(selected, window, cx);
-                }
-            }
+            // An empty `:shortcode` list leaves Return to the composer.
+            "enter" if selected < values.len() => self.pick_emoji(selected, window, cx),
+            "enter" if inline => return false,
+            "enter" => {}
             "up" | "down" | "left" | "right" if !values.is_empty() => {
-                let offset = match event.keystroke.key.as_str() {
+                let offset = match key {
                     "up" => -(step as isize),
                     "down" => step as isize,
                     "left" => -1,
@@ -534,11 +538,12 @@ impl MatrixApp {
                     }
                 }
             }
-            _ => return,
+            _ => return false,
         }
         cx.stop_propagation();
         window.prevent_default();
         cx.notify();
+        true
     }
     pub(crate) fn emoji_panel(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(picker) = &self.emoji_picker else {
