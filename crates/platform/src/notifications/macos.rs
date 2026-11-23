@@ -290,5 +290,17 @@ pub async fn set_badge(count: u64) -> Result<(), NotificationError> {
     Ok(())
 }
 pub fn open_settings() -> Result<(), NotificationError> {
-    std::process::Command::new("/usr/bin/open").arg("x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=com.twayblade.desktop.development").spawn().map(|_|()).map_err(|_|NotificationError)
+    // The running bundle's own identifier: release and development builds
+    // have separate entries in System Settings.
+    let id = objc2_foundation::NSBundle::mainBundle()
+        .bundleIdentifier()
+        .map(|id| id.to_string())
+        .ok_or(NotificationError)?;
+    std::process::Command::new("/usr/bin/open")
+        .arg(format!(
+            "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id={id}"
+        ))
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| NotificationError)
 }

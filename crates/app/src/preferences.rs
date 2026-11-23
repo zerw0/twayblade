@@ -9,18 +9,35 @@ use std::{
 const VERSION: u32 = 1;
 const MAX_BYTES: u64 = 65536;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub(super) struct Preferences {
     pub version: u32,
+    #[serde(deserialize_with = "section")]
     pub appearance: Appearance,
+    #[serde(deserialize_with = "section")]
     pub chat: Chat,
+    #[serde(deserialize_with = "section")]
     pub notifications: DeviceNotifications,
+    #[serde(deserialize_with = "section")]
     pub updates: twayblade_platform::updates::Preferences,
+    #[serde(deserialize_with = "section")]
     pub calls: Calls,
+}
+/// A section this build cannot read (a value from another build, such as a
+/// theme it does not have) falls back to its defaults on its own instead of
+/// resetting every preference. Unknown fields are ignored for the same reason:
+/// development and release builds share this file.
+fn section<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(T::deserialize(value).unwrap_or_default())
 }
 /// Call view choices that carry over between calls.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub(super) struct Calls {
     /// Show whoever is talking, once they have spoken for about a second.
     pub follow_speaker: bool,
@@ -39,7 +56,7 @@ impl Default for Preferences {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub(super) struct DeviceNotifications {
     pub enabled: bool,
     pub sound: bool,
@@ -48,8 +65,9 @@ pub(super) struct DeviceNotifications {
 }
 impl Default for DeviceNotifications {
     fn default() -> Self {
+        // On, so the system asks for permission once an account opens.
         Self {
-            enabled: false,
+            enabled: true,
             sound: true,
             preview: true,
             badge: true,
@@ -196,7 +214,7 @@ pub(super) enum Variant {
     Dark,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub(super) struct Appearance {
     pub scheme: Scheme,
     pub variant: Variant,
@@ -351,7 +369,7 @@ impl MediaCache {
     }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub(super) struct Chat {
     pub preview_size: twayblade_core::conversation::PreviewSize,
     pub auto_download: AutoDownload,
@@ -469,7 +487,7 @@ mod tests {
         custom.updates.channel = twayblade_platform::updates::Channel::Prerelease;
         custom.save(&path).unwrap();
         assert_eq!(Preferences::load(&path).unwrap(), custom);
-        for invalid in ["corrupt", "{\"version\":999}", "{\"unknown\":true}"] {
+        for invalid in ["corrupt", "{\"version\":999}"] {
             fs::write(&path, invalid).unwrap();
             assert_eq!(Preferences::load(&path).unwrap(), Preferences::default());
             assert_eq!(
@@ -479,6 +497,22 @@ mod tests {
         }
         fs::write(&path, "{}").unwrap();
         assert_eq!(Preferences::load(&path).unwrap(), Preferences::default());
+        // Another build's file: unknown fields and an unreadable section
+        // must not reset the sections this build can read.
+        fs::remove_file(path.with_extension("json.bak")).unwrap();
+        fs::write(
+            &path,
+            r#"{"version":1,"unknown":true,
+                "appearance":{"scheme":"not-a-theme","scale":150},
+                "chat":{"style":"irc","later":1},
+                "notifications":{"enabled":false,"sound":false}}"#,
+        )
+        .unwrap();
+        let loaded = Preferences::load(&path).unwrap();
+        assert_eq!(loaded.appearance, Appearance::default());
+        assert_eq!(loaded.chat.style, ChatStyle::Irc);
+        assert!(!loaded.notifications.enabled && !loaded.notifications.sound);
+        assert!(!path.with_extension("json.bak").exists());
         fs::remove_dir_all(dir).unwrap();
     }
 }
