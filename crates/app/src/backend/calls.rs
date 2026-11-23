@@ -554,10 +554,27 @@ async fn incoming_notifications(
                     format!("{} started {kind}", call.caller_name),
                 )
             };
+            // The room's picture (the other person's in a direct chat).
+            let avatar = live
+                .device
+                .preview
+                .then(|| {
+                    snapshot
+                        .rooms
+                        .iter()
+                        .find(|room| room.id == call.room_id)
+                        .and_then(|room| room.avatar.clone())
+                })
+                .flatten();
+            let image = match avatar {
+                Some(mxc) => account.notification_avatar(mxc).await.ok(),
+                None => None,
+            };
             let notification = os::Notification {
                 title,
                 body,
                 sound: live.device.sound,
+                image,
                 action_label: "Open",
                 target: os::Activation {
                     account: account.instance_id(),

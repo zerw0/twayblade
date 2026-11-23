@@ -65,6 +65,17 @@ impl Backend {
     }
 }
 
+/// The sender's or room's picture, only when previews are on (with previews
+/// off a notification must not show who wrote).
+pub(super) async fn avatar(
+    account: &Account,
+    item: &NotificationItem,
+    preview: bool,
+) -> Option<Vec<u8>> {
+    let mxc = item.preview(preview).avatar?;
+    account.notification_avatar(mxc).await.ok()
+}
+
 pub(super) fn presentation(item: &NotificationItem, preview: bool) -> (String, String) {
     let display = item.preview(preview);
     match (display.sender, display.body) {
@@ -190,8 +201,9 @@ pub(super) async fn run(
                 if !twayblade_core::notifications::should_notify(false, false, &item.room, &live.context) || !live.device.enabled { continue; }
                 if updates.borrow().notifications.room_mode(&item.room) == twayblade_core::notifications::RoomMode::Mute { continue; }
                 let (title, body) = presentation(&item, live.device.preview);
+                let image = avatar(&account, &item, live.device.preview).await;
                 let launch = os::LaunchActivation::new(account.notification_identity(),item.room.clone(),item.thread.clone());
-                let notification = os::Notification { title, body, sound: live.device.sound, action_label: "Open", target: os::Activation { account: account.instance_id(), room: item.room, thread: item.thread },launch:Some(launch) };
+                let notification = os::Notification { title, body, sound: live.device.sound, image, action_label: "Open", target: os::Activation { account: account.instance_id(), room: item.room, thread: item.thread },launch:Some(launch) };
                 match os::notify(notification).await {
                     Ok(pending) => {
                         response_order.retain(|(_, handle)| !handle.is_finished());
@@ -235,6 +247,7 @@ mod tests {
             sender: "sender".into(),
             sender_name: "Sample sender".into(),
             sender_avatar: None,
+            room_avatar: None,
             body: "Sample body".into(),
             direct: true,
             mention: false,

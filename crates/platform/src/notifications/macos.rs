@@ -201,6 +201,25 @@ fn begin_notify(
     if notification.sound {
         content.setSound(Some(&UNNotificationSound::defaultSound()));
     }
+    if let Some(path) = notification.image.as_deref().and_then(super::image_file) {
+        let url =
+            objc2_foundation::NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+        // SAFETY: no options dictionary is passed (its untyped values are the
+        // only unchecked part); the URL is a file this process just wrote.
+        let attachment = unsafe {
+            UNNotificationAttachment::attachmentWithIdentifier_URL_options_error(
+                &NSString::from_str("avatar"),
+                &url,
+                None,
+            )
+        };
+        match attachment {
+            Ok(attachment) => content.setAttachments(&NSArray::from_slice(&[&*attachment])),
+            Err(_) => {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
     if let Some(launch) = &notification.launch {
         let key = NSString::from_str(PAYLOAD_KEY);
         let payload = NSString::from_str(&launch.encode()?);

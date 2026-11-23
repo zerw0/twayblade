@@ -25,15 +25,30 @@
 - A group call's start is a normal notification ("Name started a call", opens
   the room). Rings keep Accept/Decline.
 - "Open System Settings" uses the running bundle's identifier.
+- Notifications show a round avatar when message previews are on: the person
+  in a direct chat, the room elsewhere (each falls back to the other); calls
+  use the room's picture. Fetching it waits at most 4 s, then the
+  notification goes without it. macOS keeps the app icon on the left (only
+  Communication Notifications, which need an Apple entitlement and real
+  signing, replace it) and shows the avatar as the attached image on the
+  right. Linux sends it as `image-path`; Windows uses it as the toast's logo,
+  cropped round. Image files live in the cache folder's
+  `notification-images` and are removed after a day.
+- Diagnosis, not code: on the reporter's Mac, clicking a notification
+  launched a second, older copy. LaunchServices had an rc.6 bundle in the Nix
+  store registered under the same identifier, and usernoted opened that path.
+  Unregistering it (`lsregister -u`) fixed it there.
 
 ## Verified
 
 - `cargo fmt --check`, clippy (workspace and `--features capture`), workspace
-  tests and the 250 offline UI tests. A new preferences test covers unknown
-  fields and an unreadable section.
+  tests and the 250 offline UI tests on macOS. Tests cover unknown preference
+  fields and an unreadable section, which avatar a notification picks, and the
+  round mask.
 
 ## Not verified
 
-- A live group call start and message notifications on a physical Mac with
-  this build; the permission prompt on a fresh install.
-- Linux and Windows delivery of the new group-call notification.
+- A live group call start, message notifications and the attached avatar on a
+  physical Mac with this build; the permission prompt on a fresh install.
+- Linux and Windows: the image code was not compiled locally (no targets
+  here); CI compiles it, delivery is untested.
