@@ -146,10 +146,12 @@ async fn notify(
                     continue;
                 }
                 let (title, body) = notifications::presentation(&item, live.device.preview);
+                let image = notifications::avatar(&account, &item, live.device.preview).await;
                 let notification = os::Notification {
                     title,
                     body,
                     sound: live.device.sound,
+                    image,
                     action_label: "Open",
                     target: os::Activation {
                         account: account.instance_id(),

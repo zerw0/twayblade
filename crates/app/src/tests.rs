@@ -2556,7 +2556,11 @@ fn notification_preview_click_opens_thread_and_device_controls_stay_local(cx: &m
         let app = app.read(cx);
         let preferences = &app.preferences.notifications;
         assert!(
-            preferences.enabled && !preferences.sound && !preferences.preview && !preferences.badge
+            // On by default; one click turns each off.
+            !preferences.enabled
+                && !preferences.sound
+                && !preferences.preview
+                && !preferences.badge
         );
         assert!(app.backend.is_none());
     });

@@ -46,6 +46,12 @@ pub async fn notify(
     let mut hints = HashMap::new();
     hints.insert("suppress-sound", Value::Bool(!notification.sound));
     hints.insert("desktop-entry", Value::from("com.twayblade.desktop"));
+    if let Some(path) = notification.image.as_deref().and_then(super::image_file) {
+        hints.insert(
+            "image-path",
+            Value::from(path.to_string_lossy().into_owned()),
+        );
+    }
     if notification.sound {
         hints.insert("sound-name", Value::from("message-new-instant"));
     }

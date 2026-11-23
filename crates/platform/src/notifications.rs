@@ -42,6 +42,8 @@ pub struct Notification {
     pub title: String,
     pub body: String,
     pub sound: bool,
+    /// A PNG shown with the notification (the sender's or room's avatar).
+    pub image: Option<Vec<u8>>,
     pub action_label: &'static str,
     pub target: Activation,
     pub launch: Option<LaunchActivation>,
@@ -92,6 +94,32 @@ pub fn open_settings() -> Result<(), NotificationError> {
     native::open_settings()
 }
 
+/// Writes a notification image where the system can read it. Files older
+/// than a day are removed; the system has shown or dropped them by then
+/// (macOS moves its copy into its own store).
+fn image_file(png: &[u8]) -> Option<std::path::PathBuf> {
+    let directory = directories::ProjectDirs::from("", "Twayblade", "Twayblade")?
+        .cache_dir()
+        .join("notification-images");
+    std::fs::create_dir_all(&directory).ok()?;
+    if let Ok(entries) = std::fs::read_dir(&directory) {
+        for entry in entries.flatten() {
+            let old = entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|age| age > std::time::Duration::from_secs(24 * 60 * 60));
+            if old {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    let path = directory.join(format!("{}.png", uuid::Uuid::new_v4().simple()));
+    std::fs::write(&path, png).ok()?;
+    Some(path)
+}
+
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 fn escape_xml(value: &str) -> String {
     value
@@ -114,6 +142,7 @@ mod tests {
                 title: "Sample".into(),
                 body: "Sample".into(),
                 sound: false,
+                image: None,
                 action_label: "Open",
                 target: Default::default(),
                 launch: None,

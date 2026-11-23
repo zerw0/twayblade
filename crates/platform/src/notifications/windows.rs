@@ -33,7 +33,20 @@ pub async fn notify(
         } else {
             ""
         };
-        xml.LoadXml(&HSTRING::from(format!("<toast><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual>{}{actions}</toast>", super::escape_xml(&notification.title), super::escape_xml(&notification.body), if notification.sound { "" } else { "<audio silent=\"true\"/>" })))?;
+        // The avatar replaces the app logo, cropped round.
+        let image = notification
+            .image
+            .as_deref()
+            .and_then(super::image_file)
+            .map(|path| {
+                let url = format!("file:///{}", path.to_string_lossy().replace('\\', "/"));
+                format!(
+                    "<image placement=\"appLogoOverride\" hint-crop=\"circle\" src=\"{}\"/>",
+                    super::escape_xml(&url)
+                )
+            })
+            .unwrap_or_default();
+        xml.LoadXml(&HSTRING::from(format!("<toast><visual><binding template=\"ToastGeneric\">{image}<text>{}</text><text>{}</text></binding></visual>{}{actions}</toast>", super::escape_xml(&notification.title), super::escape_xml(&notification.body), if notification.sound { "" } else { "<audio silent=\"true\"/>" })))?;
         let toast = ToastNotification::CreateToastNotification(&xml)?;
         toast.SetTag(&HSTRING::from(&id))?;
         let (sender, receiver) = tokio::sync::oneshot::channel();
