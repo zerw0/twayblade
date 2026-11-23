@@ -528,7 +528,9 @@ async fn incoming_notifications(
         }
         seen.retain(|id| active.contains(id));
         for call in &snapshot.incoming_calls {
-            if !call.ringing || !seen.insert(call.event_id.clone()) {
+            // A ring (direct calls) gets Accept/Decline; a group call's
+            // "notification" announces that it started.
+            if !seen.insert(call.event_id.clone()) {
                 continue;
             }
             let live = config.borrow().clone();
@@ -542,7 +544,7 @@ async fn incoming_notifications(
             let video = call.kind == twayblade_core::calls::ringing::CallIntent::Video;
             let (title, body) = if !live.device.preview {
                 ("Twayblade".to_owned(), "Incoming call".to_owned())
-            } else if call.room_name == call.caller_name {
+            } else if call.ringing && call.room_name == call.caller_name {
                 let kind = if video { "video call" } else { "call" };
                 (call.caller_name.clone(), format!("Incoming {kind}"))
             } else {
@@ -552,10 +554,27 @@ async fn incoming_notifications(
                     format!("{} started {kind}", call.caller_name),
                 )
             };
+            // The room's picture (the other person's in a direct chat).
+            let avatar = live
+                .device
+                .preview
+                .then(|| {
+                    snapshot
+                        .rooms
+                        .iter()
+                        .find(|room| room.id == call.room_id)
+                        .and_then(|room| room.avatar.clone())
+                })
+                .flatten();
+            let image = match avatar {
+                Some(mxc) => account.notification_avatar(mxc).await.ok(),
+                None => None,
+            };
             let notification = os::Notification {
                 title,
                 body,
                 sound: live.device.sound,
+                image,
                 action_label: "Open",
                 target: os::Activation {
                     account: account.instance_id(),
@@ -568,7 +587,12 @@ async fn incoming_notifications(
                     None,
                 )),
             };
-            if let Ok(notification) = os::notify_call(notification).await {
+            let sent = if call.ringing {
+                os::notify_call(notification).await
+            } else {
+                os::notify(notification).await
+            };
+            if let Ok(notification) = sent {
                 let event = call.event_id.clone();
                 let expires = call.expires;
                 let abort = responses.spawn(async move {

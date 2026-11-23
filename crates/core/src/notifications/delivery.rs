@@ -30,6 +30,7 @@ pub struct NotificationItem {
     pub sender: String,
     pub sender_name: String,
     pub sender_avatar: Option<String>,
+    pub room_avatar: Option<String>,
     pub body: String,
     pub direct: bool,
     pub mention: bool,
@@ -45,9 +46,22 @@ impl NotificationItem {
     pub fn preview(&self, enabled: bool) -> NotificationPreview {
         NotificationPreview {
             sender: enabled.then(|| self.sender_name.clone()),
-            avatar: enabled.then(|| self.sender_avatar.clone()).flatten(),
+            avatar: enabled.then(|| self.avatar()).flatten(),
             body: enabled.then(|| self.body.clone()),
         }
+    }
+}
+
+impl NotificationItem {
+    /// The person in a direct chat, otherwise the room; either falls back to
+    /// the other when it has no picture.
+    fn avatar(&self) -> Option<String> {
+        let (first, second) = if self.direct {
+            (&self.sender_avatar, &self.room_avatar)
+        } else {
+            (&self.room_avatar, &self.sender_avatar)
+        };
+        first.clone().or_else(|| second.clone())
     }
 }
 
@@ -93,6 +107,7 @@ fn project(
             .sender_display_name
             .unwrap_or_else(|| event.sender.to_string()),
         sender_avatar: item.sender_avatar_url,
+        room_avatar: item.room_avatar_url,
         body: event.content.msgtype.body().to_owned(),
         direct: item.is_direct_message_room,
         mention: item.has_mention.unwrap_or(false),
@@ -207,6 +222,7 @@ mod tests {
             sender: "sender".into(),
             sender_name: "Sample sender".into(),
             sender_avatar: Some("mxc://sample/avatar".into()),
+            room_avatar: Some("mxc://sample/room".into()),
             body: "Sample message".into(),
             direct: true,
             mention: false,
@@ -214,6 +230,22 @@ mod tests {
         let preview = item.preview(false);
         assert!(preview.sender.is_none() && preview.avatar.is_none() && preview.body.is_none());
         assert!(item.preview(true).body.is_some());
+        // The person in a direct chat, the room elsewhere, then the other.
+        assert_eq!(
+            item.preview(true).avatar.as_deref(),
+            Some("mxc://sample/avatar")
+        );
+        let mut group = item.clone();
+        group.direct = false;
+        assert_eq!(
+            group.preview(true).avatar.as_deref(),
+            Some("mxc://sample/room")
+        );
+        group.room_avatar = None;
+        assert_eq!(
+            group.preview(true).avatar.as_deref(),
+            Some("mxc://sample/avatar")
+        );
     }
 }
 

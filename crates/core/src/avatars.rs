@@ -53,6 +53,27 @@ pub fn square_png(bytes: &[u8], size: u32) -> Result<Vec<u8>, AvatarError> {
     Ok(png.into_inner())
 }
 
+/// A square PNG avatar masked to a circle with transparent corners, as
+/// avatars appear elsewhere in the app. For notification images.
+pub fn circle_png(square: &[u8]) -> Result<Vec<u8>, AvatarError> {
+    let mut image = image::load_from_memory_with_format(square, image::ImageFormat::Png)
+        .map_err(|_| AvatarError::Decode)?
+        .into_rgba8();
+    let radius = image.width().min(image.height()) as f32 / 2.0;
+    for (x, y, pixel) in image.enumerate_pixels_mut() {
+        let dx = x as f32 + 0.5 - radius;
+        let dy = y as f32 + 0.5 - radius;
+        // One pixel of soft edge so the circle is not jagged.
+        let coverage = (radius - (dx * dx + dy * dy).sqrt() + 0.5).clamp(0.0, 1.0);
+        pixel[3] = (f32::from(pixel[3]) * coverage).round() as u8;
+    }
+    let mut png = Cursor::new(Vec::new());
+    image
+        .write_to(&mut png, image::ImageFormat::Png)
+        .map_err(|_| AvatarError::Decode)?;
+    Ok(png.into_inner())
+}
+
 /// Decode with limits and scale to fit `size` (keeping the shape and
 /// transparency), encoded as PNG. For stickers.
 pub fn contain_png(bytes: &[u8], size: u32) -> Result<Vec<u8>, AvatarError> {
@@ -140,6 +161,17 @@ impl Account {
             .map_err(|_| AvatarError::Decode)?
     }
 
+    /// A round avatar for a native notification. Bounded to a few seconds so
+    /// a slow media server delays the notification only briefly.
+    pub async fn notification_avatar(&self, mxc: String) -> Result<Vec<u8>, AvatarError> {
+        let square = tokio::time::timeout(Duration::from_secs(4), self.avatar_thumbnail(mxc, 128))
+            .await
+            .map_err(|_| AvatarError::Download)??;
+        tokio::task::spawn_blocking(move || circle_png(&square))
+            .await
+            .map_err(|_| AvatarError::Decode)?
+    }
+
     /// The signed-in user's own avatar URL, from the server profile.
     pub async fn own_avatar_url(&self) -> Option<String> {
         tokio::time::timeout(
@@ -167,5 +199,10 @@ mod tests {
         let decoded = image::load_from_memory(&png).unwrap();
         assert_eq!((decoded.width(), decoded.height()), (64, 64));
         assert_eq!(square_png(b"not an image", 64), Err(AvatarError::Decode));
+        let round = image::load_from_memory(&circle_png(&png).unwrap())
+            .unwrap()
+            .into_rgba8();
+        assert_eq!(round.get_pixel(0, 0)[3], 0);
+        assert_eq!(round.get_pixel(32, 32)[3], 255);
     }
 }

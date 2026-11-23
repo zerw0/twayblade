@@ -201,6 +201,25 @@ fn begin_notify(
     if notification.sound {
         content.setSound(Some(&UNNotificationSound::defaultSound()));
     }
+    if let Some(path) = notification.image.as_deref().and_then(super::image_file) {
+        let url =
+            objc2_foundation::NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+        // SAFETY: no options dictionary is passed (its untyped values are the
+        // only unchecked part); the URL is a file this process just wrote.
+        let attachment = unsafe {
+            UNNotificationAttachment::attachmentWithIdentifier_URL_options_error(
+                &NSString::from_str("avatar"),
+                &url,
+                None,
+            )
+        };
+        match attachment {
+            Ok(attachment) => content.setAttachments(&NSArray::from_slice(&[&*attachment])),
+            Err(_) => {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
     if let Some(launch) = &notification.launch {
         let key = NSString::from_str(PAYLOAD_KEY);
         let payload = NSString::from_str(&launch.encode()?);
@@ -290,5 +309,17 @@ pub async fn set_badge(count: u64) -> Result<(), NotificationError> {
     Ok(())
 }
 pub fn open_settings() -> Result<(), NotificationError> {
-    std::process::Command::new("/usr/bin/open").arg("x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=com.twayblade.desktop.development").spawn().map(|_|()).map_err(|_|NotificationError)
+    // The running bundle's own identifier: release and development builds
+    // have separate entries in System Settings.
+    let id = objc2_foundation::NSBundle::mainBundle()
+        .bundleIdentifier()
+        .map(|id| id.to_string())
+        .ok_or(NotificationError)?;
+    std::process::Command::new("/usr/bin/open")
+        .arg(format!(
+            "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id={id}"
+        ))
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| NotificationError)
 }

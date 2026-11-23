@@ -27,7 +27,7 @@ pub enum Channel {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Preferences {
     pub enabled: bool,
     pub channel: Channel,
